@@ -97,8 +97,23 @@ Execution manuelle possible :
 docker compose --env-file docker/.env.example -f docker/docker-compose.yml exec -T postgres psql -U galactic -d galactic_rp -f /workspace/database/migrations/001_init.sql
 ```
 
+## Seed de developpement
+
+Le depot contient `database/seeds/dev_seed.sql`. Ce seed ajoute un joueur fictif de test, un personnage fictif associe et quelques competences de test coherentes avec le schema actuel.
+
+Le seed est concu pour etre relance autant que possible sans creer de doublons :
+
+- le joueur est upsert via `platform_id`
+- le personnage n'est insere que s'il n'existe pas deja pour ce joueur et ce nom
+- les competences sont upsert via la contrainte unique `uq_character_skills_character_skill`
+
+Execution manuelle avec Docker :
+
+```powershell
+docker exec -it galactic-rp-postgres psql -U galactic -d galactic_rp -f /workspace/database/seeds/dev_seed.sql
+```
+
 ## Limites actuelles
 
-- pas de seed versionne
 - pas de build UI
 - pas de packages nanos world initialises
