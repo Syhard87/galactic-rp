@@ -7,7 +7,7 @@ Ce document decrit le bootstrap MVP Tech de Galactic RP. Son perimetre couvre l'
 ## Principes
 
 - Monorepo unique pour versionner ensemble serveur, UI, SQL, Docker, CI et documentation.
-- Modular monolith cote nanos world avec separation stricte `Server/`, `Client/` et `Shared/` par package.
+- Modular monolith cote nanos world avec separation stricte des responsabilites `Server/`, `Client/` et `Shared/` par package.
 - Logique sensible et ecritures persistantes cote serveur uniquement.
 - MVP-first : poser un socle simple, testable et maintenable avant d'ajouter les systemes RPG.
 - Documentation versionnee et alignee avec l'etat reel du depot.
@@ -19,7 +19,7 @@ Deux niveaux doivent etre distingues :
 - l'architecture cible du produit, qui prevoit plusieurs packages nanos world specialises
 - l'etat actuel du bootstrap MVP Tech, qui pose uniquement les fondations repo, Docker, PostgreSQL, SQL et CI
 
-Concretement, ce lot documente la direction technique et l'ossature du projet. Le premier package Lua `gr_core` est initialise comme socle technique minimal, tandis que les applications React finales et les packages gameplay restent a creer.
+Concretement, ce lot documente la direction technique et l'ossature du projet. Les packages Lua `gr_core` et `gr_database` sont initialises comme socles techniques minimaux, tandis que les applications React finales et les packages gameplay restent a creer.
 
 ## Arborescence cible
 
@@ -70,6 +70,8 @@ Chaque package doit respecter la meme frontiere technique :
 - `Client/` : presentation, interactions locales, affichage et montage des WebUI.
 - `Shared/` : constantes, structures simples et evenements partages.
 
+Un package strictement serveur peut omettre `Client/` si cela renforce la securite et evite toute ambiguite de responsabilite. `gr_database` suit explicitement cette approche.
+
 Regles de responsabilite :
 
 - `gr_core` porte les conventions communes et les contrats transverses.
@@ -84,6 +86,16 @@ Etat initial de `gr_core` :
 - `Server/Index.lua` se limite a un log de chargement explicite cote serveur.
 - `Client/Index.lua` se limite a un log de chargement explicite cote client.
 - aucun systeme gameplay, personnage, progression, inventaire, craft, quete ou HUD n'est initialise dans `gr_core`.
+
+Etat initial de `gr_database` :
+
+- `Package.toml` declare un package nanos world de type script avec configuration minimale.
+- `Server/DatabaseConfig.lua` normalise une configuration PostgreSQL de bootstrap sans mot de passe embarque.
+- `Server/DatabaseService.lua` prepare un service de connexion minimal strictement cote serveur.
+- `Server/Index.lua` charge le package, journalise l'etat et n'ouvre aucune connexion automatiquement.
+- `Shared/Index.lua` ne contient que des constantes de package, sans logique sensible ni dependance client.
+- `Client/` est volontairement absent pour eviter toute ambiguite sur la frontiere server-only du package.
+- aucune requete metier, repository gameplay ou acces base cote client n'est initialise dans `gr_database`.
 
 ### WebUI
 
@@ -107,6 +119,14 @@ Le dossier `database/migrations/` contient les migrations SQL versionnees. Le bo
 - `character_skills`
 
 Le schema initial couvre la persistance de base sans encore modeliser l'inventaire, le craft, les quetes, les factions, la reputation ou les contrats.
+
+Le package `gr_database` est le point d'entree technique prevu pour la future integration PostgreSQL dans nanos world. Sa responsabilite est de centraliser :
+
+- la lecture et la normalisation de configuration
+- la creation controlee de la connexion via la classe `Database` cote serveur
+- les futurs services transverses de persistance consommes par les autres packages
+
+Par conception, `gr_database` ne doit pas exposer de credentials, de handle de connexion ou de logique de requetage sensible au client.
 
 ### Infrastructure locale
 
@@ -142,6 +162,7 @@ Cette CI est coherente avec une approche MVP-first : elle valide l'hygiene du so
 - Pas de `.env` reel versionne.
 - Pas de gameplay implemente dans ce lot.
 - Initialisation minimale de `gr_core` autorisee pour poser les conventions communes sans ajouter de logique metier.
+- Initialisation minimale de `gr_database` autorisee pour preparer la couche PostgreSQL sans connexion automatique ni requete metier.
 - Pas de dependance Node ajoutee tant que les applications UI n'ont pas leur cahier d'initialisation detaille.
 - Base PostgreSQL retenue des le depart pour eviter une migration de persistance precoce.
 
@@ -150,17 +171,18 @@ Cette CI est coherente avec une approche MVP-first : elle valide l'hygiene du so
 Le bootstrap MVP Tech est considere coherent si les regles suivantes restent vraies :
 
 - l'architecture nanos world reste modulaire et separee par domaine
-- chaque package garde la structure `Server/`, `Client/`, `Shared/`
+- chaque package preserve une separation explicite entre code serveur, client et partage, avec possibilite d'omettre `Client/` pour un package strictement serveur
 - PostgreSQL est execute localement via Docker Compose
 - GitHub Actions controle au moins la structure, les migrations et l'hygiene de depot
 - la logique sensible reste server-authoritative
+- `gr_database` concentre toute logique de connexion et de persistance sensible cote serveur
 - le client n'accorde jamais directement d'avantage gameplay ou de pouvoir d'administration
 
 Toute evolution future devra preserver ces contraintes avant d'ajouter des systemes RPG plus riches.
 
 ## Prochaines etapes recommandees
 
-- Initialiser `gr_database` et `gr_characters`.
+- Initialiser `gr_characters`.
 - Scaffold des applications React `ui/hud` et `ui/datapad`.
 - Ajouter une strategie de seeds de developpement.
 - Etendre la CI avec build UI et validation SQL plus poussee une fois les applications creees.
