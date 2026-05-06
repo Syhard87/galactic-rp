@@ -80,6 +80,7 @@ Regles pratiques :
 - aucun event client ne doit etre considere fiable sans verification serveur
 - les requetes client doivent etre traitees comme non fiables par defaut
 - les scripts client peuvent demander, jamais accorder
+- `gr_database` doit rester un package de logique sensible cote serveur, sans credentials ni acces SQL dans `Client/` ou `Shared/`
 
 ## Risques Connus
 
