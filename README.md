@@ -1,22 +1,22 @@
 # Galactic RP
 
-Galactic RP est un serveur RP/RPG galactique persistant construit comme un produit logiciel sérieux sur nanos world. Le projet vise un monde social persistant, modulaire et durable, avec logique serveur autoritative, WebUI dédiées, persistance PostgreSQL et outillage de collaboration propre.
+Galactic RP est un serveur RP/RPG galactique persistant construit comme un produit logiciel serieux sur nanos world. Le projet vise un monde social persistant, modulaire et durable, avec logique serveur autoritative, WebUI dediees, persistance PostgreSQL et outillage de collaboration propre.
 
 ## Vision
 
-Le projet cherche à construire un RPG social persistant dans un univers space opera original, avec une base technique maintenable avant d'ouvrir les systèmes gameplay plus ambitieux. Ce dépôt couvre le bootstrap MVP Tech : architecture, documentation, base SQL minimale, infrastructure locale et CI.
+Le projet cherche a construire un RPG social persistant dans un univers space opera original, avec une base technique maintenable avant d'ouvrir les systemes gameplay plus ambitieux. Ce depot couvre le bootstrap MVP Tech : architecture, documentation, base SQL minimale, infrastructure locale et CI.
 
-## Stack prévue
+## Stack prevue
 
 - Gameplay : Lua sur nanos world
 - UI : React + TypeScript + Vite
 - Styling : Tailwind CSS
-- Base de données : PostgreSQL
+- Base de donnees : PostgreSQL
 - Infrastructure locale : Docker Compose
 - CI/CD : GitHub Actions
 - Documentation : Markdown
 
-## Arborescence de démarrage
+## Arborescence de demarrage
 
 ```txt
 server/Packages/
@@ -32,19 +32,19 @@ tools/
 
 ## Lancement local Docker
 
-Démarrer PostgreSQL et pgAdmin avec le fichier d'exemple versionné :
+Demarrer PostgreSQL et pgAdmin avec le fichier d'exemple versionne :
 
 ```powershell
 docker compose --env-file docker/.env.example -f docker/docker-compose.yml up -d
 ```
 
-Vérifier les services :
+Verifier les services :
 
 ```powershell
 docker compose --env-file docker/.env.example -f docker/docker-compose.yml ps
 ```
 
-Arrêter la stack :
+Arreter la stack :
 
 ```powershell
 docker compose --env-file docker/.env.example -f docker/docker-compose.yml down
@@ -52,8 +52,9 @@ docker compose --env-file docker/.env.example -f docker/docker-compose.yml down
 
 ## Documentation
 
-- Spécification principale : [docs/cahier-des-charges.md](docs/cahier-des-charges.md)
+- Specification principale : [docs/cahier-des-charges.md](docs/cahier-des-charges.md)
 - Architecture : [docs/architecture.md](docs/architecture.md)
 - Backlog technique : [docs/backlog.md](docs/backlog.md)
-- Développement local : [docs/local-dev.md](docs/local-dev.md)
+- Developpement local : [docs/local-dev.md](docs/local-dev.md)
 - CI/CD : [docs/ci-cd.md](docs/ci-cd.md)
+- Checklist de validation MVP Tech : [docs/mvp-tech-validation-checklist.md](docs/mvp-tech-validation-checklist.md)
