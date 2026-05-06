@@ -1,56 +1,81 @@
-# Développement local
+# Developpement local
 
 ## Objectif
 
-Le bootstrap actuel prépare uniquement l'infrastructure locale autour de PostgreSQL et pgAdmin. Aucun gameplay ni package nanos world n'est encore initialisé dans ce lot.
+Le bootstrap actuel prepare uniquement l'infrastructure locale autour de PostgreSQL et pgAdmin. Aucun gameplay ni package nanos world n'est encore initialise dans ce lot.
 
-## Prérequis
+## Prerequis
 
 - Docker Desktop ou moteur Docker compatible Compose
 - Git
 
 ## Variables d'environnement
 
-Le dépôt ne versionne pas de `.env` réel. Un exemple est fourni dans `docker/.env.example`.
+Le depot ne versionne pas de `.env` reel. Un exemple est fourni dans `docker/.env.example`.
 
-Pour lancer la stack locale sans créer de secret réel dans le dépôt, utiliser directement ce fichier d'exemple avec `--env-file`.
+Pour lancer la stack locale sans creer de secret reel dans le depot, le script de demarrage et les commandes manuelles utilisent directement ce fichier d'exemple avec `--env-file`.
 
-## Commandes
+## Demarrage recommande
 
 Depuis la racine du repo :
+
+```powershell
+.\tools\start-dev.ps1
+```
+
+Le script :
+
+- verifie que Docker et Docker Compose sont disponibles
+- verifie la presence de `docker/docker-compose.yml`
+- verifie la presence de `docker/.env.example`
+- lance la stack locale avec `docker compose up -d`
+- affiche l'etat des services
+- rappelle les URLs et identifiants locaux issus de `docker/.env.example`
+
+## Commandes manuelles
+
+Lancer la stack :
 
 ```powershell
 docker compose --env-file docker/.env.example -f docker/docker-compose.yml up -d
 ```
 
-Vérifier l'état :
+Verifier l'etat :
 
 ```powershell
 docker compose --env-file docker/.env.example -f docker/docker-compose.yml ps
 ```
 
-Arrêter la stack :
+Arreter la stack :
 
 ```powershell
 docker compose --env-file docker/.env.example -f docker/docker-compose.yml down
 ```
 
-Réinitialiser aussi les volumes locaux :
+Reinitialiser aussi les volumes locaux :
 
 ```powershell
 docker compose --env-file docker/.env.example -f docker/docker-compose.yml down -v
 ```
 
-## Services exposés
+## Services exposes
 
 - PostgreSQL : `localhost:5432`
 - pgAdmin : `http://localhost:5050`
 
-## Accès pgAdmin
+## Acces pgAdmin
 
-Les identifiants d'exemple sont définis dans `docker/.env.example`. Ils sont réservés au développement local et doivent être remplacés hors dépôt pour tout autre environnement.
+Les identifiants d'exemple sont definis dans `docker/.env.example`. Ils sont reserves au developpement local et doivent etre remplaces hors depot pour tout autre environnement.
 
-Connexion serveur pgAdmin recommandée :
+Valeurs locales par defaut :
+
+- pgAdmin email : `admin@local.dev`
+- pgAdmin password : `change-me-local-only`
+- PostgreSQL database : `galactic_rp`
+- PostgreSQL user : `galactic`
+- PostgreSQL password : `change-me-local-only`
+
+Connexion serveur pgAdmin recommandee :
 
 - Hostname : `postgres`
 - Port : `5432`
@@ -60,13 +85,13 @@ Connexion serveur pgAdmin recommandée :
 
 ## Migration initiale
 
-Le dépôt contient `database/migrations/001_init.sql`. Cette migration crée :
+Le depot contient `database/migrations/001_init.sql`. Cette migration cree :
 
 - `players`
 - `characters`
 - `character_skills`
 
-Exécution manuelle possible :
+Execution manuelle possible :
 
 ```powershell
 docker compose --env-file docker/.env.example -f docker/docker-compose.yml exec -T postgres psql -U galactic -d galactic_rp -f /workspace/database/migrations/001_init.sql
@@ -74,7 +99,6 @@ docker compose --env-file docker/.env.example -f docker/docker-compose.yml exec 
 
 ## Limites actuelles
 
-- pas de seed versionné
-- pas de script d'automatisation PowerShell
+- pas de seed versionne
 - pas de build UI
-- pas de packages nanos world initialisés
+- pas de packages nanos world initialises
