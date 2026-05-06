@@ -2,15 +2,24 @@
 
 ## Objectif
 
-Ce document décrit le bootstrap MVP Tech de Galactic RP. Le périmètre couvre l'architecture du monorepo, l'infrastructure locale, la base de données minimale, la documentation et la CI. Il ne couvre pas encore le gameplay, la progression, le craft, l'inventaire, les quêtes ou un HUD complet.
+Ce document decrit le bootstrap MVP Tech de Galactic RP. Son perimetre couvre l'architecture du monorepo, l'infrastructure locale, la base de donnees minimale, la documentation et la CI. Il ne couvre pas encore l'implementation du gameplay, de la progression, du craft, de l'inventaire, des quetes ou d'un HUD complet.
 
 ## Principes
 
-- Architecture monorepo pour versionner ensemble code serveur, UI, SQL, Docker et documentation.
-- Modular monolith côté nanos world avec séparation stricte `Server/`, `Client/` et `Shared/` par package.
-- Logique sensible serveur uniquement.
-- MVP-first : poser les fondations sans implémenter les systèmes RPG.
-- Documentation versionnée et alignée avec le dépôt.
+- Monorepo unique pour versionner ensemble serveur, UI, SQL, Docker, CI et documentation.
+- Modular monolith cote nanos world avec separation stricte `Server/`, `Client/` et `Shared/` par package.
+- Logique sensible et ecritures persistantes cote serveur uniquement.
+- MVP-first : poser un socle simple, testable et maintenable avant d'ajouter les systemes RPG.
+- Documentation versionnee et alignee avec l'etat reel du depot.
+
+## Lecture du perimetre MVP
+
+Deux niveaux doivent etre distingues :
+
+- l'architecture cible du produit, qui prevoit plusieurs packages nanos world specialises
+- l'etat actuel du bootstrap MVP Tech, qui pose uniquement les fondations repo, Docker, PostgreSQL, SQL et CI
+
+Concretement, ce lot documente la direction technique et l'ossature du projet, mais n'initialise pas encore les packages Lua ni les applications React finales.
 
 ## Arborescence cible
 
@@ -36,7 +45,7 @@ galactic-rp/
 
 ### Serveur nanos world
 
-Le dossier `server/Packages/` hébergera progressivement les packages Lua du modular monolith :
+Le dossier `server/Packages/` hebergera progressivement les packages Lua du modular monolith. Les packages principaux cibles sont :
 
 - `gr_core`
 - `gr_database`
@@ -55,61 +64,95 @@ Le dossier `server/Packages/` hébergera progressivement les packages Lua du mod
 - `gr_hud`
 - `gr_datapad`
 
-Chaque package devra respecter les responsabilités suivantes :
+Chaque package doit respecter la meme frontiere technique :
 
-- `Server/` : logique autoritative, persistance, validation.
-- `Client/` : présentation, interactions locales, WebUI mounting.
-- `Shared/` : constantes, types simples, événements partagés.
+- `Server/` : logique autoritative, validation, permissions, persistance, orchestration.
+- `Client/` : presentation, interactions locales, affichage et montage des WebUI.
+- `Shared/` : constantes, structures simples et evenements partages.
+
+Regles de responsabilite :
+
+- `gr_core` porte les conventions communes et les contrats transverses.
+- `gr_database` encapsule l'acces PostgreSQL cote serveur.
+- les packages gameplay consomment des services serveur internes plutot que des mutations directes depuis le client.
+- `gr_hud` et `gr_datapad` sont des points d'integration UI et ne doivent pas contenir de logique metier autoritative.
 
 ### WebUI
 
-Les interfaces `ui/hud/` et `ui/datapad/` sont séparées dès maintenant pour éviter de coupler les futures applications React. Le HUD et le Datapad partageront plus tard une convention commune de build et de synchronisation vers les packages nanos world, mais restent indépendants fonctionnellement.
+Les interfaces `ui/hud/` et `ui/datapad/` sont separees des maintenant pour eviter de coupler les futures applications React. Elles partageront plus tard une convention commune de build et de synchronisation vers les packages nanos world, mais restent independantes fonctionnellement.
 
-### Base de données
+Le client a un role d'affichage et d'interaction, pas un role d'autorite. Les WebUI et scripts client ne doivent jamais attribuer directement :
 
-Le dossier `database/migrations/` contient les migrations SQL versionnées. Le bootstrap pose trois tables minimales :
+- XP, niveaux ou progression
+- argent, recompenses, items ou recettes
+- reputation, permissions, grades ou sanctions
+- validation de quetes, contrats ou actions admin
+
+Toute demande du client doit passer par une validation cote serveur, avec controles de regles, permissions et persistance. Cela garantit une architecture server-authoritative et evite tout gameplay sensible cote client.
+
+### Base de donnees
+
+Le dossier `database/migrations/` contient les migrations SQL versionnees. Le bootstrap pose trois tables minimales :
 
 - `players`
 - `characters`
 - `character_skills`
 
-Le schéma initial couvre la persistance de base sans encore modéliser inventaire, craft, quêtes ou réputation.
+Le schema initial couvre la persistance de base sans encore modeliser l'inventaire, le craft, les quetes, les factions, la reputation ou les contrats.
 
 ### Infrastructure locale
 
-Le dossier `docker/` contient un `docker-compose.yml` pour lancer :
+Le dossier `docker/` contient un `docker-compose.yml` pour lancer l'infrastructure locale MVP :
 
 - PostgreSQL pour la persistance locale
 - pgAdmin pour l'inspection manuelle
-- des volumes persistants pour les données
+- des volumes persistants pour les donnees
+
+Le choix PostgreSQL est acte des le MVP Tech pour eviter une migration prematuree depuis SQLite. Le fichier `docker/.env.example` sert uniquement au developpement local et aucun secret reel ne doit etre versionne.
 
 ### CI/CD
 
-La CI minimale GitHub Actions vérifie :
+La CI minimale GitHub Actions, definie dans `.github/workflows/ci.yml`, verifie :
 
-- la présence de l'arborescence attendue
-- la présence d'au moins une migration SQL
-- l'absence de secrets évidents
+- la presence de l'arborescence attendue
+- la presence d'au moins une migration SQL
+- l'absence de secrets evidents
 - l'empaquetage de `server/`, `database/` et `docs/` en artefact
+
+Cette CI est coherente avec une approche MVP-first : elle valide l'hygiene du socle sans pretendre faire un pipeline produit complet tant que les packages nanos world et les applications UI ne sont pas initialises.
 
 ## Flux de travail technique
 
-1. Créer une branche `feature/*` ou `fix/*`.
-2. Documenter la tâche via issue GitHub.
+1. Creer une branche `feature/*` ou `fix/*`.
+2. Documenter la tache via issue GitHub.
 3. Ajouter ou modifier code, SQL et docs dans le monorepo.
-4. Laisser la CI valider structure, migrations et hygiène de dépôt.
-5. Relire via Pull Request avant intégration vers `develop`.
+4. Laisser la CI valider structure, migrations et hygiene de depot.
+5. Relire via Pull Request avant integration vers `develop`.
 
-## Décisions du bootstrap
+## Decisions du bootstrap
 
-- Pas de `.env` réel versionné.
-- Pas de gameplay implémenté dans ce lot.
-- Pas de dépendance Node ou Lua ajoutée tant que les applications UI et packages n'ont pas leur cahier d'initialisation détaillé.
-- Base PostgreSQL retenue dès le départ pour éviter une migration de persistance précoce depuis SQLite.
+- Pas de `.env` reel versionne.
+- Pas de gameplay implemente dans ce lot.
+- Pas de package Lua initialise tant que son perimetre et ses responsabilites ne sont pas documentes.
+- Pas de dependance Node ajoutee tant que les applications UI n'ont pas leur cahier d'initialisation detaille.
+- Base PostgreSQL retenue des le depart pour eviter une migration de persistance precoce.
 
-## Prochaines étapes recommandées
+## Garanties d'architecture
+
+Le bootstrap MVP Tech est considere coherent si les regles suivantes restent vraies :
+
+- l'architecture nanos world reste modulaire et separee par domaine
+- chaque package garde la structure `Server/`, `Client/`, `Shared/`
+- PostgreSQL est execute localement via Docker Compose
+- GitHub Actions controle au moins la structure, les migrations et l'hygiene de depot
+- la logique sensible reste server-authoritative
+- le client n'accorde jamais directement d'avantage gameplay ou de pouvoir d'administration
+
+Toute evolution future devra preserver ces contraintes avant d'ajouter des systemes RPG plus riches.
+
+## Prochaines etapes recommandees
 
 - Initialiser `gr_core`, `gr_database` et `gr_characters`.
-- Scaffold des apps React `ui/hud` et `ui/datapad`.
-- Ajouter une stratégie de seeds de développement.
-- Étendre la CI avec build UI et validation SQL plus poussée.
+- Scaffold des applications React `ui/hud` et `ui/datapad`.
+- Ajouter une strategie de seeds de developpement.
+- Etendre la CI avec build UI et validation SQL plus poussee une fois les applications creees.
