@@ -19,7 +19,7 @@ Deux niveaux doivent etre distingues :
 - l'architecture cible du produit, qui prevoit plusieurs packages nanos world specialises
 - l'etat actuel du bootstrap MVP Tech, qui pose uniquement les fondations repo, Docker, PostgreSQL, SQL et CI
 
-Concretement, ce lot documente la direction technique et l'ossature du projet, mais n'initialise pas encore les packages Lua ni les applications React finales.
+Concretement, ce lot documente la direction technique et l'ossature du projet. Le premier package Lua `gr_core` est initialise comme socle technique minimal, tandis que les applications React finales et les packages gameplay restent a creer.
 
 ## Arborescence cible
 
@@ -77,6 +77,14 @@ Regles de responsabilite :
 - les packages gameplay consomment des services serveur internes plutot que des mutations directes depuis le client.
 - `gr_hud` et `gr_datapad` sont des points d'integration UI et ne doivent pas contenir de logique metier autoritative.
 
+Etat initial de `gr_core` :
+
+- `Package.toml` declare un package nanos world de type script avec configuration minimale.
+- `Shared/Index.lua` centralise des constantes non sensibles communes : nom du projet, version MVP et prefixe d'evenements.
+- `Server/Index.lua` se limite a un log de chargement explicite cote serveur.
+- `Client/Index.lua` se limite a un log de chargement explicite cote client.
+- aucun systeme gameplay, personnage, progression, inventaire, craft, quete ou HUD n'est initialise dans `gr_core`.
+
 ### WebUI
 
 Les interfaces `ui/hud/` et `ui/datapad/` sont separees des maintenant pour eviter de coupler les futures applications React. Elles partageront plus tard une convention commune de build et de synchronisation vers les packages nanos world, mais restent independantes fonctionnellement.
@@ -133,7 +141,7 @@ Cette CI est coherente avec une approche MVP-first : elle valide l'hygiene du so
 
 - Pas de `.env` reel versionne.
 - Pas de gameplay implemente dans ce lot.
-- Pas de package Lua initialise tant que son perimetre et ses responsabilites ne sont pas documentes.
+- Initialisation minimale de `gr_core` autorisee pour poser les conventions communes sans ajouter de logique metier.
 - Pas de dependance Node ajoutee tant que les applications UI n'ont pas leur cahier d'initialisation detaille.
 - Base PostgreSQL retenue des le depart pour eviter une migration de persistance precoce.
 
@@ -152,7 +160,7 @@ Toute evolution future devra preserver ces contraintes avant d'ajouter des syste
 
 ## Prochaines etapes recommandees
 
-- Initialiser `gr_core`, `gr_database` et `gr_characters`.
+- Initialiser `gr_database` et `gr_characters`.
 - Scaffold des applications React `ui/hud` et `ui/datapad`.
 - Ajouter une strategie de seeds de developpement.
 - Etendre la CI avec build UI et validation SQL plus poussee une fois les applications creees.
