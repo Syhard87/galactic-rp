@@ -95,21 +95,17 @@ function DatabaseConfig.Read(raw_config)
 end
 
 function DatabaseConfig.LogSummary(config)
-    local password_state = "missing"
-
-    if config.password ~= nil then
-        password_state = "provided"
-    end
+    local has_password = config.password ~= nil
 
     Console.Log(
-        "[gr_database][config] Loaded source=%s engine=%s host=%s port=%s dbname=%s user=%s password=%s auto_connect=%s",
+        "[gr_database][config] Loaded source=%s engine=%s host=%s port=%s dbname=%s user=%s has_password=%s auto_connect=%s",
         config.source_label,
         config.engine,
         config.host,
         tostring(config.port),
         config.dbname,
         config.user,
-        password_state,
+        tostring(has_password),
         tostring(config.auto_connect)
     )
 end

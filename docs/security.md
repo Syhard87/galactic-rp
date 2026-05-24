@@ -13,6 +13,7 @@ Principes obligatoires :
 - utiliser uniquement des fichiers d'exemple comme `docker/.env.example`
 - ne jamais committer de cle privee, certificat exportable ou token d'acces
 - ne jamais versionner de `Config.toml` de production ou de staging
+- ne jamais journaliser un mot de passe reel, un token ou une connection string complete
 
 Formats consideres sensibles :
 
@@ -81,6 +82,7 @@ Regles pratiques :
 - les requetes client doivent etre traitees comme non fiables par defaut
 - les scripts client peuvent demander, jamais accorder
 - `gr_database` doit rester un package de logique sensible cote serveur, sans credentials ni acces SQL dans `Client/` ou `Shared/`
+- les logs de configuration ou de connexion doivent utiliser un etat redacte comme `has_password=true|false`, jamais la valeur du secret
 
 ## Risques Connus
 
@@ -109,6 +111,7 @@ Mesures recommandees pour les prochains lots :
 
 - [ ] aucun fichier `.env`, `.pem`, `.key`, `.p12` ou `.pfx` n'est ajoute au diff
 - [ ] aucun mot de passe reel, token ou cle privee n'apparait dans les fichiers modifies
+- [ ] aucun mot de passe reel, token ou connection string complete n'apparait dans les logs ajoutes ou modifies
 - [ ] si un fichier d'exemple change, ses valeurs restent fictives et locales
 - [ ] aucune logique sensible n'est deplacee cote client
 - [ ] toute mutation d'XP, argent, inventaire, reputation, recompense ou permission reste server-authoritative
