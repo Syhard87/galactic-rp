@@ -101,12 +101,15 @@ Etat initial de `gr_database` :
 Etat initial de `gr_characters` :
 
 - `Package.toml` declare un package nanos world de type script avec configuration minimale.
+- `Package.toml` declare maintenant `gr_database` comme dependance de package pour le chargement serveur des lignes `players`.
+- `Server/CharacterPlayerRepository.lua` prepare la lecture server-only de la table `players` via `players.platform_id`.
+- `Server/CharacterPlayerService.lua` prepare la resolution de l'identifiant stable nanos world, le chargement asynchrone d'une ligne `players` existante et l'etat memoire si la ligne manque encore.
 - `Server/CharacterRepository.lua` prepare les points d'entree futurs pour charger les personnages d'un joueur, creer un personnage, selectionner le personnage actif et sauvegarder la position, sans executer encore de requete metier.
 - `Server/CharacterService.lua` prepare l'orchestration serveur de ces flux avec validations minimales de forme et memoire transitoire de personnage actif.
-- `Server/Index.lua` charge le package, instancie repository et service, puis journalise explicitement que la logique personnage reste server-authoritative.
+- `Server/Index.lua` charge le package, instancie les services serveur, s'abonne au cycle `Player.Subscribe("Spawn")` et prepare le chargement de session joueur depuis `players`.
 - `Shared/Index.lua` limite le partage a des constantes et noms d'evenements non sensibles.
 - `Client/Index.lua` se limite a un log de chargement et rappelle qu'aucune logique autoritative personnage n'est exposee cote client.
-- aucune creation complete de personnage, selection finale, sauvegarde de position persistante ou UI de datapad n'est encore implementee dans ce lot.
+- aucune creation complete de personnage, selection finale, spawn de personnage actif, sauvegarde de position persistante ou UI de datapad n'est encore implementee dans ce lot.
 
 ### WebUI
 
