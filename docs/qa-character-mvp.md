@@ -155,7 +155,29 @@ Ces tests ne sont pas encore executables ici, mais ils doivent etre prevus :
 - [ ] aucune erreur critique n'apparait lors du chargement des packages
 - [ ] aucune boucle agressive de sauvegarde de position n'apparait dans les logs
 
-## 11. Limites actuelles
+## 11. Smoke test local `#41`
+
+- [ ] Docker Compose demarre `postgres` et `pgadmin`
+- [ ] le service `postgres` devient `healthy`
+- [ ] pgAdmin est accessible sur `http://localhost:5050`
+- [ ] la base `galactic_rp` est joignable dans pgAdmin
+- [ ] les tables `players`, `characters` et `character_skills` sont visibles apres migration
+- [ ] aucun `server/Config.example.toml` n'est suppose exister dans le depot
+- [ ] la doc rappelle que `Config.toml` nanos world est genere au premier lancement
+- [ ] le `Config.toml` local du vrai serveur nanos world liste `gr_core`, `gr_database`, `gr_characters`
+- [ ] l'ordre de chargement local retenu est `gr_core -> gr_database -> gr_characters`
+- [ ] le dossier local `Packages/` du serveur contient bien ces trois packages
+- [ ] le log `[gr_core][server] Core package loaded.` est visible
+- [ ] le log `[gr_database][server] Database package loaded.` est visible
+- [ ] le log `[gr_characters][server] Characters package loaded.` est visible
+- [ ] aucun message d'erreur `Package.Require` n'apparait au chargement
+- [ ] aucune erreur de dependance `gr_database` manquante n'apparait
+- [ ] un joueur peut rejoindre sans crash Lua
+- [ ] les logs `player-service` ou `player-repository` sont visibles a la connexion
+- [ ] un joueur sans ligne `players` ne provoque pas de crash
+- [ ] un joueur sans personnage ne provoque pas de spawn final force
+
+## 12. Limites actuelles
 
 - [ ] la doc rappelle qu'il n'y a pas encore d'UI complete
 - [ ] la doc rappelle qu'il n'y a pas encore de spawn final complet
@@ -163,7 +185,7 @@ Ces tests ne sont pas encore executables ici, mais ils doivent etre prevus :
 - [ ] la doc rappelle qu'il n'y a pas encore de vraie boucle RP jouable
 - [ ] la doc ne pretend pas que le MVP Character est entierement jouable
 
-## 12. Verification documentaire finale
+## 13. Verification documentaire finale
 
 - [ ] aucun fichier inexistant n'est mentionne dans la checklist
 - [ ] la checklist reste alignee avec les fichiers reels du depot
@@ -178,4 +200,7 @@ Exemples de commandes locales a executer :
 - `git status --short`
 - `Get-ChildItem -Recurse -File server/Packages/gr_core,server/Packages/gr_database,server/Packages/gr_characters`
 - `Get-ChildItem server/Packages/gr_characters/Server -File`
+- `docker compose --env-file docker/.env.example -f docker/docker-compose.yml ps`
+- `docker compose --env-file docker/.env.example -f docker/docker-compose.yml logs --tail 100 postgres`
 - `Select-String -Path database/migrations/001_init.sql -Pattern 'position_x','position_y','position_z'`
+- `rg -n --hidden --glob "!.git/*" "Config\\.example\\.toml|Config\\.toml" .`
