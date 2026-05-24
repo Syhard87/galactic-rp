@@ -1,5 +1,7 @@
 Package.Require("../Shared/Index.lua")
 
+local CharacterPlayerRepository = Package.Require("CharacterPlayerRepository.lua")
+local CharacterPlayerService = Package.Require("CharacterPlayerService.lua")
 local CharacterRepository = Package.Require("CharacterRepository.lua")
 local CharacterService = Package.Require("CharacterService.lua")
 
@@ -12,9 +14,35 @@ if GRDatabase ~= nil and GRDatabase.Server ~= nil then
     database_service = GRDatabase.Server.Service
 end
 
+GRCharacters.Server.PlayerRepository = CharacterPlayerRepository.Create(database_service)
+GRCharacters.Server.PlayerService = CharacterPlayerService.Create(GRCharacters.Server.PlayerRepository)
 GRCharacters.Server.Repository = CharacterRepository.Create(database_service)
 GRCharacters.Server.Service = CharacterService.Create(GRCharacters.Server.Repository)
 
+local function load_player_session(player)
+    local is_started, error = GRCharacters.Server.PlayerService:LoadPlayerSession(player)
+
+    if not is_started then
+        Console.Log(
+            "[gr_characters][server] Failed to start player row loading for a joining player with error=%s.",
+            tostring(error)
+        )
+    end
+end
+
+Player.Subscribe("Spawn", load_player_session)
+
+Player.Subscribe("Destroy", function(player)
+    GRCharacters.Server.PlayerService:ForgetPlayerSession(player)
+end)
+
+Package.Subscribe("Load", function()
+    for _, player in pairs(Player.GetAll()) do
+        load_player_session(player)
+    end
+end)
+
 Console.Log("[gr_characters][server] Characters package loaded.")
 Console.Log("[gr_characters][server] Character authority, validation and persistence stay server-side.")
-Console.Log("[gr_characters][server] Repository and service stubs are ready for future character lifecycle work.")
+Console.Log("[gr_characters][server] Player row loading is prepared server-side through players.platform_id lookup.")
+Console.Log("[gr_characters][server] Character repositories and services remain separated from character creation, selection, spawn and persistence flows.")

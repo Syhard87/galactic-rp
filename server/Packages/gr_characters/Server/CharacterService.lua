@@ -4,7 +4,7 @@ GRCharacters.Server = GRCharacters.Server or {}
 local CharacterService = {}
 CharacterService.__index = CharacterService
 
-local function normalize_player_id(player_or_id)
+local function normalize_player_key(player_or_id)
     if type(player_or_id) == "string" then
         return player_or_id
     end
@@ -17,14 +17,15 @@ local function normalize_player_id(player_or_id)
         return nil
     end
 
-    -- Future integration can standardize this through gr_core. For now the
-    -- scaffold accepts either an explicit id or a player-like object.
-    if type(player_or_id.GetAccountIDString) == "function" then
-        return player_or_id:GetAccountIDString()
+    -- Verified against local nanos world API metadata:
+    -- external/nanos-world-docs/src/api/Classes/Player.json
+    -- This returns a stable session key, not the database players.id row.
+    if type(player_or_id.GetAccountID) == "function" then
+        return player_or_id:GetAccountID()
     end
 
-    if type(player_or_id.GetSteamIDString) == "function" then
-        return player_or_id:GetSteamIDString()
+    if type(player_or_id.GetSteamID) == "function" then
+        return player_or_id:GetSteamID()
     end
 
     if type(player_or_id.GetID) == "function" then
@@ -64,7 +65,7 @@ function CharacterService.Create(repository)
 end
 
 function CharacterService:GetCharactersForPlayer(player_or_id)
-    local player_id = normalize_player_id(player_or_id)
+    local player_id = normalize_player_key(player_or_id)
 
     if player_id == nil then
         return false, "player-id-required"
@@ -76,7 +77,7 @@ function CharacterService:GetCharactersForPlayer(player_or_id)
 end
 
 function CharacterService:CreateCharacter(player_or_id, character_payload)
-    local player_id = normalize_player_id(player_or_id)
+    local player_id = normalize_player_key(player_or_id)
 
     if player_id == nil then
         return false, "player-id-required"
@@ -94,7 +95,7 @@ function CharacterService:CreateCharacter(player_or_id, character_payload)
 end
 
 function CharacterService:SelectActiveCharacter(player_or_id, character_id)
-    local player_id = normalize_player_id(player_or_id)
+    local player_id = normalize_player_key(player_or_id)
 
     if player_id == nil then
         return false, "player-id-required"
@@ -120,7 +121,7 @@ function CharacterService:SelectActiveCharacter(player_or_id, character_id)
 end
 
 function CharacterService:SaveActiveCharacterPosition(player_or_id, position)
-    local player_id = normalize_player_id(player_or_id)
+    local player_id = normalize_player_key(player_or_id)
 
     if player_id == nil then
         return false, "player-id-required"
@@ -148,7 +149,7 @@ function CharacterService:SaveActiveCharacterPosition(player_or_id, position)
 end
 
 function CharacterService:GetActiveCharacterId(player_or_id)
-    local player_id = normalize_player_id(player_or_id)
+    local player_id = normalize_player_key(player_or_id)
 
     if player_id == nil then
         return nil
