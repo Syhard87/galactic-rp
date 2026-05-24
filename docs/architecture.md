@@ -19,7 +19,7 @@ Deux niveaux doivent etre distingues :
 - l'architecture cible du produit, qui prevoit plusieurs packages nanos world specialises
 - l'etat actuel du bootstrap MVP Tech, qui pose uniquement les fondations repo, Docker, PostgreSQL, SQL et CI
 
-Concretement, ce lot documente la direction technique et l'ossature du projet. Les packages Lua `gr_core` et `gr_database` sont initialises comme socles techniques minimaux, tandis que les applications React finales et les packages gameplay restent a creer.
+Concretement, ce lot documente la direction technique et l'ossature du projet. Les packages Lua `gr_core`, `gr_database` et `gr_characters` sont initialises comme socles techniques minimaux, tandis que les applications React finales et les autres packages gameplay restent a creer.
 
 ## Arborescence cible
 
@@ -76,6 +76,7 @@ Regles de responsabilite :
 
 - `gr_core` porte les conventions communes et les contrats transverses.
 - `gr_database` encapsule l'acces PostgreSQL cote serveur.
+- `gr_characters` portera le cycle de vie personnage cote serveur : chargement, creation, selection active et persistance de position.
 - les packages gameplay consomment des services serveur internes plutot que des mutations directes depuis le client.
 - `gr_hud` et `gr_datapad` sont des points d'integration UI et ne doivent pas contenir de logique metier autoritative.
 
@@ -96,6 +97,16 @@ Etat initial de `gr_database` :
 - `Shared/Index.lua` ne contient que des constantes de package, sans logique sensible ni dependance client.
 - `Client/` est volontairement absent pour eviter toute ambiguite sur la frontiere server-only du package.
 - aucune requete metier, repository gameplay ou acces base cote client n'est initialise dans `gr_database`.
+
+Etat initial de `gr_characters` :
+
+- `Package.toml` declare un package nanos world de type script avec configuration minimale.
+- `Server/CharacterRepository.lua` prepare les points d'entree futurs pour charger les personnages d'un joueur, creer un personnage, selectionner le personnage actif et sauvegarder la position, sans executer encore de requete metier.
+- `Server/CharacterService.lua` prepare l'orchestration serveur de ces flux avec validations minimales de forme et memoire transitoire de personnage actif.
+- `Server/Index.lua` charge le package, instancie repository et service, puis journalise explicitement que la logique personnage reste server-authoritative.
+- `Shared/Index.lua` limite le partage a des constantes et noms d'evenements non sensibles.
+- `Client/Index.lua` se limite a un log de chargement et rappelle qu'aucune logique autoritative personnage n'est exposee cote client.
+- aucune creation complete de personnage, selection finale, sauvegarde de position persistante ou UI de datapad n'est encore implementee dans ce lot.
 
 ### WebUI
 
@@ -119,6 +130,8 @@ Le dossier `database/migrations/` contient les migrations SQL versionnees. Le bo
 - `character_skills`
 
 Le schema initial couvre la persistance de base sans encore modeliser l'inventaire, le craft, les quetes, les factions, la reputation ou les contrats.
+
+`gr_characters` est prepare pour consommer ulterieurement ces tables via `gr_database`, mais aucun acces metier a la base n'est encore active dans son scaffold initial.
 
 Le package `gr_database` est le point d'entree technique prevu pour la future integration PostgreSQL dans nanos world. Sa responsabilite est de centraliser :
 
@@ -182,7 +195,8 @@ Toute evolution future devra preserver ces contraintes avant d'ajouter des syste
 
 ## Prochaines etapes recommandees
 
-- Initialiser `gr_characters`.
+- Implementer le chargement metier des personnages via `gr_database`.
+- Implementer la creation et la selection de personnage avec validations serveur.
 - Scaffold des applications React `ui/hud` et `ui/datapad`.
 - Ajouter une strategie de seeds de developpement.
 - Etendre la CI avec build UI et validation SQL plus poussee une fois les applications creees.
