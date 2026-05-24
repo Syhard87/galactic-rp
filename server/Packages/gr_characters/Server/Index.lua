@@ -3,6 +3,7 @@ Package.Require("../Shared/Index.lua")
 local CharacterPlayerRepository = Package.Require("CharacterPlayerRepository.lua")
 local CharacterPlayerService = Package.Require("CharacterPlayerService.lua")
 local CharacterCreationService = Package.Require("CharacterCreationService.lua")
+local CharacterSelectionService = Package.Require("CharacterSelectionService.lua")
 local CharacterRepository = Package.Require("CharacterRepository.lua")
 local CharacterService = Package.Require("CharacterService.lua")
 
@@ -19,10 +20,15 @@ GRCharacters.Server.PlayerRepository = CharacterPlayerRepository.Create(database
 GRCharacters.Server.PlayerService = CharacterPlayerService.Create(GRCharacters.Server.PlayerRepository)
 GRCharacters.Server.Repository = CharacterRepository.Create(database_service)
 GRCharacters.Server.CreationService = CharacterCreationService.Create(GRCharacters.Server.Repository)
+GRCharacters.Server.SelectionService = CharacterSelectionService.Create(
+    GRCharacters.Server.Repository,
+    GRCharacters.Server.PlayerService
+)
 GRCharacters.Server.Service = CharacterService.Create(
     GRCharacters.Server.Repository,
     GRCharacters.Server.CreationService,
-    GRCharacters.Server.PlayerService
+    GRCharacters.Server.PlayerService,
+    GRCharacters.Server.SelectionService
 )
 
 local function load_player_session(player)
@@ -52,4 +58,5 @@ Console.Log("[gr_characters][server] Characters package loaded.")
 Console.Log("[gr_characters][server] Character authority, validation and persistence stay server-side.")
 Console.Log("[gr_characters][server] Player row loading is prepared server-side through players.platform_id lookup.")
 Console.Log("[gr_characters][server] Character creation is prepared server-side with strict field validation and safe defaults.")
+Console.Log("[gr_characters][server] Character selection is prepared server-side with ownership validation and transient active character state.")
 Console.Log("[gr_characters][server] Character repositories and services remain separated from character creation, selection, spawn and persistence flows.")
