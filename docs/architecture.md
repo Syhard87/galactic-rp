@@ -21,6 +21,8 @@ Deux niveaux doivent etre distingues :
 
 Concretement, ce lot documente la direction technique et l'ossature du projet. Les packages Lua `gr_core`, `gr_database` et `gr_characters` sont initialises comme socles techniques minimaux, tandis que les applications React finales et les autres packages gameplay restent a creer.
 
+Pour le detail du sous-systeme Character MVP, le document de reference est `docs/character-mvp.md`. `docs/architecture.md` reste une vue de niveau monorepo et package.
+
 ## Arborescence cible
 
 ```txt
@@ -103,14 +105,16 @@ Etat initial de `gr_characters` :
 - `Package.toml` declare un package nanos world de type script avec configuration minimale.
 - `Server/CharacterPlayerRepository.lua` prepare la lecture server-only de la table `players` via `players.platform_id`.
 - `Server/CharacterPlayerService.lua` prepare la resolution de l'identifiant stable nanos world, le chargement asynchrone d'une ligne `players` existante et l'etat memoire si la ligne manque encore.
-- `Server/CharacterRepository.lua` prepare les acces serveur a la table `characters` pour le listing par joueur, la creation de personnage et la validation de selection, sans persistance du personnage actif de session.
+- `Server/CharacterRepository.lua` prepare les acces serveur a la table `characters` pour le listing par joueur, la creation de personnage, la validation de selection et la mise a jour de `position_x`, `position_y`, `position_z`.
 - `Server/CharacterCreationService.lua` centralise la validation stricte des champs autorises a la creation et interdit tout champ sensible venu du client.
 - `Server/CharacterSelectionService.lua` prepare le chargement de la liste des personnages d'un joueur, verifie l'ownership du `character_id` demande et conserve le personnage actif cible uniquement en memoire serveur transitoire.
-- `Server/CharacterService.lua` orchestre ces flux serveur, sert de facade pour le chargement player, la creation et la selection.
-- `Server/Index.lua` charge le package, instancie tous les services serveur, s'abonne au cycle `Player.Subscribe("Spawn")` et prepare le chargement de session joueur puis de ses personnages depuis `players` et `characters`.
+- `Server/CharacterPositionService.lua` prepare la sauvegarde autoritative de la position du personnage actif, la cadence lente d'auto-save, l'anti-spam DB et le fallback futur `position persistante -> spawn point de map`.
+- `Server/CharacterService.lua` orchestre ces flux serveur et sert de facade pour le chargement player, la creation, la selection et la preparation de sauvegarde de position.
+- `Server/Index.lua` charge le package, instancie tous les services serveur, s'abonne au cycle `Player.Subscribe("Spawn")` et `Player.Subscribe("Destroy")`, puis prepare le chargement de session joueur, la liste de personnages et la sauvegarde finale de position.
 - `Shared/Index.lua` limite le partage a des constantes et noms d'evenements non sensibles.
 - `Client/Index.lua` se limite a un log de chargement et rappelle qu'aucune logique autoritative personnage n'est exposee cote client.
-- aucune UI complete de selection, aucun spawn final ni sauvegarde de position persistante n'est encore implementee dans ce lot.
+- aucune UI complete de selection, aucun spawn final complet, aucun Datapad complet ni gameplay RP complet n'est encore implementee dans ce lot.
+- la sauvegarde de position et le fallback de spawn sont prepares, mais ils ne doivent pas etre presentes comme un systeme Character termine.
 
 ### WebUI
 
@@ -135,7 +139,7 @@ Le dossier `database/migrations/` contient les migrations SQL versionnees. Le bo
 
 Le schema initial couvre la persistance de base sans encore modeliser l'inventaire, le craft, les quetes, les factions, la reputation ou les contrats.
 
-`gr_characters` consomme deja ces tables via `gr_database` pour preparer le chargement player, le listing de personnages, la creation de personnage et la validation serveur de selection, tout en laissant le spawn final et la sauvegarde de position hors de ce lot.
+`gr_characters` consomme deja ces tables via `gr_database` pour preparer le chargement player, le listing de personnages, la creation de personnage, la validation serveur de selection et la mise a jour preparee de position, tout en laissant le spawn final complet hors de ce lot.
 
 Le package `gr_database` est le point d'entree technique prevu pour la future integration PostgreSQL dans nanos world. Sa responsabilite est de centraliser :
 
@@ -194,6 +198,7 @@ Le bootstrap MVP Tech est considere coherent si les regles suivantes restent vra
 - la logique sensible reste server-authoritative
 - `gr_database` concentre toute logique de connexion et de persistance sensible cote serveur
 - le client n'accorde jamais directement d'avantage gameplay ou de pouvoir d'administration
+- la documentation Character MVP ne doit jamais presenter un scaffold comme une fonctionnalite gameplay terminee
 
 Toute evolution future devra preserver ces contraintes avant d'ajouter des systemes RPG plus riches.
 
