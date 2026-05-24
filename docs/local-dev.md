@@ -2,12 +2,36 @@
 
 ## Objectif
 
-Le bootstrap actuel prepare uniquement l'infrastructure locale autour de PostgreSQL et pgAdmin. Aucun gameplay ni package nanos world n'est encore initialise dans ce lot.
+Le bootstrap local couvre maintenant deux besoins distincts :
+
+- l'infrastructure locale PostgreSQL et pgAdmin
+- le premier smoke test local du serveur nanos world pour le Character MVP `#41`
+
+Ce document ne pretend pas que le Character MVP est deja jouable complet.
+
+## Perimetre actuel
+
+Le depot prepare actuellement :
+
+- PostgreSQL via Docker Compose
+- pgAdmin pour l'inspection manuelle
+- les packages nanos world `gr_core`, `gr_database` et `gr_characters`
+- la documentation du premier smoke test de chargement serveur
+
+Le depot ne fournit pas encore :
+
+- le binaire nanos world serveur
+- un `server/Config.example.toml` versionne
+- une UI complete de creation ou de selection
+- un spawn final complet
+- un Datapad complet
 
 ## Prerequis
 
 - Docker Desktop ou moteur Docker compatible Compose
 - Git
+- une installation locale nanos world serveur hors depot
+- acces au dossier local du serveur nanos world contenant le futur `Config.toml`
 
 ## Variables d'environnement
 
@@ -15,7 +39,7 @@ Le depot ne versionne pas de `.env` reel. Un exemple est fourni dans `docker/.en
 
 Pour lancer la stack locale sans creer de secret reel dans le depot, le script de demarrage et les commandes manuelles utilisent directement ce fichier d'exemple avec `--env-file`.
 
-## Demarrage recommande
+## Demarrage recommande de PostgreSQL
 
 Depuis la racine du repo :
 
@@ -32,7 +56,7 @@ Le script :
 - affiche l'etat des services
 - rappelle les URLs et identifiants locaux issus de `docker/.env.example`
 
-## Commandes manuelles
+## Commandes manuelles Docker Compose
 
 Lancer la stack :
 
@@ -44,6 +68,12 @@ Verifier l'etat :
 
 ```powershell
 docker compose --env-file docker/.env.example -f docker/docker-compose.yml ps
+```
+
+Suivre les logs PostgreSQL :
+
+```powershell
+docker compose --env-file docker/.env.example -f docker/docker-compose.yml logs -f postgres
 ```
 
 Arreter la stack :
@@ -63,7 +93,7 @@ docker compose --env-file docker/.env.example -f docker/docker-compose.yml down 
 - PostgreSQL : `localhost:5432`
 - pgAdmin : `http://localhost:5050`
 
-## Acces pgAdmin
+## Verifier pgAdmin
 
 Les identifiants d'exemple sont definis dans `docker/.env.example`. Ils sont reserves au developpement local et doivent etre remplaces hors depot pour tout autre environnement.
 
@@ -83,13 +113,17 @@ Connexion serveur pgAdmin recommandee :
 - Password : valeur `POSTGRES_PASSWORD`
 - Database : valeur `POSTGRES_DB`
 
+Verification pgAdmin recommandee :
+
+1. ouvrir `http://localhost:5050`
+2. se connecter avec les credentials de `docker/.env.example`
+3. declarer un serveur PostgreSQL avec l'hote `postgres`
+4. verifier que la base `galactic_rp` est joignable
+5. verifier la presence des tables `players`, `characters` et `character_skills` apres migration
+
 ## Migration initiale
 
-Le depot contient `database/migrations/001_init.sql`. Cette migration cree :
-
-- `players`
-- `characters`
-- `character_skills`
+Le depot contient `database/migrations/001_init.sql`.
 
 Execution manuelle possible :
 
@@ -113,7 +147,238 @@ Execution manuelle avec Docker :
 docker exec -it galactic-rp-postgres psql -U galactic -d galactic_rp -f /workspace/database/seeds/dev_seed.sql
 ```
 
-## Limites actuelles
+## Etat des packages Character MVP
 
-- pas de build UI
-- pas de packages nanos world initialises
+Les packages reels prepares pour le smoke test `#41` sont :
+
+1. `gr_core`
+2. `gr_database`
+3. `gr_characters`
+
+Ordre de chargement attendu pour le smoke test :
+
+1. `gr_core`
+2. `gr_database`
+3. `gr_characters`
+
+Justification :
+
+- `gr_core` ne declare pas de dependance runtime, mais peut etre charge en premier comme socle de conventions
+- `gr_database` doit etre charge avant `gr_characters`
+- `gr_characters` declare `packages_requirements = ["gr_database"]`
+
+## Configuration locale du serveur nanos world
+
+Verification faite dans le depot :
+
+- aucun `server/Config.example.toml` n'est versionne
+- `server/Config.toml` est ignore par Git
+- le cahier des charges cible mentionne `server/Config.example.toml`, mais ce fichier n'existe pas encore dans l'etat reel du depot
+
+Rappel de la documentation officielle nanos world :
+
+- `Config.toml` est genere automatiquement au premier lancement du serveur
+- les packages scripts doivent etre listes dans l'entree `packages`
+- les packages doivent etre presents dans le dossier `Packages/` du serveur nanos world local
+
+Consequence pratique :
+
+- ne pas creer un faux chemin local dans le depot
+- preparer le `Config.toml` dans le vrai dossier du serveur nanos world local
+- adapter manuellement le chemin local de votre installation nanos world
+
+TODO local obligatoire :
+
+- confirmer ou documenter dans votre environnement comment les sources du repo `server/Packages/` sont copiees, synchronisees ou liees vers le dossier reel `Packages/` du serveur nanos world
+
+### Configuration minimale recommandee
+
+Dans le dossier reel du serveur nanos world local :
+
+1. lancer une premiere fois le serveur si `Config.toml` n'existe pas encore
+2. fermer le serveur
+3. editer le `Config.toml` genere automatiquement
+4. verifier que les packages suivants sont listes dans cet ordre :
+
+```toml
+packages = [
+  "gr_core",
+  "gr_database",
+  "gr_characters",
+]
+```
+
+Si votre serveur attend aussi une map explicite et qu'aucune map de projet n'est encore disponible, utiliser une map integree documentee par nanos world, par exemple :
+
+```toml
+map = "default-blank-map"
+```
+
+ou conserver votre map locale deja validee si elle ne bloque pas le smoke test.
+
+## Procedure smoke test local Character MVP `#41`
+
+### 1. Preparer la base locale
+
+1. lancer Docker Compose
+2. verifier que `postgres` est `healthy`
+3. appliquer `database/migrations/001_init.sql`
+4. appliquer `database/seeds/dev_seed.sql` seulement si vous voulez un joueur et un personnage de dev pre-remplis
+
+### 2. Preparer le serveur nanos world local
+
+1. verifier que le dossier local `Packages/` du serveur contient `gr_core`, `gr_database` et `gr_characters`
+2. verifier que le `Config.toml` local liste `gr_core`, `gr_database`, `gr_characters`
+3. verifier que `gr_characters` reste apres `gr_database`
+4. ne pas ajouter de package gameplay supplementaire pour ce premier smoke test si ce n'est pas necessaire
+
+### 3. Lancer le serveur nanos world local
+
+Depuis le dossier local du serveur nanos world :
+
+- utiliser le binaire Windows `NanosWorldServer.exe` ou le script correspondant a votre environnement local documente par nanos world
+- observer la console serveur des le demarrage
+
+Le depot ne versionne pas encore de script de lancement nanos world. Le chemin exact d'installation reste donc un TODO local a documenter dans votre environnement.
+
+## Logs attendus au demarrage
+
+Les logs suivants sont attendus ou probables au demarrage si les packages sont bien charges :
+
+- `[gr_core][server] Core package loaded.`
+- `[gr_database][config] Loaded source=... engine=postgresql host=127.0.0.1 port=5432 dbname=galactic_rp user=galactic password=missing|provided auto_connect=false`
+- `[gr_database][server] Database package loaded.`
+- `[gr_database][server] Sensitive database logic remains server-only.`
+- `[gr_database][server] No automatic PostgreSQL connection is attempted at package load.`
+- `[gr_characters][server] Characters package loaded.`
+- `[gr_characters][server] Character authority, validation and persistence stay server-side.`
+- `[gr_characters][server] Player row loading is prepared server-side through players.platform_id lookup.`
+- `[gr_characters][server] Character creation is prepared server-side with strict field validation and safe defaults.`
+- `[gr_characters][server] Character selection is prepared server-side with ownership validation and transient active character state.`
+- `[gr_characters][server] Active character position saving is prepared server-side with a slow timer, DB anti-spam and spawn fallback resolution.`
+
+Le smoke test doit echouer si vous voyez des erreurs du type :
+
+- package introuvable
+- `Package.Require` en erreur
+- dependance `gr_database` manquante
+- crash Lua fatal au chargement
+
+## Logs attendus a la connexion d'un joueur
+
+Quand un joueur rejoint :
+
+- le serveur ne doit pas crash
+- des logs `player-service` et `player-repository` doivent apparaitre
+- le chargement par `players.platform_id` doit etre observable
+
+Exemples de logs attendus :
+
+- `[gr_characters][player-service] Resolving players row for platform_id=... username=...`
+- `[gr_characters][player-repository] Looking up players.platform_id=...`
+
+Puis un des cas suivants :
+
+- ligne `players` trouvee
+- ligne `players` absente mais sans crash serveur
+
+## Verifications en jeu
+
+Le premier smoke test local doit verifier au minimum :
+
+- un joueur peut rejoindre le serveur
+- `gr_core`, `gr_database` et `gr_characters` se chargent sans erreur critique
+- aucun crash Lua n'apparait au demarrage
+- aucune erreur de dependance package n'apparait
+- les logs de player loading sont visibles
+- si le joueur n'a pas de ligne `players`, le serveur reste proprement dans un etat prepare sans gameplay force
+- si le joueur n'a pas de personnage, le serveur ne crash pas et ne tente pas un spawn final non implemente
+
+## Limites connues du smoke test
+
+Ce smoke test ne valide pas encore :
+
+- une UI complete de creation de personnage
+- une UI complete de selection de personnage
+- un spawn final complet
+- un Datapad complet
+- une vraie boucle RP jouable
+
+Interpretation correcte :
+
+- on valide ici le chargement des packages et la stabilite minimale du socle Character MVP
+- on ne valide pas encore une experience de jeu Character complete
+
+## Troubleshooting
+
+### Package non charge
+
+Verifier :
+
+- que le package existe bien dans le vrai dossier `Packages/` du serveur nanos world local
+- que le nom de dossier correspond exactement au nom reference dans `Config.toml`
+- que `packages = [...]` contient bien `gr_core`, `gr_database`, `gr_characters`
+
+### Erreur `Package.Require`
+
+Verifier :
+
+- qu'aucun fichier requis dans `Server/` n'est manquant
+- que les noms de fichiers respectent la casse attendue
+- que le package s'est bien charge avant toute tentative de require dynamique
+
+### Erreur de dependance `gr_database`
+
+Verifier :
+
+- que `gr_database` est present dans le dossier `Packages/`
+- que `gr_database` est liste avant `gr_characters` dans le smoke test local
+- que `server/Packages/gr_characters/Package.toml` declare toujours `packages_requirements = ["gr_database"]`
+
+### PostgreSQL non disponible
+
+Verifier :
+
+- `docker compose ... ps`
+- l'etat `healthy` du service `postgres`
+- le port expose `5432`
+- les logs `docker compose ... logs postgres`
+
+Rappel :
+
+- `gr_database` n'ouvre pas automatiquement la connexion au chargement du package
+- l'indisponibilite PostgreSQL doit donc surtout apparaitre quand une lecture ou une connexion est effectivement tentee
+
+### Fichier `Config.toml` manquant
+
+Rappel officiel nanos world :
+
+- `Config.toml` est genere au premier lancement du serveur
+
+Action recommandee :
+
+1. lancer une premiere fois le serveur local
+2. laisser nanos world generer `Config.toml`
+3. arreter le serveur
+4. editer le fichier genere localement
+
+Ne pas versionner ce fichier local dans le depot.
+
+### API nanos world incertaine
+
+Si un comportement de chargement, d'evenement ou de config ne peut pas etre confirme par la documentation officielle :
+
+- ne pas inventer d'API
+- ne pas inventer de chemin de lancement
+- documenter le point incertain avec un TODO local explicite
+- verifier en jeu avant toute modification Lua de comportement
+
+## Limites documentaires
+
+Ce document decrit uniquement le premier smoke test local `#41` a partir de l'etat reel du depot.
+
+Il ne doit pas etre lu comme :
+
+- un guide de mise en production
+- une garantie que le Character MVP est complet
+- une preuve que tous les flux creation, selection et spawn sont deja finis
