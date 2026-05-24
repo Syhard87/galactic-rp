@@ -56,6 +56,8 @@ Sources nanos world consultees :
 - `external/nanos-world-docs/versioned_docs/version-latest/getting-started/essential-concepts.mdx`
 - `external/nanos-world-docs/versioned_docs/version-latest/getting-started/quick-start.mdx`
 - `external/nanos-world-docs/versioned_docs/version-latest/getting-started/tutorials-and-examples/basic-hud-html.md`
+- `external/nanos-world-docs/src/api/Classes/Player.json`
+- `external/nanos-world-docs/src/api/Classes/Database.json`
 
 ## Vocabulaire
 
@@ -135,10 +137,12 @@ Contrat de conception :
 2. Le serveur lit aussi le nom courant du joueur pour alimenter `players.username`.
 3. Le client ne fournit jamais lui-meme `platform_id`.
 
-Point a verifier avant implementation :
+Decision de scaffold pour l'issue #23 :
 
-- le getter exact de l'identifiant stable du `Player` doit etre confirme contre la reference nanos world exploitable au moment du codage
-- tant que ce getter n'est pas confirme, il ne faut pas figer le nom d'API dans le code metier
+- la resolution de `players.platform_id` est isolee dans une fonction serveur dediee
+- le scaffold courant utilise `Player:GetAccountID()` comme cle canonique pour `players.platform_id`
+- ce choix s'appuie sur la metadata d'API locale `external/nanos-world-docs/src/api/Classes/Player.json`
+- si la politique produit change plus tard vers un autre identifiant documente, la modification doit rester localisee a cette fonction
 
 ### 3. Association avec la table `players`
 
@@ -157,10 +161,10 @@ Si une ligne `players` existe deja pour ce `platform_id` :
 
 Si aucune ligne `players` n'existe pour ce `platform_id` :
 
-1. le serveur cree une nouvelle ligne `players`
-2. la ligne initiale contient au minimum `platform_id`, `username`, `first_join_at` et `last_join_at`
-3. le serveur recupere le nouveau `players.id`
-4. le flux continue vers le chargement des personnages
+1. le scaffold serveur considere l'etat comme `player-row-missing`
+2. le flux de creation de la ligne `players` est prepare mais pas encore execute dans l'issue #23
+3. aucune etape de chargement des personnages ne doit commencer tant que cette ligne n'existe pas
+4. l'action future attendue reste la creation d'une ligne initiale avec `platform_id`, `username`, `first_join_at` et `last_join_at`
 
 Regle cle :
 
