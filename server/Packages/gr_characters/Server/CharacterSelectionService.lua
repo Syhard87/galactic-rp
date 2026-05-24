@@ -211,6 +211,30 @@ function CharacterSelectionService:GetActiveCharacterRow(player_or_platform_id)
     return clone_table(self.active_character_rows_by_platform_id[platform_id])
 end
 
+function CharacterSelectionService:UpdateActiveCharacterPosition(player_or_platform_id, position)
+    local platform_id = normalize_platform_id(player_or_platform_id)
+
+    if platform_id == nil then
+        return false, "platform-id-required"
+    end
+
+    if type(position) ~= "table" then
+        return false, "position-required"
+    end
+
+    local active_character_row = self.active_character_rows_by_platform_id[platform_id]
+
+    if type(active_character_row) ~= "table" then
+        return false, "active-character-required"
+    end
+
+    active_character_row.position_x = position.x
+    active_character_row.position_y = position.y
+    active_character_row.position_z = position.z
+
+    return true
+end
+
 function CharacterSelectionService:InvalidatePlayerState(player_or_platform_id)
     local platform_id = normalize_platform_id(player_or_platform_id)
 

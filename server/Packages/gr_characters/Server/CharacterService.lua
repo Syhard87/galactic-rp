@@ -4,51 +4,14 @@ GRCharacters.Server = GRCharacters.Server or {}
 local CharacterService = {}
 CharacterService.__index = CharacterService
 
-local function normalize_platform_key(player_or_id)
-    if type(player_or_id) == "string" then
-        return player_or_id
-    end
-
-    if type(player_or_id) ~= "table" and type(player_or_id) ~= "userdata" then
-        return nil
-    end
-
-    -- Verified against local nanos world API metadata:
-    -- external/nanos-world-docs/src/api/Classes/Player.json
-    if type(player_or_id.GetAccountID) == "function" then
-        return player_or_id:GetAccountID()
-    end
-
-    if type(player_or_id.platform_id) == "string" or type(player_or_id.platform_id) == "number" then
-        return tostring(player_or_id.platform_id)
-    end
-
-    return nil
-end
-
-local function normalize_position(position)
-    if type(position) ~= "table" and type(position) ~= "userdata" then
-        return nil
-    end
-
-    if type(position.x) ~= "number" or type(position.y) ~= "number" or type(position.z) ~= "number" then
-        return nil
-    end
-
-    return {
-        x = position.x,
-        y = position.y,
-        z = position.z,
-    }
-end
-
-function CharacterService.Create(repository, creation_service, player_service, selection_service)
+function CharacterService.Create(repository, creation_service, player_service, selection_service, position_service)
     local self = setmetatable({}, CharacterService)
 
     self.repository = repository
     self.creation_service = creation_service
     self.player_service = player_service
     self.selection_service = selection_service
+    self.position_service = position_service
 
     return self
 end
@@ -189,36 +152,52 @@ function CharacterService:SelectActiveCharacter(player_or_platform_id, character
     return self.selection_service:SelectCharacterForPlayer(player_or_platform_id, character_id, callback)
 end
 
-function CharacterService:SaveActiveCharacterPosition(player_or_id, position)
-    local platform_id = normalize_platform_key(player_or_id)
+function CharacterService:SaveActiveCharacterPosition(player_or_id, callback, options)
+    if self.position_service == nil then
+        if type(callback) == "function" then
+            callback(false, {
+                code = "position-service-missing",
+            })
+        end
 
-    if platform_id == nil then
-        return false, "player-id-required"
+        return true
     end
 
-    local normalized_position = normalize_position(position)
+    return self.position_service:SaveActiveCharacterPosition(player_or_id, callback, options)
+end
 
-    if normalized_position == nil then
-        return false, "position-required"
+function CharacterService:StartPositionAutoSave()
+    if self.position_service == nil then
+        return false, "position-service-missing"
     end
 
-    if self.selection_service == nil then
-        return false, "selection-service-missing"
+    return self.position_service:StartAutoSave()
+end
+
+function CharacterService:StopPositionAutoSave()
+    if self.position_service == nil then
+        return false, "position-service-missing"
     end
 
-    local character_id = self.selection_service:GetActiveCharacterId(platform_id)
+    return self.position_service:StopAutoSave()
+end
 
-    if character_id == nil then
-        return false, "active-character-required"
+function CharacterService:GetPositionSavePolicy()
+    if self.position_service == nil then
+        return nil
     end
 
-    Console.Log(
-        "[gr_characters][service] Position save requested for platform_id=%s character_id=%s.",
-        tostring(platform_id),
-        tostring(character_id)
-    )
+    return self.position_service:GetPolicy()
+end
 
-    return self.repository:SaveCharacterPosition(character_id, normalized_position)
+function CharacterService:ResolveActiveCharacterSpawnData(player_or_platform_id)
+    if self.position_service == nil then
+        return false, {
+            code = "position-service-missing",
+        }
+    end
+
+    return self.position_service:ResolveSpawnDataForActiveCharacter(player_or_platform_id)
 end
 
 function CharacterService:GetActiveCharacterId(player_or_platform_id)
@@ -235,6 +214,14 @@ function CharacterService:GetActiveCharacterRow(player_or_platform_id)
     end
 
     return self.selection_service:GetActiveCharacterRow(player_or_platform_id)
+end
+
+function CharacterService:ForgetPlayerPositionState(player_or_platform_id)
+    if self.position_service == nil then
+        return false, "position-service-missing"
+    end
+
+    return self.position_service:ForgetPlayerPositionState(player_or_platform_id)
 end
 
 GRCharacters.Server.CharacterServiceClass = CharacterService

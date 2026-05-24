@@ -48,6 +48,11 @@ Sources nanos world consultees :
 
 - `external/nanos-world-docs/versioned_docs/version-latest/scripting-reference/classes/player.mdx`
 - `external/nanos-world-docs/versioned_docs/version-latest/scripting-reference/classes/character.mdx`
+- `external/nanos-world-docs/versioned_docs/version-latest/scripting-reference/classes/base-classes/actor.mdx`
+- `external/nanos-world-docs/versioned_docs/version-latest/scripting-reference/classes/base-classes/entity.mdx`
+- `external/nanos-world-docs/versioned_docs/version-latest/scripting-reference/static-classes/server.mdx`
+- `external/nanos-world-docs/versioned_docs/version-latest/scripting-reference/static-classes/timer.mdx`
+- `external/nanos-world-docs/versioned_docs/version-latest/scripting-reference/static-classes/package.mdx`
 - `external/nanos-world-docs/versioned_docs/version-latest/core-concepts/server-and-client-lifecycle.md`
 - `external/nanos-world-docs/versioned_docs/version-latest/core-concepts/packages/packages-guide.md`
 - `external/nanos-world-docs/versioned_docs/version-latest/core-concepts/scripting/events-guide.md`
@@ -57,6 +62,11 @@ Sources nanos world consultees :
 - `external/nanos-world-docs/versioned_docs/version-latest/getting-started/quick-start.mdx`
 - `external/nanos-world-docs/versioned_docs/version-latest/getting-started/tutorials-and-examples/basic-hud-html.md`
 - `external/nanos-world-docs/src/api/Classes/Player.json`
+- `external/nanos-world-docs/src/api/Stable/Classes/BaseActor.json`
+- `external/nanos-world-docs/src/api/Stable/Classes/BaseEntity.json`
+- `external/nanos-world-docs/src/api/StaticClasses/Server.json`
+- `external/nanos-world-docs/src/api/StaticClasses/Timer.json`
+- `external/nanos-world-docs/src/api/StaticClasses/Package.json`
 - `external/nanos-world-docs/src/api/Classes/Database.json`
 
 ## Vocabulaire
@@ -307,6 +317,36 @@ Justification :
 
 - le schema actuel contient `position_x`, `position_y`, `position_z`
 - la documentation nanos world recommande de definir les spawn points joueur dans le `Package.toml` de map et de les recuperer via `Server.GetMapSpawnPoints()`
+- le scaffold issue `#26` prepare une resolution serveur qui traite la position persistante `0,0,0` comme "non initialisee" tant qu'aucune sauvegarde reelle n'a ete ecrite
+
+### Sauvegarde preparatoire de position active
+
+L'issue `#26` ne code pas encore le spawn final complet, mais fige la preparation serveur de la sauvegarde de position du personnage actif.
+
+Regles retenues :
+
+- seule la session serveur peut demander la sauvegarde de position du personnage actif
+- aucun `character_id` libre provenant du client n'est accepte comme source d'autorite
+- si un appel fournit un `character_id`, il doit correspondre exactement au `active_character_id` memoire de session cote serveur
+- la position sauvegardee est lue cote serveur depuis le `Character` actuellement possede via `player:GetControlledCharacter()` puis `character:GetLocation()`
+- si le `Player` n'est pas charge, s'il n'a pas de personnage actif, si la ligne active est incoherente, si le `Character` gameplay n'est pas valide ou si la position est illisible, la sauvegarde est refusee
+- la cadence retenue est une sauvegarde periodique lente toutes les `60` secondes
+- une tentative finale de sauvegarde peut etre lancee a la destruction du `Player`, sans introduire de boucle supplementaire
+
+Strategie anti-spam DB :
+
+- aucune sauvegarde par frame
+- aucune sauvegarde sur `Server.Tick`
+- une seule sauvegarde automatique periodique par joueur actif et par intervalle
+- delai minimal de `45` secondes entre deux ecritures reussies pour un meme joueur hors cas force
+- si la position a bouge de moins de `100` unites depuis la derniere sauvegarde reussie, l'ecriture est sautee
+- si une sauvegarde est deja en cours pour le meme joueur, une nouvelle ecriture n'est pas lancee
+
+Fallback spawn prepare :
+
+- si la position persistante est absente, invalide ou encore sur le zero par defaut `0,0,0`, le serveur devra basculer vers `Server.GetMapSpawnPoints()`
+- si aucun spawn point de map valide n'est disponible, l'activation future devra etre refusee et journalisee
+- cette resolution est preparee dans un service dedie ; elle ne cree pas encore le `Character` gameplay et n'appelle pas encore `player:Possess(...)`
 
 ### Regles de spawn
 
@@ -419,6 +459,7 @@ Fallback :
 Probleme :
 
 - la position sauvegardee est absente, corrompue ou inutilisable pour la map courante
+- le zero par defaut `0,0,0` est interprete comme une position non initialisee dans le scaffold `#26`
 
 Fallback :
 
