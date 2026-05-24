@@ -29,11 +29,24 @@ local SELECT_CHARACTER_BY_ID_QUERY = [[
         age,
         species,
         biography,
+        position_x,
+        position_y,
+        position_z,
         created_at,
         updated_at
     FROM characters
     WHERE id = :0
     LIMIT 1
+]]
+
+local UPDATE_CHARACTER_POSITION_QUERY = [[
+    UPDATE characters
+    SET
+        position_x = :1,
+        position_y = :2,
+        position_z = :3,
+        updated_at = NOW()
+    WHERE id = :0
 ]]
 
 local INSERT_CHARACTER_QUERY = [[
@@ -68,6 +81,9 @@ local function normalize_character_row(row)
         age = row.age,
         species = row.species,
         biography = row.biography,
+        position_x = row.position_x,
+        position_y = row.position_y,
+        position_z = row.position_z,
         created_at = row.created_at,
         updated_at = row.updated_at,
     }
@@ -316,13 +332,84 @@ function CharacterRepository:SetActiveCharacter(player_id, character_id)
     return false, "not-implemented"
 end
 
-function CharacterRepository:SaveCharacterPosition(character_id, position)
-    Console.Log(
-        "[gr_characters][repository] Position save requested for character_id=%s. Repository stub active; no update executed.",
-        tostring(character_id)
+function CharacterRepository:UpdateCharacterPosition(character_id, position, callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if type(character_id) ~= "number" and type(character_id) ~= "string" then
+        callback(false, "character-id-required")
+        return true
+    end
+
+    if type(position) ~= "table"
+        or type(position.x) ~= "number"
+        or type(position.y) ~= "number"
+        or type(position.z) ~= "number"
+    then
+        callback(false, "position-required")
+        return true
+    end
+
+    if self.database_service == nil then
+        Console.Log(
+            "[gr_characters][repository] Position update requested for character_id=%s but database service is unavailable.",
+            tostring(character_id)
+        )
+
+        callback(false, "database-service-missing")
+        return true
+    end
+
+    local is_connected, database_or_error = self.database_service:Connect()
+
+    if not is_connected then
+        Console.Log(
+            "[gr_characters][repository] Database connection failed during position save for character_id=%s with error=%s.",
+            tostring(character_id),
+            tostring(database_or_error)
+        )
+
+        callback(false, database_or_error)
+        return true
+    end
+
+    database_or_error:ExecuteAsync(
+        UPDATE_CHARACTER_POSITION_QUERY,
+        function(rows_affected, error)
+            if error ~= nil then
+                Console.Log(
+                    "[gr_characters][repository] Position update failed for character_id=%s with error=%s.",
+                    tostring(character_id),
+                    tostring(error)
+                )
+
+                callback(false, error)
+                return
+            end
+
+            if rows_affected ~= 1 then
+                Console.Log(
+                    "[gr_characters][repository] Position update for character_id=%s returned unexpected rows_affected=%s.",
+                    tostring(character_id),
+                    tostring(rows_affected)
+                )
+
+                callback(false, "character-position-update-unexpected-rows-affected")
+                return
+            end
+
+            callback(true, {
+                rows_affected = rows_affected,
+            })
+        end,
+        character_id,
+        position.x,
+        position.y,
+        position.z
     )
 
-    return false, "not-implemented"
+    return true
 end
 
 GRCharacters.Server.CharacterRepositoryClass = CharacterRepository
