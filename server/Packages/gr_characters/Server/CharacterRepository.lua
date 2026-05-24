@@ -4,6 +4,38 @@ GRCharacters.Server = GRCharacters.Server or {}
 local CharacterRepository = {}
 CharacterRepository.__index = CharacterRepository
 
+local SELECT_CHARACTERS_BY_PLAYER_ID_QUERY = [[
+    SELECT
+        id,
+        player_id,
+        first_name,
+        last_name,
+        age,
+        species,
+        biography,
+        created_at,
+        updated_at
+    FROM characters
+    WHERE player_id = :0
+    ORDER BY id ASC
+]]
+
+local SELECT_CHARACTER_BY_ID_QUERY = [[
+    SELECT
+        id,
+        player_id,
+        first_name,
+        last_name,
+        age,
+        species,
+        biography,
+        created_at,
+        updated_at
+    FROM characters
+    WHERE id = :0
+    LIMIT 1
+]]
+
 local INSERT_CHARACTER_QUERY = [[
     INSERT INTO characters (
         player_id,
@@ -23,6 +55,24 @@ local INSERT_CHARACTER_QUERY = [[
     )
 ]]
 
+local function normalize_character_row(row)
+    if type(row) ~= "table" then
+        return nil
+    end
+
+    return {
+        id = row.id,
+        player_id = row.player_id,
+        first_name = row.first_name,
+        last_name = row.last_name,
+        age = row.age,
+        species = row.species,
+        biography = row.biography,
+        created_at = row.created_at,
+        updated_at = row.updated_at,
+    }
+end
+
 function CharacterRepository.Create(database_service)
     local self = setmetatable({}, CharacterRepository)
 
@@ -31,13 +81,146 @@ function CharacterRepository.Create(database_service)
     return self
 end
 
-function CharacterRepository:GetCharactersByPlayerId(player_id)
+function CharacterRepository:GetCharactersByPlayerId(player_id, callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if type(player_id) ~= "number" and type(player_id) ~= "string" then
+        callback(false, nil, "player-id-required")
+        return true
+    end
+
+    if self.database_service == nil then
+        Console.Log(
+            "[gr_characters][repository] Character list requested for player_id=%s but database service is unavailable.",
+            tostring(player_id)
+        )
+
+        callback(false, nil, "database-service-missing")
+        return true
+    end
+
+    local is_connected, database_or_error = self.database_service:Connect()
+
+    if not is_connected then
+        Console.Log(
+            "[gr_characters][repository] Database connection failed during character list loading for player_id=%s with error=%s.",
+            tostring(player_id),
+            tostring(database_or_error)
+        )
+
+        callback(false, nil, database_or_error)
+        return true
+    end
+
     Console.Log(
-        "[gr_characters][repository] Character load requested for player_id=%s. Repository stub active; no query executed.",
+        "[gr_characters][repository] Loading characters for player_id=%s.",
         tostring(player_id)
     )
 
-    return false, "not-implemented"
+    database_or_error:SelectAsync(SELECT_CHARACTERS_BY_PLAYER_ID_QUERY, function(rows, error)
+        if error ~= nil then
+            Console.Log(
+                "[gr_characters][repository] Character list load failed for player_id=%s with error=%s.",
+                tostring(player_id),
+                tostring(error)
+            )
+
+            callback(false, nil, error)
+            return
+        end
+
+        local normalized_rows = {}
+
+        if type(rows) == "table" then
+            for _, row in ipairs(rows) do
+                local normalized_row = normalize_character_row(row)
+
+                if normalized_row ~= nil then
+                    normalized_rows[#normalized_rows + 1] = normalized_row
+                end
+            end
+        end
+
+        Console.Log(
+            "[gr_characters][repository] Loaded %s characters for player_id=%s.",
+            tostring(#normalized_rows),
+            tostring(player_id)
+        )
+
+        callback(true, normalized_rows, nil)
+    end, player_id)
+
+    return true
+end
+
+function CharacterRepository:FindCharacterById(character_id, callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if type(character_id) ~= "number" and type(character_id) ~= "string" then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if self.database_service == nil then
+        Console.Log(
+            "[gr_characters][repository] Character lookup requested for character_id=%s but database service is unavailable.",
+            tostring(character_id)
+        )
+
+        callback(false, nil, "database-service-missing")
+        return true
+    end
+
+    local is_connected, database_or_error = self.database_service:Connect()
+
+    if not is_connected then
+        Console.Log(
+            "[gr_characters][repository] Database connection failed during character lookup for character_id=%s with error=%s.",
+            tostring(character_id),
+            tostring(database_or_error)
+        )
+
+        callback(false, nil, database_or_error)
+        return true
+    end
+
+    Console.Log(
+        "[gr_characters][repository] Loading character_id=%s for server-side selection validation.",
+        tostring(character_id)
+    )
+
+    database_or_error:SelectAsync(SELECT_CHARACTER_BY_ID_QUERY, function(rows, error)
+        if error ~= nil then
+            Console.Log(
+                "[gr_characters][repository] Character lookup failed for character_id=%s with error=%s.",
+                tostring(character_id),
+                tostring(error)
+            )
+
+            callback(false, nil, error)
+            return
+        end
+
+        if type(rows) ~= "table" or rows[1] == nil then
+            Console.Log(
+                "[gr_characters][repository] No character row found for character_id=%s.",
+                tostring(character_id)
+            )
+
+            callback(true, nil, nil)
+            return
+        end
+
+        local normalized_row = normalize_character_row(rows[1])
+
+        callback(true, normalized_row, nil)
+    end, character_id)
+
+    return true
 end
 
 function CharacterRepository:InsertCharacter(player_id, character_payload, callback)
@@ -125,7 +308,7 @@ end
 
 function CharacterRepository:SetActiveCharacter(player_id, character_id)
     Console.Log(
-        "[gr_characters][repository] Active character selection requested for player_id=%s character_id=%s. Repository stub active; no update executed.",
+        "[gr_characters][repository] Active character persistence requested for player_id=%s character_id=%s, but selection remains session-only in the MVP schema.",
         tostring(player_id),
         tostring(character_id)
     )

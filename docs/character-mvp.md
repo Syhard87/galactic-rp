@@ -254,6 +254,20 @@ Regles MVP :
 
 - le client ne choisit jamais seul le personnage actif
 - un identifiant de personnage recu du client sans verification de propriete doit etre rejete
+- la selection ne persiste pas encore en base dans le schema actuel ; elle reste un etat memoire de session cote serveur
+
+Scaffold serveur retenu pour l'issue #25 :
+
+- le chargement du `player row` reussi declenche ensuite le chargement asynchrone de la liste `characters` associee a `players.id`
+- si aucun personnage valide n'est liste, la session passe a `waiting_character_creation`
+- si un ou plusieurs personnages valides sont listes, la session passe a `waiting_character_selection`
+- la liste preparee cote serveur ne contient que les champs utiles a l'identite de selection : `id`, `player_id`, `first_name`, `last_name`, `age`, `species`, `biography`, `created_at`, `updated_at`
+- la selection d'un `character_id` repasse par une lecture serveur de la ligne cible avant de memoriser la session
+- si la ligne a disparu entre le listing et la selection, le resultat doit etre `character-unavailable`
+- si la ligne existe mais appartient a un autre `players.id`, le resultat doit etre `character-not-owned`
+- si la ligne existe mais ne satisfait pas les preconditions minimales de selection, le resultat doit etre `character-invalid`
+- si la selection reussit, le serveur memorise un `active_character_id` transitoire de session avec un etat `character-selected`
+- ce `active_character_id` ne vaut pas encore activation gameplay : le spawn et `player:Possess(...)` restent une etape ulterieure
 
 ## Moment exact ou un personnage devient actif
 
@@ -387,6 +401,19 @@ Fallback :
 - reafficher la liste autorisee
 - journaliser une tentative invalide
 
+### Personnage indisponible ou invalide au moment de la selection
+
+Probleme :
+
+- un personnage liste precedemment a ete supprime entre temps, ou bien sa ligne ne remplit plus les preconditions minimales de selection
+
+Fallback :
+
+- refuser la selection
+- vider tout `active_character_id` transitoire deja memorise pour cette session
+- relancer ou reafficher la liste serveur autorisee
+- journaliser le code `character-unavailable` ou `character-invalid`
+
 ### Position persistante invalide
 
 Probleme :
@@ -455,6 +482,6 @@ Cette issue fige les decisions suivantes :
 5. Sans personnage : etat `waiting_character_creation`.
 6. Avec personnage : etat `waiting_character_selection`.
 7. Le client envoie une intention de creation ou de selection.
-8. Le serveur valide la propriete et le droit d'activation.
-9. Le serveur resout le spawn, cree le `Character` et appelle `player:Possess(...)`.
+8. Le serveur valide la propriete du `character_id` et memorise un `active_character_id` transitoire.
+9. Le serveur resout ensuite le spawn, cree le `Character` et appelle `player:Possess(...)`.
 10. Le personnage devient actif seulement apres validation serveur de la possession.

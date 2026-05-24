@@ -103,13 +103,14 @@ Etat initial de `gr_characters` :
 - `Package.toml` declare un package nanos world de type script avec configuration minimale.
 - `Server/CharacterPlayerRepository.lua` prepare la lecture server-only de la table `players` via `players.platform_id`.
 - `Server/CharacterPlayerService.lua` prepare la resolution de l'identifiant stable nanos world, le chargement asynchrone d'une ligne `players` existante et l'etat memoire si la ligne manque encore.
-- `Server/CharacterRepository.lua` prepare les points d'entree futurs pour charger les personnages d'un joueur, creer un personnage, selectionner le personnage actif et sauvegarder la position, sans executer encore de requete metier.
+- `Server/CharacterRepository.lua` prepare les acces serveur a la table `characters` pour le listing par joueur, la creation de personnage et la validation de selection, sans persistance du personnage actif de session.
 - `Server/CharacterCreationService.lua` centralise la validation stricte des champs autorises a la creation et interdit tout champ sensible venu du client.
-- `Server/CharacterService.lua` orchestre ces flux serveur, sert de facade pour le chargement player et delegue la creation au service dedie.
-- `Server/Index.lua` charge le package, instancie tous les services serveur, s'abonne au cycle `Player.Subscribe("Spawn")` et prepare le chargement de session joueur depuis `players`.
+- `Server/CharacterSelectionService.lua` prepare le chargement de la liste des personnages d'un joueur, verifie l'ownership du `character_id` demande et conserve le personnage actif cible uniquement en memoire serveur transitoire.
+- `Server/CharacterService.lua` orchestre ces flux serveur, sert de facade pour le chargement player, la creation et la selection.
+- `Server/Index.lua` charge le package, instancie tous les services serveur, s'abonne au cycle `Player.Subscribe("Spawn")` et prepare le chargement de session joueur puis de ses personnages depuis `players` et `characters`.
 - `Shared/Index.lua` limite le partage a des constantes et noms d'evenements non sensibles.
 - `Client/Index.lua` se limite a un log de chargement et rappelle qu'aucune logique autoritative personnage n'est exposee cote client.
-- aucune creation complete de personnage, selection finale, spawn final, sauvegarde de position persistante ou UI de datapad n'est encore implementee dans ce lot.
+- aucune UI complete de selection, aucun spawn final ni sauvegarde de position persistante n'est encore implementee dans ce lot.
 
 ### WebUI
 
@@ -134,7 +135,7 @@ Le dossier `database/migrations/` contient les migrations SQL versionnees. Le bo
 
 Le schema initial couvre la persistance de base sans encore modeliser l'inventaire, le craft, les quetes, les factions, la reputation ou les contrats.
 
-`gr_characters` est prepare pour consommer ulterieurement ces tables via `gr_database`, mais aucun acces metier a la base n'est encore active dans son scaffold initial.
+`gr_characters` consomme deja ces tables via `gr_database` pour preparer le chargement player, le listing de personnages, la creation de personnage et la validation serveur de selection, tout en laissant le spawn final et la sauvegarde de position hors de ce lot.
 
 Le package `gr_database` est le point d'entree technique prevu pour la future integration PostgreSQL dans nanos world. Sa responsabilite est de centraliser :
 
@@ -199,7 +200,7 @@ Toute evolution future devra preserver ces contraintes avant d'ajouter des syste
 ## Prochaines etapes recommandees
 
 - Implementer le chargement metier des personnages via `gr_database`.
-- Implementer la creation et la selection de personnage avec validations serveur.
+- Completer l'activation finale du personnage, le spawn serveur et la sauvegarde de position.
 - Scaffold des applications React `ui/hud` et `ui/datapad`.
 - Ajouter une strategie de seeds de developpement.
 - Etendre la CI avec build UI et validation SQL plus poussee une fois les applications creees.
