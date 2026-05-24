@@ -106,3 +106,31 @@ Each package should separate:
 - Local infra: Docker Compose
 - CI/CD: GitHub Actions
 - Docs: Markdown
+
+## Nanos world documentation rule
+
+This project targets nanos world.
+
+Before changing Lua code, package structure, server lifecycle, client lifecycle, networking, WebUI, entities, maps, assets or `Package.toml`, agents must consult the official nanos world documentation.
+
+Use these sources in priority order:
+
+1. Local docs submodule:
+   - `external/nanos-world-docs/versioned_docs/version-latest/`
+   - `external/nanos-world-docs/docs/`
+2. Project reference:
+   - `docs/nanos-world-reference.md`
+3. Official web docs if internet is available:
+   - https://docs.nanos-world.com/docs/getting-started/essential-concepts
+   - https://github.com/nanos-world/docs
+
+Hard rules:
+
+- Do not invent nanos world API calls.
+- Do not invent event names.
+- Do not invent class constructors.
+- Do not assume server/client authority behavior.
+- If a feature depends on an undocumented or uncertain API, stop and document the uncertainty.
+- For gameplay, persistence and security, prefer server-authoritative logic.
+- Client code must not be trusted for money, permissions, character ownership, faction rights, inventory or admin actions.
+- Every PR touching nanos world scripts must mention which documentation pages were checked.
