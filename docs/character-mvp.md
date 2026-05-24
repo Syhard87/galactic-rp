@@ -2,14 +2,16 @@
 
 ## Objectif
 
-Ce document definit le cycle MVP complet `joueur nanos world -> player persiste -> personnage actif` pour l'issue #22.
+Ce document definit l'architecture actuelle du cycle MVP Character : `joueur nanos world -> player persiste -> personnage actif`.
 
-Il documente la conception cible avant implementation, sans ajouter :
+Il documente ce qui est deja present ou prepare dans le depot, sans pretendre que le systeme Character est termine.
+
+Il ne couvre toujours pas :
 
 - creation de personnage fonctionnelle
 - selection de personnage fonctionnelle
-- requetes PostgreSQL reelles
-- modification du schema SQL
+- spawn final complet
+- UI finale complete
 
 ## Perimetre
 
@@ -101,6 +103,134 @@ Consequence MVP :
 - `gr_database` encapsule la connexion et l'acces PostgreSQL cote serveur.
 - `gr_characters` orchestre le cycle de vie `player -> character` cote serveur.
 - le client et la WebUI ne servent qu'a afficher l'etat et envoyer une intention utilisateur.
+
+## Architecture actuelle du MVP Character
+
+Le MVP Character repose actuellement sur trois packages reels du depot :
+
+- `gr_core` : conventions communes minimales, constantes partagees et point d'ancrage pour les futures conventions transverses.
+- `gr_database` : lecture de configuration PostgreSQL et creation controlee d'une connexion nanos world `Database` cote serveur.
+- `gr_characters` : chargement de session joueur, listing de personnages, creation preparee, selection preparee, resolution de spawn preparee et sauvegarde preparee de position.
+
+### Responsabilites `Server / Client / Shared`
+
+#### `gr_core`
+
+- `Server/Index.lua` : journalise le chargement du package cote serveur.
+- `Client/Index.lua` : journalise le chargement du package cote client.
+- `Shared/Index.lua` : expose `PROJECT_NAME`, `MVP_VERSION` et `EVENT_PREFIX`.
+
+#### `gr_database`
+
+- `Server/DatabaseConfig.lua` : normalise une configuration PostgreSQL sans secret versionne.
+- `Server/DatabaseService.lua` : cree ou reutilise la connexion nanos world `Database` a la demande.
+- `Server/Index.lua` : instancie la configuration et le service sans auto-connexion.
+- `Shared/Index.lua` : expose uniquement des constantes de package non sensibles.
+- `Client/` : absent volontairement, car aucune logique base de donnees ne doit etre exposee au client.
+
+#### `gr_characters`
+
+- `Server/` : contient toute la logique autoritative du MVP Character.
+- `Client/Index.lua` : journalise le chargement et rappelle qu'aucune logique autoritative personnage n'est exposee cote client.
+- `Shared/Index.lua` : limite le partage aux constantes de package et au nommage des evenements.
+
+Regle cle :
+
+- tout ce qui touche a `players`, `characters`, au `active_character_id`, au futur spawn et a la sauvegarde de position reste cote serveur
+- le client n'est documente ici que comme point d'entree UI futur, jamais comme source de verite
+
+## Fichiers serveur `gr_characters`
+
+Les fichiers reels presents dans `server/Packages/gr_characters/Server/` sont :
+
+- `CharacterPlayerRepository.lua`
+- `CharacterPlayerService.lua`
+- `CharacterCreationService.lua`
+- `CharacterSelectionService.lua`
+- `CharacterPositionService.lua`
+- `CharacterRepository.lua`
+- `CharacterService.lua`
+- `Index.lua`
+
+### Catalogue des services et repositories
+
+#### `CharacterPlayerRepository.lua`
+
+- lit la table `players` par `players.platform_id`
+- normalise la ligne retournee
+- ne cree pas encore la ligne `players` si elle manque ; `InsertPlayer()` reste explicitement non implemente
+
+#### `CharacterPlayerService.lua`
+
+- resout l'identifiant stable nanos world avec `Player:GetAccountID()`
+- resout le nom observe avec `Player:GetName()`
+- maintient l'etat memoire `resolving_player`, `player-row-loaded`, `player-row-missing` ou `blocked`
+- conserve en memoire la `player row` chargee par `platform_id`
+
+#### `CharacterRepository.lua`
+
+- charge la liste `characters` d'un `player_id`
+- relit un personnage unique par `character_id` pour la validation serveur
+- prepare l'insertion d'un personnage avec des valeurs serveur par defaut
+- met a jour `position_x`, `position_y`, `position_z` pour la sauvegarde de position
+- ne persiste pas encore un "personnage actif" durable en base ; `SetActiveCharacter()` reste non implemente
+
+#### `CharacterCreationService.lua`
+
+- valide strictement le payload de creation
+- n'autorise que `first_name`, `last_name`, `age`, `species`, `biography`
+- refuse tout champ sensible ou inattendu
+- delegue ensuite l'insertion a `CharacterRepository`
+
+#### `CharacterSelectionService.lua`
+
+- charge la liste des personnages autorises pour le joueur courant
+- filtre les lignes invalides
+- valide qu'un `character_id` selectionne existe et appartient bien au `players.id` serveur
+- memorise `active_character_id` et la ligne active uniquement en memoire de session
+- ne cree pas encore l'entite `Character` gameplay et ne fait pas encore `player:Possess(...)`
+
+#### `CharacterPositionService.lua`
+
+- prepare la sauvegarde cote serveur de la position du personnage actif
+- lit la position depuis `player:GetControlledCharacter()` puis `character:GetLocation()`
+- refuse la sauvegarde si le joueur n'est pas charge, s'il n'a pas de personnage actif valide, si le `Character` controle est invalide ou si la position n'est pas lisible
+- applique une cadence lente, un anti-spam DB et un cache de derniere position sauvegardee
+- prepare la resolution de spawn future selon l'ordre `position persistante -> spawn point de map`
+- ne realise pas encore le spawn final complet
+
+#### `CharacterService.lua`
+
+- sert de facade serveur unique pour `gr_characters`
+- orchestre le chargement player, le chargement de liste, la creation, la selection et la sauvegarde de position
+- expose les helpers de consultation d'etat de session et de politique de sauvegarde
+
+#### `Index.lua`
+
+- charge les fichiers serveur via `Package.Require(...)`
+- recupere `GRDatabase.Server.Service` si `gr_database` est charge
+- instancie repositories et services
+- s'abonne a `Player.Subscribe("Spawn")` pour charger la session joueur
+- s'abonne a `Player.Subscribe("Destroy")` pour nettoyer la session et tenter une sauvegarde finale de position
+- s'abonne a `Package.Subscribe("Load")` et `Package.Subscribe("Unload")` pour demarrer et arreter l'auto-save
+
+## Dependances de package
+
+Dependances declarees dans les `Package.toml` actuels :
+
+- `gr_core` : aucune dependance de package declaree
+- `gr_database` : aucune dependance de package declaree
+- `gr_characters` : depend de `gr_database`
+
+Dependances logiques du MVP Character :
+
+- `gr_characters` depend fonctionnellement de `gr_database` pour tout acces PostgreSQL
+- `gr_core` sert aujourd'hui de socle de conventions partagees, mais n'est pas encore reference comme dependance runtime par `gr_characters`
+
+Consequence documentaire :
+
+- il ne faut pas presenter `gr_core` comme une dependance technique deja branchee dans `gr_characters`
+- il faut le presenter comme un socle de conventions commun deja present dans le depot
 
 ## Etat de session recommande
 
@@ -218,7 +348,7 @@ Regle cle :
 
 ### Creation de personnage
 
-La creation ne doit pas etre codee dans cette issue, mais le contrat cible est le suivant :
+La creation est preparee cote serveur, mais elle n'est pas encore branchee a une UI complete ni a un flux gameplay final. Le contrat vise est le suivant :
 
 1. le client envoie une intention de creation et des champs non sensibles
 2. le serveur valide les champs autorises
@@ -252,7 +382,7 @@ Validation et valeurs sures du scaffold issue #24 :
 
 ### Selection de personnage
 
-La selection ne doit pas etre codee dans cette issue, mais le contrat cible est le suivant :
+La selection est preparee cote serveur, mais elle n'est pas encore branchee au spawn final complet. Le contrat vise est le suivant :
 
 1. le client envoie l'identifiant du personnage souhaite
 2. le serveur verifie que ce personnage existe
@@ -376,6 +506,47 @@ Ces regles s'appliquent a tout le cycle MVP Character :
 - seul le serveur memorise le `active_character_id` de session
 - le client n'accorde jamais argent, items, XP, reputations, permissions, rewards ou droits d'administration
 - la WebUI ne fait qu'afficher l'etat et soumettre une intention utilisateur
+
+## Flux technique actuel
+
+Le flux technique actuellement documente et prepare dans le depot est le suivant :
+
+1. `Player.Subscribe("Spawn")` dans `gr_characters/Server/Index.lua` declenche `CharacterService:LoadPlayerSession(player)`.
+2. `CharacterPlayerService` resout `platform_id` et `observed_username`, puis demande a `CharacterPlayerRepository` de lire `players.platform_id`.
+3. Si aucune ligne `players` n'existe encore, la session reste dans un etat `player-row-missing` prepare pour une future creation de ligne.
+4. Si la ligne `players` existe, `CharacterSelectionService:LoadCharactersForPlayer(...)` charge la liste `characters` du `players.id`.
+5. Sans personnage valide, l'etat memoire passe a `waiting_character_creation`.
+6. Avec un ou plusieurs personnages valides, l'etat memoire passe a `waiting_character_selection`.
+7. Une future intention client de creation devra passer par `CharacterCreationService`, qui valide le payload puis delegue l'insertion a `CharacterRepository`.
+8. Une future intention client de selection devra passer par `CharacterSelectionService`, qui relit la ligne serveur, verifie l'ownership et memorise un `active_character_id` de session.
+9. Le spawn final n'est pas encore active, mais `CharacterPositionService` prepare deja la resolution `position persistante -> spawn point de map`.
+10. Une fois le personnage gameplay reellement actif dans une future issue, `CharacterPositionService` est deja prepare pour sauvegarder sa position cote serveur avec une cadence lente et des garde-fous anti-spam DB.
+
+Lecture correcte de l'etat actuel :
+
+- le flux `player -> player row -> character list -> creation ou selection -> active character -> position saving` est documente de bout en bout
+- dans le depot actuel, les etapes jusqu'a la selection et a la preparation de la sauvegarde sont scaffolded
+- l'activation gameplay finale, la possession effective et l'UI complete restent des etapes ulterieures
+
+## Ce qui n'est pas encore implemente
+
+Les points suivants ne doivent pas etre presentes comme termines :
+
+- UI complete de creation et de selection de personnage
+- spawn final complet du personnage gameplay
+- Datapad complet
+- gameplay RP complet
+- creation automatique de la ligne `players` quand elle est absente
+- persistance d'un "dernier personnage actif" en base
+- activation gameplay complete apres la selection
+
+Ce que le depot prepare deja sans le terminer :
+
+- validation serveur de creation de personnage
+- validation serveur de selection de personnage
+- memorisation memoire du personnage actif de session
+- resolution de fallback de spawn
+- sauvegarde lente de position du personnage actif cote serveur
 
 ## Erreurs possibles et fallbacks
 
