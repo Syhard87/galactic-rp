@@ -19,7 +19,7 @@ Deux niveaux doivent etre distingues :
 - l'architecture cible du produit, qui prevoit plusieurs packages nanos world specialises
 - l'etat actuel du bootstrap MVP Tech, qui pose uniquement les fondations repo, Docker, PostgreSQL, SQL et CI
 
-Concretement, ce lot documente la direction technique et l'ossature du projet. Les packages Lua `gr_core`, `gr_database` et `gr_characters` sont initialises comme socles techniques minimaux, tandis que les applications React finales et les autres packages gameplay restent a creer.
+Concretement, ce lot documente la direction technique et l'ossature du projet. Les packages Lua `gr-core`, `gr-database` et `gr-characters` sont initialises comme socles techniques minimaux, tandis que les applications React finales et les autres packages gameplay restent a creer.
 
 Pour le detail du sous-systeme Character MVP, le document de reference est `docs/character-mvp.md`. `docs/architecture.md` reste une vue de niveau monorepo et package.
 
@@ -49,22 +49,22 @@ galactic-rp/
 
 Le dossier `server/Packages/` hebergera progressivement les packages Lua du modular monolith. Les packages principaux cibles sont :
 
-- `gr_core`
-- `gr_database`
-- `gr_characters`
-- `gr_progression`
-- `gr_skills`
-- `gr_inventory`
-- `gr_crafting`
-- `gr_quests`
-- `gr_factions`
-- `gr_reputation`
-- `gr_contracts`
-- `gr_chat`
-- `gr_voip`
-- `gr_admin`
-- `gr_hud`
-- `gr_datapad`
+- `gr-core`
+- `gr-database`
+- `gr-characters`
+- `gr-progression`
+- `gr-skills`
+- `gr-inventory`
+- `gr-crafting`
+- `gr-quests`
+- `gr-factions`
+- `gr-reputation`
+- `gr-contracts`
+- `gr-chat`
+- `gr-voip`
+- `gr-admin`
+- `gr-hud`
+- `gr-datapad`
 
 Chaque package doit respecter la meme frontiere technique :
 
@@ -72,25 +72,25 @@ Chaque package doit respecter la meme frontiere technique :
 - `Client/` : presentation, interactions locales, affichage et montage des WebUI.
 - `Shared/` : constantes, structures simples et evenements partages.
 
-Un package strictement serveur peut omettre `Client/` si cela renforce la securite et evite toute ambiguite de responsabilite. `gr_database` suit explicitement cette approche.
+Un package strictement serveur peut omettre `Client/` si cela renforce la securite et evite toute ambiguite de responsabilite. `gr-database` suit explicitement cette approche.
 
 Regles de responsabilite :
 
-- `gr_core` porte les conventions communes et les contrats transverses.
-- `gr_database` encapsule l'acces PostgreSQL cote serveur.
-- `gr_characters` portera le cycle de vie personnage cote serveur : chargement, creation, selection active et persistance de position.
+- `gr-core` porte les conventions communes et les contrats transverses.
+- `gr-database` encapsule l'acces PostgreSQL cote serveur.
+- `gr-characters` portera le cycle de vie personnage cote serveur : chargement, creation, selection active et persistance de position.
 - les packages gameplay consomment des services serveur internes plutot que des mutations directes depuis le client.
 - `gr_hud` et `gr_datapad` sont des points d'integration UI et ne doivent pas contenir de logique metier autoritative.
 
-Etat initial de `gr_core` :
+Etat initial de `gr-core` :
 
 - `Package.toml` declare un package nanos world de type script avec configuration minimale.
 - `Shared/Index.lua` centralise des constantes non sensibles communes : nom du projet, version MVP et prefixe d'evenements.
 - `Server/Index.lua` se limite a un log de chargement explicite cote serveur.
 - `Client/Index.lua` se limite a un log de chargement explicite cote client.
-- aucun systeme gameplay, personnage, progression, inventaire, craft, quete ou HUD n'est initialise dans `gr_core`.
+- aucun systeme gameplay, personnage, progression, inventaire, craft, quete ou HUD n'est initialise dans `gr-core`.
 
-Etat initial de `gr_database` :
+Etat initial de `gr-database` :
 
 - `Package.toml` declare un package nanos world de type script avec configuration minimale.
 - `Server/DatabaseConfig.lua` normalise une configuration PostgreSQL de bootstrap sans mot de passe embarque.
@@ -98,9 +98,9 @@ Etat initial de `gr_database` :
 - `Server/Index.lua` charge le package, journalise l'etat et n'ouvre aucune connexion automatiquement.
 - `Shared/Index.lua` ne contient que des constantes de package, sans logique sensible ni dependance client.
 - `Client/` est volontairement absent pour eviter toute ambiguite sur la frontiere server-only du package.
-- aucune requete metier, repository gameplay ou acces base cote client n'est initialise dans `gr_database`.
+- aucune requete metier, repository gameplay ou acces base cote client n'est initialise dans `gr-database`.
 
-Etat initial de `gr_characters` :
+Etat initial de `gr-characters` :
 
 - `Package.toml` declare un package nanos world de type script avec configuration minimale.
 - `Server/CharacterPlayerRepository.lua` prepare la lecture server-only de la table `players` via `players.platform_id`.
@@ -139,15 +139,15 @@ Le dossier `database/migrations/` contient les migrations SQL versionnees. Le bo
 
 Le schema initial couvre la persistance de base sans encore modeliser l'inventaire, le craft, les quetes, les factions, la reputation ou les contrats.
 
-`gr_characters` consomme deja ces tables via `gr_database` pour preparer le chargement player, le listing de personnages, la creation de personnage, la validation serveur de selection et la mise a jour preparee de position, tout en laissant le spawn final complet hors de ce lot.
+`gr-characters` consomme deja ces tables via `gr-database` pour preparer le chargement player, le listing de personnages, la creation de personnage, la validation serveur de selection et la mise a jour preparee de position, tout en laissant le spawn final complet hors de ce lot.
 
-Le package `gr_database` est le point d'entree technique prevu pour la future integration PostgreSQL dans nanos world. Sa responsabilite est de centraliser :
+Le package `gr-database` est le point d'entree technique prevu pour la future integration PostgreSQL dans nanos world. Sa responsabilite est de centraliser :
 
 - la lecture et la normalisation de configuration
 - la creation controlee de la connexion via la classe `Database` cote serveur
 - les futurs services transverses de persistance consommes par les autres packages
 
-Par conception, `gr_database` ne doit pas exposer de credentials, de handle de connexion ou de logique de requetage sensible au client.
+Par conception, `gr-database` ne doit pas exposer de credentials, de handle de connexion ou de logique de requetage sensible au client.
 
 ### Infrastructure locale
 
@@ -182,8 +182,8 @@ Cette CI est coherente avec une approche MVP-first : elle valide l'hygiene du so
 
 - Pas de `.env` reel versionne.
 - Pas de gameplay implemente dans ce lot.
-- Initialisation minimale de `gr_core` autorisee pour poser les conventions communes sans ajouter de logique metier.
-- Initialisation minimale de `gr_database` autorisee pour preparer la couche PostgreSQL sans connexion automatique ni requete metier.
+- Initialisation minimale de `gr-core` autorisee pour poser les conventions communes sans ajouter de logique metier.
+- Initialisation minimale de `gr-database` autorisee pour preparer la couche PostgreSQL sans connexion automatique ni requete metier.
 - Pas de dependance Node ajoutee tant que les applications UI n'ont pas leur cahier d'initialisation detaille.
 - Base PostgreSQL retenue des le depart pour eviter une migration de persistance precoce.
 
@@ -196,7 +196,7 @@ Le bootstrap MVP Tech est considere coherent si les regles suivantes restent vra
 - PostgreSQL est execute localement via Docker Compose
 - GitHub Actions controle au moins la structure, les migrations et l'hygiene de depot
 - la logique sensible reste server-authoritative
-- `gr_database` concentre toute logique de connexion et de persistance sensible cote serveur
+- `gr-database` concentre toute logique de connexion et de persistance sensible cote serveur
 - le client n'accorde jamais directement d'avantage gameplay ou de pouvoir d'administration
 - la documentation Character MVP ne doit jamais presenter un scaffold comme une fonctionnalite gameplay terminee
 
@@ -204,7 +204,7 @@ Toute evolution future devra preserver ces contraintes avant d'ajouter des syste
 
 ## Prochaines etapes recommandees
 
-- Implementer le chargement metier des personnages via `gr_database`.
+- Implementer le chargement metier des personnages via `gr-database`.
 - Completer l'activation finale du personnage, le spawn serveur et la sauvegarde de position.
 - Scaffold des applications React `ui/hud` et `ui/datapad`.
 - Ajouter une strategie de seeds de developpement.

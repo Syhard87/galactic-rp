@@ -37,7 +37,7 @@ body:
     id: impacted_package
     attributes:
       label: Package impacté
-      placeholder: "ex: gr_database, ui/datapad"
+      placeholder: "ex: gr-database, ui/datapad"
     validations:
       required: true
   - type: textarea
