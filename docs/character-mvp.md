@@ -143,6 +143,7 @@ Decision de scaffold pour l'issue #23 :
 - le scaffold courant utilise `Player:GetAccountID()` comme cle canonique pour `players.platform_id`
 - ce choix s'appuie sur la metadata d'API locale `external/nanos-world-docs/src/api/Classes/Player.json`
 - si la politique produit change plus tard vers un autre identifiant documente, la modification doit rester localisee a cette fonction
+- la creation de personnage elle-meme ne doit jamais deduire un `players.id` depuis le client ; elle exige un `players.id` deja resolu cote serveur
 
 ### 3. Association avec la table `players`
 
@@ -216,9 +217,28 @@ La creation ne doit pas etre codee dans cette issue, mais le contrat cible est l
 
 Regles MVP :
 
+- seuls les champs `first_name`, `last_name`, `age`, `species` et `biography` sont autorises
+- `first_name` est obligatoire
+- `last_name` est obligatoire dans le schema actuel car `characters.last_name` est `NOT NULL`
+- `age` est valide cote serveur dans une plage raisonnable
+- `species` est obligatoire meme si la colonne SQL n'est pas `NOT NULL`, afin de garder une identite minimale coherente
+- `biography` est courte, optionnelle et plafonnee cote serveur
+- tout champ non autorise est rejete explicitement
 - aucune coordonnee de spawn fournie par le client n'est acceptee comme source de verite
 - aucune valeur sensible comme argent, permissions, reputations ou rangs ne vient du client
+- `money_cash`, `money_bank`, `position_x`, `position_y` et `position_z` restent sur des valeurs serveur par defaut sures
 - si la creation echoue, le joueur reste dans `waiting_character_creation`
+
+Validation et valeurs sures du scaffold issue #24 :
+
+- `first_name` : obligatoire, nettoye, longueur maximale 64
+- `last_name` : obligatoire, nettoye, longueur maximale 64
+- `age` : obligatoire, entier, plage 16 a 120
+- `species` : obligatoire, nettoyee, longueur maximale 64
+- `biography` : optionnelle, nettoyee, longueur maximale 280, valeur serveur par defaut `""`
+- les champs sensibles comme `money_cash`, `money_bank`, `faction_id`, `rank_id`, `permissions`, `position_*`, `level`, `xp`, `skills` ou flags admin ne sont jamais acceptes depuis le payload
+- si le `player` n'est pas deja charge cote serveur avec un `players.id` exploitable, la creation est refusee avec un etat `player-not-loaded`
+- si l'insertion PostgreSQL echoue, la creation est refusee sans spawn ni selection implicite
 
 ### Selection de personnage
 
