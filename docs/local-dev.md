@@ -246,7 +246,7 @@ Le depot ne versionne pas encore de script de lancement nanos world. Le chemin e
 Les logs suivants sont attendus ou probables au demarrage si les packages sont bien charges :
 
 - `[gr_core][server] Core package loaded.`
-- `[gr_database][config] Loaded source=... engine=postgresql host=127.0.0.1 port=5432 dbname=galactic_rp user=galactic password=missing|provided auto_connect=false`
+- `[gr_database][config] Loaded source=... engine=postgresql host=127.0.0.1 port=5432 dbname=galactic_rp user=galactic has_password=true|false auto_connect=false`
 - `[gr_database][server] Database package loaded.`
 - `[gr_database][server] Sensitive database logic remains server-only.`
 - `[gr_database][server] No automatic PostgreSQL connection is attempted at package load.`
