@@ -42,9 +42,9 @@ Sources depot :
 - `docs/cahier-des-charges.md`
 - `docs/architecture.md`
 - `database/migrations/001_init.sql`
-- `server/Packages/gr_core`
-- `server/Packages/gr_database`
-- `server/Packages/gr_characters`
+- `server/Packages/gr-core`
+- `server/Packages/gr-database`
+- `server/Packages/gr-characters`
 
 Sources nanos world consultees :
 
@@ -99,28 +99,28 @@ Consequence MVP :
 
 ## Repartition des responsabilites par package
 
-- `gr_core` porte les conventions communes et les noms d'evenements partages.
-- `gr_database` encapsule la connexion et l'acces PostgreSQL cote serveur.
-- `gr_characters` orchestre le cycle de vie `player -> character` cote serveur.
+- `gr-core` porte les conventions communes et les noms d'evenements partages.
+- `gr-database` encapsule la connexion et l'acces PostgreSQL cote serveur.
+- `gr-characters` orchestre le cycle de vie `player -> character` cote serveur.
 - le client et la WebUI ne servent qu'a afficher l'etat et envoyer une intention utilisateur.
 
 ## Architecture actuelle du MVP Character
 
 Le MVP Character repose actuellement sur trois packages reels du depot :
 
-- `gr_core` : conventions communes minimales, constantes partagees et point d'ancrage pour les futures conventions transverses.
-- `gr_database` : lecture de configuration PostgreSQL et creation controlee d'une connexion nanos world `Database` cote serveur.
-- `gr_characters` : chargement de session joueur, listing de personnages, creation preparee, selection preparee, resolution de spawn preparee et sauvegarde preparee de position.
+- `gr-core` : conventions communes minimales, constantes partagees et point d'ancrage pour les futures conventions transverses.
+- `gr-database` : lecture de configuration PostgreSQL et creation controlee d'une connexion nanos world `Database` cote serveur.
+- `gr-characters` : chargement de session joueur, listing de personnages, creation preparee, selection preparee, resolution de spawn preparee et sauvegarde preparee de position.
 
 ### Responsabilites `Server / Client / Shared`
 
-#### `gr_core`
+#### `gr-core`
 
 - `Server/Index.lua` : journalise le chargement du package cote serveur.
 - `Client/Index.lua` : journalise le chargement du package cote client.
 - `Shared/Index.lua` : expose `PROJECT_NAME`, `MVP_VERSION` et `EVENT_PREFIX`.
 
-#### `gr_database`
+#### `gr-database`
 
 - `Server/DatabaseConfig.lua` : normalise une configuration PostgreSQL sans secret versionne.
 - `Server/DatabaseService.lua` : cree ou reutilise la connexion nanos world `Database` a la demande.
@@ -128,7 +128,7 @@ Le MVP Character repose actuellement sur trois packages reels du depot :
 - `Shared/Index.lua` : expose uniquement des constantes de package non sensibles.
 - `Client/` : absent volontairement, car aucune logique base de donnees ne doit etre exposee au client.
 
-#### `gr_characters`
+#### `gr-characters`
 
 - `Server/` : contient toute la logique autoritative du MVP Character.
 - `Client/Index.lua` : journalise le chargement et rappelle qu'aucune logique autoritative personnage n'est exposee cote client.
@@ -139,9 +139,9 @@ Regle cle :
 - tout ce qui touche a `players`, `characters`, au `active_character_id`, au futur spawn et a la sauvegarde de position reste cote serveur
 - le client n'est documente ici que comme point d'entree UI futur, jamais comme source de verite
 
-## Fichiers serveur `gr_characters`
+## Fichiers serveur `gr-characters`
 
-Les fichiers reels presents dans `server/Packages/gr_characters/Server/` sont :
+Les fichiers reels presents dans `server/Packages/gr-characters/Server/` sont :
 
 - `CharacterPlayerRepository.lua`
 - `CharacterPlayerService.lua`
@@ -201,14 +201,14 @@ Les fichiers reels presents dans `server/Packages/gr_characters/Server/` sont :
 
 #### `CharacterService.lua`
 
-- sert de facade serveur unique pour `gr_characters`
+- sert de facade serveur unique pour `gr-characters`
 - orchestre le chargement player, le chargement de liste, la creation, la selection et la sauvegarde de position
 - expose les helpers de consultation d'etat de session et de politique de sauvegarde
 
 #### `Index.lua`
 
 - charge les fichiers serveur via `Package.Require(...)`
-- recupere `GRDatabase.Server.Service` si `gr_database` est charge
+- recupere `GRDatabase.Server.Service` si `gr-database` est charge
 - instancie repositories et services
 - s'abonne a `Player.Subscribe("Spawn")` pour charger la session joueur
 - s'abonne a `Player.Subscribe("Destroy")` pour nettoyer la session et tenter une sauvegarde finale de position
@@ -218,18 +218,18 @@ Les fichiers reels presents dans `server/Packages/gr_characters/Server/` sont :
 
 Dependances declarees dans les `Package.toml` actuels :
 
-- `gr_core` : aucune dependance de package declaree
-- `gr_database` : aucune dependance de package declaree
-- `gr_characters` : depend de `gr_database`
+- `gr-core` : aucune dependance de package declaree
+- `gr-database` : aucune dependance de package declaree
+- `gr-characters` : depend de `gr-database`
 
 Dependances logiques du MVP Character :
 
-- `gr_characters` depend fonctionnellement de `gr_database` pour tout acces PostgreSQL
-- `gr_core` sert aujourd'hui de socle de conventions partagees, mais n'est pas encore reference comme dependance runtime par `gr_characters`
+- `gr-characters` depend fonctionnellement de `gr-database` pour tout acces PostgreSQL
+- `gr-core` sert aujourd'hui de socle de conventions partagees, mais n'est pas encore reference comme dependance runtime par `gr-characters`
 
 Consequence documentaire :
 
-- il ne faut pas presenter `gr_core` comme une dependance technique deja branchee dans `gr_characters`
+- il ne faut pas presenter `gr-core` comme une dependance technique deja branchee dans `gr-characters`
 - il faut le presenter comme un socle de conventions commun deja present dans le depot
 
 ## Etat de session recommande
@@ -259,7 +259,7 @@ Selon la documentation nanos world :
 
 Conception MVP :
 
-1. `gr_characters` doit reagir a l'arrivee du `Player`.
+1. `gr-characters` doit reagir a l'arrivee du `Player`.
 2. Tant qu'aucun personnage actif n'est valide, le joueur ne doit pas recevoir de personnage gameplay.
 3. Le joueur peut voir une UI de chargement, de creation ou de selection, mais il ne doit pas pouvoir jouer.
 
@@ -428,7 +428,7 @@ Avant ce point :
 Apres ce point :
 
 - la session passe a l'etat `active`
-- `gr_characters` peut memoriser la relation `player -> active_character_id` en memoire
+- `gr-characters` peut memoriser la relation `player -> active_character_id` en memoire
 - les autres packages serveur peuvent consommer ce contexte actif
 
 ## Spawn du personnage actif
@@ -511,7 +511,7 @@ Ces regles s'appliquent a tout le cycle MVP Character :
 
 Le flux technique actuellement documente et prepare dans le depot est le suivant :
 
-1. `Player.Subscribe("Spawn")` dans `gr_characters/Server/Index.lua` declenche `CharacterService:LoadPlayerSession(player)`.
+1. `Player.Subscribe("Spawn")` dans `gr-characters/Server/Index.lua` declenche `CharacterService:LoadPlayerSession(player)`.
 2. `CharacterPlayerService` resout `platform_id` et `observed_username`, puis demande a `CharacterPlayerRepository` de lire `players.platform_id`.
 3. Si aucune ligne `players` n'existe encore, la session reste dans un etat `player-row-missing` prepare pour une future creation de ligne.
 4. Si la ligne `players` existe, `CharacterSelectionService:LoadCharactersForPlayer(...)` charge la liste `characters` du `players.id`.
@@ -567,7 +567,7 @@ Fallback :
 
 Probleme :
 
-- `gr_database` ne peut pas ouvrir ou reutiliser une connexion exploitable
+- `gr-database` ne peut pas ouvrir ou reutiliser une connexion exploitable
 
 Fallback :
 

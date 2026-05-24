@@ -6,7 +6,7 @@ Cette checklist sert a valider l'etat actuel du MVP Character sans presenter le 
 
 Elle couvre :
 
-- la structure des packages `gr_core`, `gr_database`, `gr_characters`
+- la structure des packages `gr-core`, `gr-database`, `gr-characters`
 - la presence des fichiers attendus
 - les garde-fous server-authoritative
 - les validations deja preparees cote serveur
@@ -24,52 +24,52 @@ Avant d'utiliser cette checklist, verifier les documents de reference suivants :
 
 ## 1. Structure des packages
 
-### `gr_core`
+### `gr-core`
 
-- [ ] `server/Packages/gr_core/` existe
-- [ ] `server/Packages/gr_core/Package.toml` existe
-- [ ] `server/Packages/gr_core/Server/Index.lua` existe
-- [ ] `server/Packages/gr_core/Client/Index.lua` existe
-- [ ] `server/Packages/gr_core/Shared/Index.lua` existe
+- [ ] `server/Packages/gr-core/` existe
+- [ ] `server/Packages/gr-core/Package.toml` existe
+- [ ] `server/Packages/gr-core/Server/Index.lua` existe
+- [ ] `server/Packages/gr-core/Client/Index.lua` existe
+- [ ] `server/Packages/gr-core/Shared/Index.lua` existe
 - [ ] `Shared/Index.lua` ne contient que des constantes et conventions communes non sensibles
 
-### `gr_database`
+### `gr-database`
 
-- [ ] `server/Packages/gr_database/` existe
-- [ ] `server/Packages/gr_database/Package.toml` existe
-- [ ] `server/Packages/gr_database/Server/DatabaseConfig.lua` existe
-- [ ] `server/Packages/gr_database/Server/DatabaseService.lua` existe
-- [ ] `server/Packages/gr_database/Server/Index.lua` existe
-- [ ] `server/Packages/gr_database/Shared/Index.lua` existe
-- [ ] aucun dossier `Client/` n'est exige pour `gr_database`
-- [ ] la documentation rappelle bien que `gr_database` est strictement server-side
+- [ ] `server/Packages/gr-database/` existe
+- [ ] `server/Packages/gr-database/Package.toml` existe
+- [ ] `server/Packages/gr-database/Server/DatabaseConfig.lua` existe
+- [ ] `server/Packages/gr-database/Server/DatabaseService.lua` existe
+- [ ] `server/Packages/gr-database/Server/Index.lua` existe
+- [ ] `server/Packages/gr-database/Shared/Index.lua` existe
+- [ ] aucun dossier `Client/` n'est exige pour `gr-database`
+- [ ] la documentation rappelle bien que `gr-database` est strictement server-side
 
-### `gr_characters`
+### `gr-characters`
 
-- [ ] `server/Packages/gr_characters/` existe
-- [ ] `server/Packages/gr_characters/Package.toml` existe
-- [ ] `server/Packages/gr_characters/Server/Index.lua` existe
-- [ ] `server/Packages/gr_characters/Client/Index.lua` existe
-- [ ] `server/Packages/gr_characters/Shared/Index.lua` existe
+- [ ] `server/Packages/gr-characters/` existe
+- [ ] `server/Packages/gr-characters/Package.toml` existe
+- [ ] `server/Packages/gr-characters/Server/Index.lua` existe
+- [ ] `server/Packages/gr-characters/Client/Index.lua` existe
+- [ ] `server/Packages/gr-characters/Shared/Index.lua` existe
 - [ ] `Shared/Index.lua` ne contient pas de logique autoritative
 
-## 2. Presence des services serveur `gr_characters`
+## 2. Presence des services serveur `gr-characters`
 
-- [ ] `server/Packages/gr_characters/Server/CharacterPlayerRepository.lua` existe
-- [ ] `server/Packages/gr_characters/Server/CharacterPlayerService.lua` existe
-- [ ] `server/Packages/gr_characters/Server/CharacterCreationService.lua` existe
-- [ ] `server/Packages/gr_characters/Server/CharacterSelectionService.lua` existe
-- [ ] `server/Packages/gr_characters/Server/CharacterPositionService.lua` existe
-- [ ] `server/Packages/gr_characters/Server/CharacterRepository.lua` existe
-- [ ] `server/Packages/gr_characters/Server/CharacterService.lua` existe
-- [ ] `server/Packages/gr_characters/Server/Index.lua` existe
+- [ ] `server/Packages/gr-characters/Server/CharacterPlayerRepository.lua` existe
+- [ ] `server/Packages/gr-characters/Server/CharacterPlayerService.lua` existe
+- [ ] `server/Packages/gr-characters/Server/CharacterCreationService.lua` existe
+- [ ] `server/Packages/gr-characters/Server/CharacterSelectionService.lua` existe
+- [ ] `server/Packages/gr-characters/Server/CharacterPositionService.lua` existe
+- [ ] `server/Packages/gr-characters/Server/CharacterRepository.lua` existe
+- [ ] `server/Packages/gr-characters/Server/CharacterService.lua` existe
+- [ ] `server/Packages/gr-characters/Server/Index.lua` existe
 
 ## 3. Dependances de packages
 
-- [ ] `gr_core` ne declare pas de dependance de package obligatoire
-- [ ] `gr_database` ne declare pas de dependance de package obligatoire
-- [ ] `gr_characters` declare `packages_requirements = ["gr_database"]`
-- [ ] la documentation ne presente pas `gr_core` comme une dependance runtime deja branchee a `gr_characters`
+- [ ] `gr-core` ne declare pas de dependance de package obligatoire
+- [ ] `gr-database` ne declare pas de dependance de package obligatoire
+- [ ] `gr-characters` declare `packages_requirements = ["gr-database"]`
+- [ ] la documentation ne presente pas `gr-core` comme une dependance runtime deja branchee a `gr-characters`
 
 ## 4. Regles server-authoritative
 
@@ -146,7 +146,7 @@ Avant d'utiliser cette checklist, verifier les documents de reference suivants :
 Ces tests ne sont pas encore executables ici, mais ils doivent etre prevus :
 
 - [ ] le serveur nanos world demarre sans crash
-- [ ] `gr_core`, `gr_database` et `gr_characters` se chargent
+- [ ] `gr-core`, `gr-database` et `gr-characters` se chargent
 - [ ] les logs de chargement de package sont visibles
 - [ ] un joueur rejoint sans crash Lua
 - [ ] le chargement player ne casse pas si la ligne `players` existe deja
@@ -164,14 +164,14 @@ Ces tests ne sont pas encore executables ici, mais ils doivent etre prevus :
 - [ ] les tables `players`, `characters` et `character_skills` sont visibles apres migration
 - [ ] aucun `server/Config.example.toml` n'est suppose exister dans le depot
 - [ ] la doc rappelle que `Config.toml` nanos world est genere au premier lancement
-- [ ] le `Config.toml` local du vrai serveur nanos world liste `gr_core`, `gr_database`, `gr_characters`
-- [ ] l'ordre de chargement local retenu est `gr_core -> gr_database -> gr_characters`
+- [ ] le `Config.toml` local du vrai serveur nanos world liste `gr-core`, `gr-database`, `gr-characters`
+- [ ] l'ordre de chargement local retenu est `gr-core -> gr-database -> gr-characters`
 - [ ] le dossier local `Packages/` du serveur contient bien ces trois packages
 - [ ] le log `[gr_core][server] Core package loaded.` est visible
 - [ ] le log `[gr_database][server] Database package loaded.` est visible
 - [ ] le log `[gr_characters][server] Characters package loaded.` est visible
 - [ ] aucun message d'erreur `Package.Require` n'apparait au chargement
-- [ ] aucune erreur de dependance `gr_database` manquante n'apparait
+- [ ] aucune erreur de dependance `gr-database` manquante n'apparait
 - [ ] un joueur peut rejoindre sans crash Lua
 - [ ] les logs `player-service` ou `player-repository` sont visibles a la connexion
 - [ ] un joueur sans ligne `players` ne provoque pas de crash
@@ -198,8 +198,8 @@ Exemples de commandes locales a executer :
 
 - `git diff --check`
 - `git status --short`
-- `Get-ChildItem -Recurse -File server/Packages/gr_core,server/Packages/gr_database,server/Packages/gr_characters`
-- `Get-ChildItem server/Packages/gr_characters/Server -File`
+- `Get-ChildItem -Recurse -File server/Packages/gr-core,server/Packages/gr-database,server/Packages/gr-characters`
+- `Get-ChildItem server/Packages/gr-characters/Server -File`
 - `docker compose --env-file docker/.env.example -f docker/docker-compose.yml ps`
 - `docker compose --env-file docker/.env.example -f docker/docker-compose.yml logs --tail 100 postgres`
 - `Select-String -Path database/migrations/001_init.sql -Pattern 'position_x','position_y','position_z'`

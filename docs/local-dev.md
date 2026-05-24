@@ -15,7 +15,7 @@ Le depot prepare actuellement :
 
 - PostgreSQL via Docker Compose
 - pgAdmin pour l'inspection manuelle
-- les packages nanos world `gr_core`, `gr_database` et `gr_characters`
+- les packages nanos world `gr-core`, `gr-database` et `gr-characters`
 - la documentation du premier smoke test de chargement serveur
 
 Le depot ne fournit pas encore :
@@ -151,21 +151,21 @@ docker exec -it galactic-rp-postgres psql -U galactic -d galactic_rp -f /workspa
 
 Les packages reels prepares pour le smoke test `#41` sont :
 
-1. `gr_core`
-2. `gr_database`
-3. `gr_characters`
+1. `gr-core`
+2. `gr-database`
+3. `gr-characters`
 
 Ordre de chargement attendu pour le smoke test :
 
-1. `gr_core`
-2. `gr_database`
-3. `gr_characters`
+1. `gr-core`
+2. `gr-database`
+3. `gr-characters`
 
 Justification :
 
-- `gr_core` ne declare pas de dependance runtime, mais peut etre charge en premier comme socle de conventions
-- `gr_database` doit etre charge avant `gr_characters`
-- `gr_characters` declare `packages_requirements = ["gr_database"]`
+- `gr-core` ne declare pas de dependance runtime, mais peut etre charge en premier comme socle de conventions
+- `gr-database` doit etre charge avant `gr-characters`
+- `gr-characters` declare `packages_requirements = ["gr-database"]`
 
 ## Configuration locale du serveur nanos world
 
@@ -202,9 +202,9 @@ Dans le dossier reel du serveur nanos world local :
 
 ```toml
 packages = [
-  "gr_core",
-  "gr_database",
-  "gr_characters",
+  "gr-core",
+  "gr-database",
+  "gr-characters",
 ]
 ```
 
@@ -227,9 +227,9 @@ ou conserver votre map locale deja validee si elle ne bloque pas le smoke test.
 
 ### 2. Preparer le serveur nanos world local
 
-1. verifier que le dossier local `Packages/` du serveur contient `gr_core`, `gr_database` et `gr_characters`
-2. verifier que le `Config.toml` local liste `gr_core`, `gr_database`, `gr_characters`
-3. verifier que `gr_characters` reste apres `gr_database`
+1. verifier que le dossier local `Packages/` du serveur contient `gr-core`, `gr-database` et `gr-characters`
+2. verifier que le `Config.toml` local liste `gr-core`, `gr-database`, `gr-characters`
+3. verifier que `gr-characters` reste apres `gr-database`
 4. ne pas ajouter de package gameplay supplementaire pour ce premier smoke test si ce n'est pas necessaire
 
 ### 3. Lancer le serveur nanos world local
@@ -261,7 +261,7 @@ Le smoke test doit echouer si vous voyez des erreurs du type :
 
 - package introuvable
 - `Package.Require` en erreur
-- dependance `gr_database` manquante
+- dependance `gr-database` manquante
 - crash Lua fatal au chargement
 
 ## Logs attendus a la connexion d'un joueur
@@ -287,7 +287,7 @@ Puis un des cas suivants :
 Le premier smoke test local doit verifier au minimum :
 
 - un joueur peut rejoindre le serveur
-- `gr_core`, `gr_database` et `gr_characters` se chargent sans erreur critique
+- `gr-core`, `gr-database` et `gr-characters` se chargent sans erreur critique
 - aucun crash Lua n'apparait au demarrage
 - aucune erreur de dependance package n'apparait
 - les logs de player loading sont visibles
@@ -317,7 +317,7 @@ Verifier :
 
 - que le package existe bien dans le vrai dossier `Packages/` du serveur nanos world local
 - que le nom de dossier correspond exactement au nom reference dans `Config.toml`
-- que `packages = [...]` contient bien `gr_core`, `gr_database`, `gr_characters`
+- que `packages = [...]` contient bien `gr-core`, `gr-database`, `gr-characters`
 
 ### Erreur `Package.Require`
 
@@ -327,13 +327,13 @@ Verifier :
 - que les noms de fichiers respectent la casse attendue
 - que le package s'est bien charge avant toute tentative de require dynamique
 
-### Erreur de dependance `gr_database`
+### Erreur de dependance `gr-database`
 
 Verifier :
 
-- que `gr_database` est present dans le dossier `Packages/`
-- que `gr_database` est liste avant `gr_characters` dans le smoke test local
-- que `server/Packages/gr_characters/Package.toml` declare toujours `packages_requirements = ["gr_database"]`
+- que `gr-database` est present dans le dossier `Packages/`
+- que `gr-database` est liste avant `gr-characters` dans le smoke test local
+- que `server/Packages/gr-characters/Package.toml` declare toujours `packages_requirements = ["gr-database"]`
 
 ### PostgreSQL non disponible
 
@@ -346,7 +346,7 @@ Verifier :
 
 Rappel :
 
-- `gr_database` n'ouvre pas automatiquement la connexion au chargement du package
+- `gr-database` n'ouvre pas automatiquement la connexion au chargement du package
 - l'indisponibilite PostgreSQL doit donc surtout apparaitre quand une lecture ou une connexion est effectivement tentee
 
 ### Fichier `Config.toml` manquant

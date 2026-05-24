@@ -81,20 +81,20 @@ Ce backlog couvre uniquement le bootstrap technique du projet. Chaque item respe
 
 ## Prochain backlog recommandé
 
-### TECH-001 - Initialiser `gr_core`
+### TECH-001 - Initialiser `gr-core`
 
 - Statut : Ready
 - Priorité : P0
 - Complexité : M
-- Packages impactés : `server/Packages/gr_core`
+- Packages impactés : `server/Packages/gr-core`
 - Impact DB/UI : aucun impact DB direct, contrat d'événements communs à prévoir
 
-### TECH-002 - Initialiser `gr_database`
+### TECH-002 - Initialiser `gr-database`
 
 - Statut : Ready
 - Priorité : P0
 - Complexité : M
-- Packages impactés : `server/Packages/gr_database`
+- Packages impactés : `server/Packages/gr-database`
 - Impact DB/UI : connexion PostgreSQL, configuration serveur, aucun écran UI
 
 ### TECH-003 - Scaffold `ui/hud`

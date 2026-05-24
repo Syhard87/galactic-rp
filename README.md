@@ -30,6 +30,16 @@ tools/
 .github/workflows/
 ```
 
+## Packages nanos world actuels
+
+Les noms de dossiers/packages nanos world actuellement utilises par le depot sont :
+
+- `gr-core`
+- `gr-database`
+- `gr-characters`
+
+Les prefxes de logs internes peuvent conserver les formes historiques `[gr_core]`, `[gr_database]` et `[gr_characters]`.
+
 ## Lancement local Docker
 
 Demarrer PostgreSQL et pgAdmin avec le fichier d'exemple versionne :
