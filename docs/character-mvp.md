@@ -1,0 +1,436 @@
+# MVP Character
+
+## Objectif
+
+Ce document definit le cycle MVP complet `joueur nanos world -> player persiste -> personnage actif` pour l'issue #22.
+
+Il documente la conception cible avant implementation, sans ajouter :
+
+- creation de personnage fonctionnelle
+- selection de personnage fonctionnelle
+- requetes PostgreSQL reelles
+- modification du schema SQL
+
+## Perimetre
+
+Le perimetre couvre uniquement :
+
+- l'identification du `Player` nanos world a la connexion
+- l'association avec une ligne `players`
+- le chargement des lignes `characters` liees
+- le passage dans un etat `selection` ou `creation`
+- l'activation serveur d'un personnage
+- le spawn du personnage actif
+- les regles server-authoritative et les fallbacks
+
+Le perimetre ne couvre pas encore :
+
+- l'UI finale de creation
+- l'UI finale de selection
+- la personnalisation visuelle du personnage
+- les validations RP detaillees des noms, factions ou backgrounds
+- les requetes SQL definitives
+
+## Sources de verite
+
+Sources depot :
+
+- `AGENTS.md`
+- `docs/nanos-world-reference.md`
+- `docs/cahier-des-charges.md`
+- `docs/architecture.md`
+- `database/migrations/001_init.sql`
+- `server/Packages/gr_core`
+- `server/Packages/gr_database`
+- `server/Packages/gr_characters`
+
+Sources nanos world consultees :
+
+- `external/nanos-world-docs/versioned_docs/version-latest/scripting-reference/classes/player.mdx`
+- `external/nanos-world-docs/versioned_docs/version-latest/scripting-reference/classes/character.mdx`
+- `external/nanos-world-docs/versioned_docs/version-latest/core-concepts/server-and-client-lifecycle.md`
+- `external/nanos-world-docs/versioned_docs/version-latest/core-concepts/packages/packages-guide.md`
+- `external/nanos-world-docs/versioned_docs/version-latest/core-concepts/scripting/events-guide.md`
+- `external/nanos-world-docs/versioned_docs/version-latest/core-concepts/scripting/user-interface.mdx`
+- `external/nanos-world-docs/versioned_docs/version-latest/scripting-reference/classes/web-ui.mdx`
+- `external/nanos-world-docs/versioned_docs/version-latest/getting-started/essential-concepts.mdx`
+- `external/nanos-world-docs/versioned_docs/version-latest/getting-started/quick-start.mdx`
+- `external/nanos-world-docs/versioned_docs/version-latest/getting-started/tutorials-and-examples/basic-hud-html.md`
+
+## Vocabulaire
+
+- `Player` : entite nanos world creee automatiquement quand un joueur rejoint le serveur. La doc officielle rappelle qu'un `Player` ne doit pas etre cree ou detruit manuellement.
+- `player row` : ligne de la table `players`, identifiee par `players.id` et `players.platform_id`.
+- `character row` : ligne de la table `characters`, rattachee a `players.id` via `characters.player_id`.
+- `personnage actif` : personnage selectionne, valide cote serveur, possede par le `Player` et considere comme reference autoritative de session.
+- `session character state` : etat memoire cote serveur qui relie un `Player` nanos world, un `players.id` et, si disponible, un `characters.id` actif.
+
+## Schema actuel pris en compte
+
+Le schema actuel suffit pour documenter le cycle MVP :
+
+- `players` contient `id`, `platform_id`, `username`, `first_join_at`, `last_join_at`, `is_banned`, `ban_reason`
+- `characters` contient `id`, `player_id`, identite RP de base et `position_x`, `position_y`, `position_z`
+
+Le schema actuel ne contient pas :
+
+- de colonne `last_active_character_id`
+- de colonne `selected_spawn_id`
+- de colonne de verrouillage de session
+
+Consequence MVP :
+
+- le serveur doit considerer la selection du personnage comme un choix de session, pas comme une preference persistante deja stockee en base
+- un personnage existant ne devient jamais actif automatiquement sur la seule base du schema actuel
+
+## Repartition des responsabilites par package
+
+- `gr_core` porte les conventions communes et les noms d'evenements partages.
+- `gr_database` encapsule la connexion et l'acces PostgreSQL cote serveur.
+- `gr_characters` orchestre le cycle de vie `player -> character` cote serveur.
+- le client et la WebUI ne servent qu'a afficher l'etat et envoyer une intention utilisateur.
+
+## Etat de session recommande
+
+Chaque joueur connecte doit etre suivi cote serveur avec un etat simple :
+
+1. `connecting`
+2. `resolving_player`
+3. `loading_characters`
+4. `waiting_character_creation`
+5. `waiting_character_selection`
+6. `activating_character`
+7. `active`
+8. `blocked`
+
+Ce suivi reste memoire et ne modifie pas le schema SQL.
+
+## Flux cible de connexion
+
+### 1. Apparition du Player nanos world
+
+Selon la documentation nanos world :
+
+- le `Player` est cree automatiquement a la connexion
+- le cycle client charge d'abord packages et entites
+- le serveur recoit ensuite le `Player` et le client finit son initialisation avant l'evenement `Ready`
+
+Conception MVP :
+
+1. `gr_characters` doit reagir a l'arrivee du `Player`.
+2. Tant qu'aucun personnage actif n'est valide, le joueur ne doit pas recevoir de personnage gameplay.
+3. Le joueur peut voir une UI de chargement, de creation ou de selection, mais il ne doit pas pouvoir jouer.
+
+Note de robustesse :
+
+- au chargement ou rechargement du package, il faudra aussi reconcilier les `Player` deja connectes, comme le recommande l'exemple officiel qui parcourt `Player.GetAll()` sur `Package.Subscribe("Load")`
+
+### 2. Resolution de l'identite persistee du joueur
+
+Des l'arrivee du `Player`, le serveur doit produire un identifiant stable pour `players.platform_id`.
+
+Contrat de conception :
+
+1. Le serveur extrait un identifiant de plateforme stable depuis l'API `Player`.
+2. Le serveur lit aussi le nom courant du joueur pour alimenter `players.username`.
+3. Le client ne fournit jamais lui-meme `platform_id`.
+
+Point a verifier avant implementation :
+
+- le getter exact de l'identifiant stable du `Player` doit etre confirme contre la reference nanos world exploitable au moment du codage
+- tant que ce getter n'est pas confirme, il ne faut pas figer le nom d'API dans le code metier
+
+### 3. Association avec la table `players`
+
+Le serveur utilise `players.platform_id` comme cle de rapprochement logique.
+
+#### Cas A : le player existe deja en base
+
+Si une ligne `players` existe deja pour ce `platform_id` :
+
+1. le serveur recupere `players.id`
+2. le serveur recharge le profil persiste du joueur
+3. le serveur mettra a jour plus tard les metadonnees de session comme `last_join_at` et `username`
+4. le flux continue vers le chargement des personnages
+
+#### Cas B : le player n'existe pas encore
+
+Si aucune ligne `players` n'existe pour ce `platform_id` :
+
+1. le serveur cree une nouvelle ligne `players`
+2. la ligne initiale contient au minimum `platform_id`, `username`, `first_join_at` et `last_join_at`
+3. le serveur recupere le nouveau `players.id`
+4. le flux continue vers le chargement des personnages
+
+Regle cle :
+
+- il ne doit jamais exister plus d'une ligne `players` pour un meme `platform_id`
+
+### 4. Chargement des personnages du joueur
+
+Une fois `players.id` connu, le serveur charge toutes les lignes `characters` ou `characters.player_id = players.id`.
+
+#### Cas C : le joueur a deja un ou plusieurs personnages
+
+Si la liste de personnages n'est pas vide :
+
+1. le serveur reste autoritatif sur la liste retournee
+2. le client ne voit que les personnages appartenant a ce `players.id`
+3. le joueur entre dans l'etat `waiting_character_selection`
+4. aucun personnage n'est encore actif
+5. aucun spawn gameplay n'a encore lieu
+
+Politique MVP retenue :
+
+- meme si un seul personnage existe, la session passe par une selection explicite
+- cette decision evite d'inventer un mecanisme de "dernier personnage actif" absent du schema actuel
+
+#### Cas D : le joueur n'a encore aucun personnage
+
+Si la liste est vide :
+
+1. le joueur entre dans l'etat `waiting_character_creation`
+2. le client peut afficher un ecran de creation
+3. aucun personnage n'est encore actif
+4. aucun spawn gameplay n'a encore lieu
+
+Regle cle :
+
+- un joueur nanos world peut etre connecte sans personnage actif
+- un joueur nanos world ne doit pas pouvoir jouer sans personnage actif
+
+## Choix ou creation du personnage
+
+### Creation de personnage
+
+La creation ne doit pas etre codee dans cette issue, mais le contrat cible est le suivant :
+
+1. le client envoie une intention de creation et des champs non sensibles
+2. le serveur valide les champs autorises
+3. le serveur cree la ligne `characters` rattachee a `players.id`
+4. le serveur decide ensuite si ce nouveau personnage peut etre active dans la meme session
+
+Regles MVP :
+
+- aucune coordonnee de spawn fournie par le client n'est acceptee comme source de verite
+- aucune valeur sensible comme argent, permissions, reputations ou rangs ne vient du client
+- si la creation echoue, le joueur reste dans `waiting_character_creation`
+
+### Selection de personnage
+
+La selection ne doit pas etre codee dans cette issue, mais le contrat cible est le suivant :
+
+1. le client envoie l'identifiant du personnage souhaite
+2. le serveur verifie que ce personnage existe
+3. le serveur verifie que ce personnage appartient bien a `players.id`
+4. le serveur charge les donnees necessaires au spawn
+5. seulement apres ces verifications, le personnage peut entrer dans `activating_character`
+
+Regles MVP :
+
+- le client ne choisit jamais seul le personnage actif
+- un identifiant de personnage recu du client sans verification de propriete doit etre rejete
+
+## Moment exact ou un personnage devient actif
+
+Un personnage devient actif seulement quand toutes les conditions suivantes sont vraies cote serveur :
+
+1. le `Player` nanos world est toujours connecte
+2. la ligne `players` a ete resolue
+3. la ligne `characters` a ete resolue et appartient bien a ce `players.id`
+4. l'entite `Character` nanos world a ete creee avec succes
+5. le serveur a appele `player:Possess(character_entity)`
+6. `player:GetControlledCharacter()` renvoie bien le personnage possede attendu
+
+Avant ce point :
+
+- le personnage est seulement "selectionne" ou "cree", pas encore actif
+- le joueur n'a pas encore le droit d'entrer dans le gameplay
+
+Apres ce point :
+
+- la session passe a l'etat `active`
+- `gr_characters` peut memoriser la relation `player -> active_character_id` en memoire
+- les autres packages serveur peuvent consommer ce contexte actif
+
+## Spawn du personnage actif
+
+Le spawn doit rester entierement pilote par le serveur.
+
+### Resolution du point de spawn
+
+Priorite MVP recommandee :
+
+1. utiliser la position persistante du personnage si elle est valide pour la map et la session courante
+2. sinon utiliser un spawn point de map connu par le serveur via la configuration de map
+3. sinon bloquer l'activation avec journalisation explicite
+
+Justification :
+
+- le schema actuel contient `position_x`, `position_y`, `position_z`
+- la documentation nanos world recommande de definir les spawn points joueur dans le `Package.toml` de map et de les recuperer via `Server.GetMapSpawnPoints()`
+
+### Regles de spawn
+
+- le serveur cree l'entite `Character`
+- le serveur choisit la position et la rotation du spawn
+- le serveur possess le `Character` pour le `Player`
+- le client ne cree jamais lui-meme le personnage gameplay
+- le client apprend l'etat actif via la synchronisation normale et les evenements de possession
+
+### Nouveau personnage et spawn initial
+
+Pour un personnage nouvellement cree :
+
+- le spawn initial reste une decision serveur
+- un choix de spawn eventuel venant du client doit etre interprete comme une preference, jamais comme une autorite
+- si aucun spawn initial valide n'est resolvable, la creation peut etre consideree comme reussie mais l'activation doit etre refusee tant qu'un spawn serveur valide n'est pas disponible
+
+## Regles server-authoritative
+
+Ces regles s'appliquent a tout le cycle MVP Character :
+
+- seul le serveur associe un `Player` nanos world a une ligne `players`
+- seul le serveur charge la liste des personnages appartenant au joueur
+- seul le serveur cree ou selectionne le personnage actif
+- seul le serveur choisit les coordonnees finales de spawn
+- seul le serveur appelle `player:Possess(...)`
+- seul le serveur memorise le `active_character_id` de session
+- le client n'accorde jamais argent, items, XP, reputations, permissions, rewards ou droits d'administration
+- la WebUI ne fait qu'afficher l'etat et soumettre une intention utilisateur
+
+## Erreurs possibles et fallbacks
+
+### Identifiant joueur introuvable
+
+Probleme :
+
+- le serveur ne parvient pas a extraire un identifiant stable pour `players.platform_id`
+
+Fallback :
+
+- ne pas activer de personnage
+- passer la session en `blocked`
+- journaliser l'erreur
+- refuser le gameplay tant que la cause n'est pas resolue
+
+### Base indisponible
+
+Probleme :
+
+- `gr_database` ne peut pas ouvrir ou reutiliser une connexion exploitable
+
+Fallback :
+
+- ne pas spawner de personnage gameplay
+- rester dans un etat de blocage ou d'attente
+- afficher un etat de maintenance cote client si une UI existe
+- journaliser l'erreur cote serveur
+
+### Ligne `players` introuvable ou creation echouee
+
+Probleme :
+
+- la lecture ou la creation de la ligne `players` echoue
+
+Fallback :
+
+- aucun chargement de personnage
+- session en `blocked`
+- journalisation serveur
+
+### Chargement des personnages echoue
+
+Probleme :
+
+- la lecture des lignes `characters` echoue
+
+Fallback :
+
+- ne pas supposer que le joueur n'a aucun personnage
+- ne pas basculer automatiquement vers la creation
+- garder la session bloquee avec message d'erreur
+
+### Personnage demande non trouve ou non possede
+
+Probleme :
+
+- l'identifiant choisi ne correspond a aucun personnage du joueur
+
+Fallback :
+
+- refuser l'activation
+- reafficher la liste autorisee
+- journaliser une tentative invalide
+
+### Position persistante invalide
+
+Probleme :
+
+- la position sauvegardee est absente, corrompue ou inutilisable pour la map courante
+
+Fallback :
+
+- basculer vers un spawn point de map valide
+- si aucun spawn point n'existe, ne pas activer le personnage
+
+### Spawn ou possession echoue
+
+Probleme :
+
+- l'entite `Character` n'est pas creee correctement ou la possession n'aboutit pas
+
+Fallback :
+
+- ne pas marquer le personnage comme actif
+- nettoyer l'entite intermediaire si necessaire
+- renvoyer la session vers l'etat de selection
+- journaliser l'echec
+
+### Deconnexion pendant le flux
+
+Probleme :
+
+- le joueur quitte le serveur pendant `resolving_player`, `loading_characters` ou `activating_character`
+
+Fallback :
+
+- abandonner proprement le flux
+- nettoyer l'etat memoire de session
+- ne pas poursuivre d'activation retardee
+
+### UI client non prete ou rechargee
+
+Probleme :
+
+- la WebUI n'est pas encore chargee, ou le package client vient d'etre recharge
+
+Fallback :
+
+- conserver la source de verite cote serveur
+- renvoyer l'etat de session vers le client quand l'UI redevient disponible
+- ne jamais deduire un personnage actif uniquement depuis l'etat local du client
+
+## Implications pour l'implementation future
+
+Cette issue fige les decisions suivantes :
+
+- le cycle passe d'abord par la resolution `players`, puis par `characters`
+- aucun gameplay n'est autorise sans personnage actif
+- la selection reste explicite a chaque session dans le schema actuel
+- l'activation est un acte serveur, pas un simple choix UI
+- le spawn prefere la position persistante du personnage puis les spawn points de map
+- tout echec critique bloque l'activation au lieu de laisser jouer avec un etat incomplet
+
+## Resume du flux nominal
+
+1. Le `Player` nanos world apparait.
+2. Le serveur ouvre un etat de session `resolving_player`.
+3. Le serveur resout ou cree la ligne `players`.
+4. Le serveur charge les lignes `characters`.
+5. Sans personnage : etat `waiting_character_creation`.
+6. Avec personnage : etat `waiting_character_selection`.
+7. Le client envoie une intention de creation ou de selection.
+8. Le serveur valide la propriete et le droit d'activation.
+9. Le serveur resout le spawn, cree le `Character` et appelle `player:Possess(...)`.
+10. Le personnage devient actif seulement apres validation serveur de la possession.
