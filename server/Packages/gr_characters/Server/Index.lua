@@ -2,6 +2,7 @@ Package.Require("../Shared/Index.lua")
 
 local CharacterPlayerRepository = Package.Require("CharacterPlayerRepository.lua")
 local CharacterPlayerService = Package.Require("CharacterPlayerService.lua")
+local CharacterCreationService = Package.Require("CharacterCreationService.lua")
 local CharacterRepository = Package.Require("CharacterRepository.lua")
 local CharacterService = Package.Require("CharacterService.lua")
 
@@ -17,10 +18,15 @@ end
 GRCharacters.Server.PlayerRepository = CharacterPlayerRepository.Create(database_service)
 GRCharacters.Server.PlayerService = CharacterPlayerService.Create(GRCharacters.Server.PlayerRepository)
 GRCharacters.Server.Repository = CharacterRepository.Create(database_service)
-GRCharacters.Server.Service = CharacterService.Create(GRCharacters.Server.Repository)
+GRCharacters.Server.CreationService = CharacterCreationService.Create(GRCharacters.Server.Repository)
+GRCharacters.Server.Service = CharacterService.Create(
+    GRCharacters.Server.Repository,
+    GRCharacters.Server.CreationService,
+    GRCharacters.Server.PlayerService
+)
 
 local function load_player_session(player)
-    local is_started, error = GRCharacters.Server.PlayerService:LoadPlayerSession(player)
+    local is_started, error = GRCharacters.Server.Service:LoadPlayerSession(player)
 
     if not is_started then
         Console.Log(
@@ -33,7 +39,7 @@ end
 Player.Subscribe("Spawn", load_player_session)
 
 Player.Subscribe("Destroy", function(player)
-    GRCharacters.Server.PlayerService:ForgetPlayerSession(player)
+    GRCharacters.Server.Service:ForgetPlayerSession(player)
 end)
 
 Package.Subscribe("Load", function()
@@ -45,4 +51,5 @@ end)
 Console.Log("[gr_characters][server] Characters package loaded.")
 Console.Log("[gr_characters][server] Character authority, validation and persistence stay server-side.")
 Console.Log("[gr_characters][server] Player row loading is prepared server-side through players.platform_id lookup.")
+Console.Log("[gr_characters][server] Character creation is prepared server-side with strict field validation and safe defaults.")
 Console.Log("[gr_characters][server] Character repositories and services remain separated from character creation, selection, spawn and persistence flows.")

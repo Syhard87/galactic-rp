@@ -55,13 +55,47 @@ local function normalize_position(position)
     }
 end
 
-function CharacterService.Create(repository)
+function CharacterService.Create(repository, creation_service, player_service)
     local self = setmetatable({}, CharacterService)
 
     self.repository = repository
+    self.creation_service = creation_service
+    self.player_service = player_service
     self.active_character_ids_by_player_id = {}
 
     return self
+end
+
+function CharacterService:LoadPlayerSession(player, callback)
+    if self.player_service == nil then
+        return false, "player-service-missing"
+    end
+
+    return self.player_service:LoadPlayerSession(player, callback)
+end
+
+function CharacterService:GetLoadedPlayerRow(player_or_platform_id)
+    if self.player_service == nil then
+        return nil
+    end
+
+    return self.player_service:GetLoadedPlayerRow(player_or_platform_id)
+end
+
+function CharacterService:GetPlayerLoadState(player_or_platform_id)
+    if self.player_service == nil then
+        return nil
+    end
+
+    return self.player_service:GetPlayerLoadState(player_or_platform_id)
+end
+
+function CharacterService:ForgetPlayerSession(player_or_platform_id)
+    if self.player_service == nil then
+        return false, "player-service-missing"
+    end
+
+    return self.player_service:ForgetPlayerSession(player_or_platform_id)
 end
 
 function CharacterService:GetCharactersForPlayer(player_or_id)
@@ -76,22 +110,19 @@ function CharacterService:GetCharactersForPlayer(player_or_id)
     return self.repository:GetCharactersByPlayerId(player_id)
 end
 
-function CharacterService:CreateCharacter(player_or_id, character_payload)
-    local player_id = normalize_player_key(player_or_id)
-
-    if player_id == nil then
-        return false, "player-id-required"
+function CharacterService:CreateCharacter(player_or_id, character_payload, callback)
+    if self.creation_service == nil then
+        return false, "creation-service-missing"
     end
 
-    if type(character_payload) ~= "table" then
-        return false, "character-payload-required"
+    local player_target = player_or_id
+    local loaded_player_row = self:GetLoadedPlayerRow(player_or_id)
+
+    if loaded_player_row ~= nil then
+        player_target = loaded_player_row
     end
 
-    -- Future server-side validation will check naming, faction eligibility,
-    -- default money, spawn policy and all persistence rules before insert.
-    Console.Log("[gr_characters][service] Character creation requested for player_id=%s.", tostring(player_id))
-
-    return self.repository:InsertCharacter(player_id, character_payload)
+    return self.creation_service:CreateCharacterForPlayer(player_target, character_payload, callback)
 end
 
 function CharacterService:SelectActiveCharacter(player_or_id, character_id)
