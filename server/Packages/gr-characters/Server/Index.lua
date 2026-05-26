@@ -7,6 +7,7 @@ local CharacterSelectionService = Package.Require("CharacterSelectionService.lua
 local CharacterPositionService = Package.Require("CharacterPositionService.lua")
 local CharacterRepository = Package.Require("CharacterRepository.lua")
 local CharacterService = Package.Require("CharacterService.lua")
+local CharacterDevTool = Package.Require("CharacterDevTool.lua")
 
 GRCharacters = GRCharacters or {}
 GRCharacters.Server = GRCharacters.Server or {}
@@ -36,6 +37,10 @@ GRCharacters.Server.Service = CharacterService.Create(
     GRCharacters.Server.PlayerService,
     GRCharacters.Server.SelectionService,
     GRCharacters.Server.PositionService
+)
+GRCharacters.Server.DevTool = CharacterDevTool.Create(
+    GRCharacters.Server.Service,
+    GRCharacters.Server.PlayerService
 )
 
 local function load_player_session(player)
@@ -87,6 +92,8 @@ Package.Subscribe("Load", function()
     for _, player in pairs(Player.GetAll()) do
         load_player_session(player)
     end
+
+    GRCharacters.Server.DevTool:Run()
 end)
 
 Package.Subscribe("Unload", function()
