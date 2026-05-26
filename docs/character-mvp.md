@@ -158,7 +158,7 @@ Les fichiers reels presents dans `server/Packages/gr-characters/Server/` sont :
 
 - lit la table `players` par `players.platform_id`
 - normalise la ligne retournee
-- ne cree pas encore la ligne `players` si elle manque ; `InsertPlayer()` reste explicitement non implemente
+- peut inserer une ligne `players` minimale cote serveur pour le dev/local/test a partir de `platform_id` et `username`
 
 #### `CharacterPlayerService.lua`
 
@@ -166,6 +166,7 @@ Les fichiers reels presents dans `server/Packages/gr-characters/Server/` sont :
 - resout le nom observe avec `Player:GetName()`
 - maintient l'etat memoire `resolving_player`, `player-row-loaded`, `player-row-missing` ou `blocked`
 - conserve en memoire la `player row` chargee par `platform_id`
+- expose aussi un chargement et une creation controles par `platform_id` pour l'outil serveur dev/local/test
 
 #### `CharacterRepository.lua`
 
@@ -303,9 +304,10 @@ Si une ligne `players` existe deja pour ce `platform_id` :
 Si aucune ligne `players` n'existe pour ce `platform_id` :
 
 1. le scaffold serveur considere l'etat comme `player-row-missing`
-2. le flux de creation de la ligne `players` est prepare mais pas encore execute dans l'issue #23
-3. aucune etape de chargement des personnages ne doit commencer tant que cette ligne n'existe pas
-4. l'action future attendue reste la creation d'une ligne initiale avec `platform_id`, `username`, `first_join_at` et `last_join_at`
+2. le flux produit principal de creation de la ligne `players` reste distinct du vrai parcours joueur final
+3. un outil serveur dev/local/test peut toutefois creer une ligne minimale controlee pour valider le Character MVP sans UI complete
+4. hors outil dev/local/test, aucune etape de chargement des personnages ne doit commencer tant que cette ligne n'existe pas
+5. l'action future attendue reste la creation d'une ligne initiale avec `platform_id`, `username`, `first_join_at` et `last_join_at`
 
 Regle cle :
 
@@ -518,9 +520,10 @@ Le flux technique actuellement documente et prepare dans le depot est le suivant
 5. Sans personnage valide, l'etat memoire passe a `waiting_character_creation`.
 6. Avec un ou plusieurs personnages valides, l'etat memoire passe a `waiting_character_selection`.
 7. Une future intention client de creation devra passer par `CharacterCreationService`, qui valide le payload puis delegue l'insertion a `CharacterRepository`.
-8. Une future intention client de selection devra passer par `CharacterSelectionService`, qui relit la ligne serveur, verifie l'ownership et memorise un `active_character_id` de session.
-9. Le spawn final n'est pas encore active, mais `CharacterPositionService` prepare deja la resolution `position persistante -> spawn point de map`.
-10. Une fois le personnage gameplay reellement actif dans une future issue, `CharacterPositionService` est deja prepare pour sauvegarder sa position cote serveur avec une cadence lente et des garde-fous anti-spam DB.
+8. En dev/local/test uniquement, un outil serveur dedie peut creer une `player row`, creer un personnage minimal, recharger la liste et selectionner un personnage actif en memoire sans UI complete.
+9. Une future intention client de selection devra passer par `CharacterSelectionService`, qui relit la ligne serveur, verifie l'ownership et memorise un `active_character_id` de session.
+10. Le spawn final n'est pas encore active, mais `CharacterPositionService` prepare deja la resolution `position persistante -> spawn point de map`.
+11. Une fois le personnage gameplay reellement actif dans une future issue, `CharacterPositionService` est deja prepare pour sauvegarder sa position cote serveur avec une cadence lente et des garde-fous anti-spam DB.
 
 Lecture correcte de l'etat actuel :
 

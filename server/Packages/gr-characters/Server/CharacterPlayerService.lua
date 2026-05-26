@@ -46,6 +46,21 @@ function CharacterPlayerService.Create(repository)
     return self
 end
 
+function CharacterPlayerService:CacheLoadedPlayerRow(platform_id, observed_username, player_row)
+    local loaded_state = {
+        status = "player-row-loaded",
+        platform_id = platform_id,
+        observed_username = observed_username,
+        player_id = player_row.id,
+        is_banned = player_row.is_banned,
+    }
+
+    self.player_rows_by_platform_id[platform_id] = clone_table(player_row)
+    self:SetPlayerLoadState(platform_id, loaded_state)
+
+    return loaded_state
+end
+
 function CharacterPlayerService:ResolvePlayerPlatformId(player)
     if type(player) ~= "table" and type(player) ~= "userdata" then
         return false, "player-required"
@@ -139,8 +154,17 @@ function CharacterPlayerService:LoadPlayerSession(player, callback)
         return false, observed_username_or_error
     end
 
-    local platform_id = platform_id_or_error
-    local observed_username = observed_username_or_error
+    return self:LoadPlayerSessionByPlatformId(platform_id_or_error, observed_username_or_error, callback)
+end
+
+function CharacterPlayerService:LoadPlayerSessionByPlatformId(platform_id, observed_username, callback)
+    if type(platform_id) ~= "string" or platform_id == "" then
+        return false, "platform-id-required"
+    end
+
+    if type(observed_username) ~= "string" or observed_username == "" then
+        return false, "observed-username-required"
+    end
 
     self:SetPlayerLoadState(platform_id, {
         status = "resolving_player",
@@ -185,7 +209,7 @@ function CharacterPlayerService:LoadPlayerSession(player, callback)
             self:SetPlayerLoadState(platform_id, missing_state)
 
             Console.Log(
-                "[gr_characters][player-service] No players row currently exists for platform_id=%s. Future insert path is prepared but not implemented in issue #23.",
+                "[gr_characters][player-service] No players row currently exists for platform_id=%s. Main player bootstrap remains pending outside the temporary dev/local/test flow.",
                 tostring(platform_id)
             )
 
@@ -196,22 +220,65 @@ function CharacterPlayerService:LoadPlayerSession(player, callback)
             return
         end
 
-        local loaded_state = {
-            status = "player-row-loaded",
-            platform_id = platform_id,
-            observed_username = observed_username,
-            player_id = player_row.id,
-            is_banned = player_row.is_banned,
-        }
-
-        self.player_rows_by_platform_id[platform_id] = clone_table(player_row)
-        self:SetPlayerLoadState(platform_id, loaded_state)
+        local loaded_state = self:CacheLoadedPlayerRow(platform_id, observed_username, player_row)
 
         Console.Log(
             "[gr_characters][player-service] Player session loaded for platform_id=%s player_id=%s.",
             tostring(platform_id),
             tostring(player_row.id)
         )
+
+        if type(callback) == "function" then
+            callback(true, clone_table(loaded_state))
+        end
+    end)
+
+    if not dispatched then
+        return false, dispatch_error
+    end
+
+    return true
+end
+
+function CharacterPlayerService:CreatePlayerRowByPlatformId(platform_id, observed_username, callback)
+    if type(platform_id) ~= "string" or platform_id == "" then
+        return false, "platform-id-required"
+    end
+
+    if type(observed_username) ~= "string" or observed_username == "" then
+        return false, "observed-username-required"
+    end
+
+    if self.repository == nil then
+        return false, "player-repository-missing"
+    end
+
+    Console.Log(
+        "[gr_characters][player-service] Creating players row for platform_id=%s username=%s through server-side dev flow.",
+        tostring(platform_id),
+        tostring(observed_username)
+    )
+
+    local dispatched, dispatch_error = self.repository:InsertPlayer(platform_id, observed_username, function(is_success, player_row, error)
+        if not is_success or player_row == nil then
+            local blocked_state = {
+                status = "blocked",
+                platform_id = platform_id,
+                observed_username = observed_username,
+                error = error or "player-create-failed",
+            }
+
+            self.player_rows_by_platform_id[platform_id] = nil
+            self:SetPlayerLoadState(platform_id, blocked_state)
+
+            if type(callback) == "function" then
+                callback(false, clone_table(blocked_state))
+            end
+
+            return
+        end
+
+        local loaded_state = self:CacheLoadedPlayerRow(platform_id, observed_username, player_row)
 
         if type(callback) == "function" then
             callback(true, clone_table(loaded_state))

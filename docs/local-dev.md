@@ -230,6 +230,8 @@ gr_database_name = "galactic_rp"
 gr_database_user = "galactic"
 gr_database_password = "change-me-local-only"
 gr_database_auto_connect = "true"
+gr_characters_dev_tools_enabled = "false"
+gr_characters_dev_platform_id = "local-dev-platform-id"
 ```
 
 Notes importantes :
@@ -240,6 +242,8 @@ Notes importantes :
 - `docker/.env.example` reste la reference locale pour les valeurs Docker par defaut
 - le log de `gr-database` ne doit jamais afficher `gr_database_password`, uniquement `has_password=true|false`
 - mettre `gr_database_auto_connect = "false"` si vous voulez charger `gr-database` sans tentative de connexion automatique
+- mettre `gr_characters_dev_tools_enabled = "true"` uniquement pour le dev/local/test
+- `gr_characters_dev_platform_id` permet de valider le flux `player -> characters -> active character` avec un `platform_id` controle, sans pretendre finaliser le vrai flux joueur UI/gameplay
 
 ## Procedure smoke test local Character MVP `#41`
 
@@ -284,6 +288,7 @@ Les logs suivants sont attendus ou probables au demarrage si les packages sont b
 - `[gr_characters][server] Character creation is prepared server-side with strict field validation and safe defaults.`
 - `[gr_characters][server] Character selection is prepared server-side with ownership validation and transient active character state.`
 - `[gr_characters][server] Active character position saving is prepared server-side with a slow timer, DB anti-spam and spawn fallback resolution.`
+- `[gr_characters][server][dev] Character dev tool disabled.`
 
 Le smoke test doit echouer si vous voyez des erreurs du type :
 
@@ -402,6 +407,32 @@ Ou, si PostgreSQL est indisponible :
 
 - `[gr_database][server] PostgreSQL connection failed: database-connection-failed`
 - `[gr_database][server] Server continues without database connection.`
+
+## Procedure de validation Character dev tool issue `#47`
+
+1. lancer Docker Compose avec `docker/.env.example`
+2. verifier que `postgres` est `healthy`
+3. appliquer `database/migrations/001_init.sql`
+4. dans le vrai `Config.toml` local du serveur nanos world, renseigner les `custom_settings` `gr_database_*`
+5. ajouter `gr_characters_dev_tools_enabled = "true"`
+6. laisser `gr_characters_dev_platform_id = "local-dev-platform-id"` ou definir une valeur de dev explicite
+7. lancer le serveur nanos world local
+8. verifier les logs `gr_characters][server][dev]`
+9. verifier qu'un `players.platform_id` de dev est charge ou cree sans crash
+10. verifier que le personnage de test minimal est cree seulement si aucun personnage n'existe
+11. verifier qu'un personnage existant est selectionne et stocke en memoire serveur
+12. remettre `gr_characters_dev_tools_enabled = "false"` pour confirmer que l'outil ne se lance plus
+
+Logs complements attendus pour `#47` :
+
+- `[gr_characters][server][dev] Character dev tool enabled.`
+- `[gr_characters][server][dev] Loading player by platform_id=local-dev-platform-id`
+- `[gr_characters][server][dev] Player found id=...`
+- `[gr_characters][server][dev] Player created id=...`
+- `[gr_characters][server][dev] Characters found count=...`
+- `[gr_characters][server][dev] Test character created id=...`
+- `[gr_characters][server][dev] Active character selected id=...`
+- `[gr_characters][server][dev] Active character stored in memory.`
 
 ### Fichier `Config.toml` manquant
 

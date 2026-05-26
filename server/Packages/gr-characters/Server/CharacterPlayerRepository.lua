@@ -20,6 +20,17 @@ local SELECT_PLAYER_BY_PLATFORM_ID_QUERY = [[
     LIMIT 1
 ]]
 
+local INSERT_PLAYER_QUERY = [[
+    INSERT INTO players (
+        platform_id,
+        username
+    )
+    VALUES (
+        :0,
+        :1
+    )
+]]
+
 local function normalize_player_row(row)
     if type(row) ~= "table" then
         return nil
@@ -120,14 +131,89 @@ function CharacterPlayerRepository:FindPlayerByPlatformId(platform_id, callback)
     return true
 end
 
-function CharacterPlayerRepository:InsertPlayer(platform_id, username)
+function CharacterPlayerRepository:InsertPlayer(platform_id, username, callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if type(platform_id) ~= "string" or platform_id == "" then
+        callback(false, nil, "platform-id-required")
+        return true
+    end
+
+    if type(username) ~= "string" or username == "" then
+        callback(false, nil, "username-required")
+        return true
+    end
+
+    if self.database_service == nil then
+        Console.Log(
+            "[gr_characters][player-repository] Player insert requested for platform_id=%s but database service is unavailable.",
+            tostring(platform_id)
+        )
+
+        callback(false, nil, "database-service-missing")
+        return true
+    end
+
+    local is_success, database_or_error = self.database_service:Connect()
+
+    if not is_success then
+        Console.Log(
+            "[gr_characters][player-repository] Database connection failed during player insert for platform_id=%s with error=%s.",
+            tostring(platform_id),
+            tostring(database_or_error)
+        )
+
+        callback(false, nil, database_or_error)
+        return true
+    end
+
     Console.Log(
-        "[gr_characters][player-repository] Player creation prepared for platform_id=%s username=%s. Insert path intentionally not implemented in issue #23.",
+        "[gr_characters][player-repository] Inserting players row for platform_id=%s username=%s.",
         tostring(platform_id),
         tostring(username)
     )
 
-    return false, "not-implemented"
+    database_or_error:ExecuteAsync(INSERT_PLAYER_QUERY, function(rows_affected, error)
+        if error ~= nil then
+            Console.Log(
+                "[gr_characters][player-repository] Player insert failed for platform_id=%s with error=%s.",
+                tostring(platform_id),
+                tostring(error)
+            )
+
+            callback(false, nil, error)
+            return
+        end
+
+        if rows_affected ~= 1 then
+            Console.Log(
+                "[gr_characters][player-repository] Player insert for platform_id=%s returned unexpected rows_affected=%s.",
+                tostring(platform_id),
+                tostring(rows_affected)
+            )
+
+            callback(false, nil, "player-insert-unexpected-rows-affected")
+            return
+        end
+
+        self:FindPlayerByPlatformId(platform_id, function(find_success, player_row, find_error)
+            if not find_success then
+                callback(false, nil, find_error)
+                return
+            end
+
+            if player_row == nil then
+                callback(false, nil, "player-inserted-row-not-found")
+                return
+            end
+
+            callback(true, player_row, nil)
+        end)
+    end, platform_id, username)
+
+    return true
 end
 
 GRCharacters.Server.CharacterPlayerRepositoryClass = CharacterPlayerRepository
