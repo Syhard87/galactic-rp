@@ -8,6 +8,7 @@ local CharacterPositionService = Package.Require("CharacterPositionService.lua")
 local CharacterRepository = Package.Require("CharacterRepository.lua")
 local CharacterService = Package.Require("CharacterService.lua")
 local CharacterDevTool = Package.Require("CharacterDevTool.lua")
+local CharacterFlowService = Package.Require("CharacterFlowService.lua")
 
 GRCharacters = GRCharacters or {}
 GRCharacters.Server = GRCharacters.Server or {}
@@ -42,19 +43,26 @@ GRCharacters.Server.DevTool = CharacterDevTool.Create(
     GRCharacters.Server.Service,
     GRCharacters.Server.PlayerService
 )
+GRCharacters.Server.FlowService = CharacterFlowService.Create(
+    GRCharacters.Server.Service,
+    GRCharacters.Server.PlayerService,
+    GRCharacters.Server.DevTool
+)
 
-local function load_player_session(player)
-    local is_started, error = GRCharacters.Server.Service:LoadPlayerSession(player)
+local function start_player_character_flow(player, source_label)
+    local is_started, error = GRCharacters.Server.FlowService:ProcessConnectedPlayer(player, source_label)
 
     if not is_started then
         Console.Log(
-            "[gr_characters][server] Failed to start player row loading for a joining player with error=%s.",
+            "[gr_characters][server] Failed to start the player active character flow with error=%s.",
             tostring(error)
         )
     end
 end
 
-Player.Subscribe("Spawn", load_player_session)
+Player.Subscribe("Ready", function(player)
+    start_player_character_flow(player, "player-ready")
+end)
 
 Player.Subscribe("Destroy", function(player)
     local platform_id = nil
@@ -90,10 +98,10 @@ Package.Subscribe("Load", function()
     GRCharacters.Server.Service:StartPositionAutoSave()
 
     for _, player in pairs(Player.GetAll()) do
-        load_player_session(player)
+        start_player_character_flow(player, "package-load-reconcile")
     end
 
-    GRCharacters.Server.DevTool:Run()
+    GRCharacters.Server.DevTool:LogStatus()
 end)
 
 Package.Subscribe("Unload", function()
@@ -102,7 +110,7 @@ end)
 
 Console.Log("[gr_characters][server] Characters package loaded.")
 Console.Log("[gr_characters][server] Character authority, validation and persistence stay server-side.")
-Console.Log("[gr_characters][server] Player row loading is prepared server-side through players.platform_id lookup.")
+Console.Log("[gr_characters][server] Player-ready flow is server-only and uses players.platform_id lookup plus in-memory active character selection.")
 Console.Log("[gr_characters][server] Character creation is prepared server-side with strict field validation and safe defaults.")
 Console.Log("[gr_characters][server] Character selection is prepared server-side with ownership validation and transient active character state.")
 Console.Log("[gr_characters][server] Active character position saving is prepared server-side with a slow timer, DB anti-spam and spawn fallback resolution.")

@@ -284,7 +284,7 @@ Les logs suivants sont attendus ou probables au demarrage si les packages sont b
 - `[gr_database][server] PostgreSQL runtime access stays server-only.`
 - `[gr_characters][server] Characters package loaded.`
 - `[gr_characters][server] Character authority, validation and persistence stay server-side.`
-- `[gr_characters][server] Player row loading is prepared server-side through players.platform_id lookup.`
+- `[gr_characters][server] Player-ready flow is server-only and uses players.platform_id lookup plus in-memory active character selection.`
 - `[gr_characters][server] Character creation is prepared server-side with strict field validation and safe defaults.`
 - `[gr_characters][server] Character selection is prepared server-side with ownership validation and transient active character state.`
 - `[gr_characters][server] Active character position saving is prepared server-side with a slow timer, DB anti-spam and spawn fallback resolution.`
@@ -307,13 +307,18 @@ Quand un joueur rejoint :
 
 Exemples de logs attendus :
 
+- `[gr_characters][server] Player connected.`
+- `[gr_characters][server] Resolved platform_id=...`
+- `[gr_characters][server] Player DB loaded id=...` ou `[gr_characters][server] Player DB created id=...`
+- `[gr_characters][server] Characters found count=...`
 - `[gr_characters][player-service] Resolving players row for platform_id=... username=...`
 - `[gr_characters][player-repository] Looking up players.platform_id=...`
 
 Puis un des cas suivants :
 
-- ligne `players` trouvee
-- ligne `players` absente mais sans crash serveur
+- ligne `players` trouvee puis personnage actif selectionne
+- ligne `players` creee puis personnage actif selectionne
+- aucun personnage, avec log indiquant qu'une future UI de creation sera necessaire
 
 ## Verifications en jeu
 
@@ -324,7 +329,7 @@ Le premier smoke test local doit verifier au minimum :
 - aucun crash Lua n'apparait au demarrage
 - aucune erreur de dependance package n'apparait
 - les logs de player loading sont visibles
-- si le joueur n'a pas de ligne `players`, le serveur reste proprement dans un etat prepare sans gameplay force
+- si le joueur n'a pas encore de ligne `players`, le serveur peut la creer sans crash ni exposition client
 - si le joueur n'a pas de personnage, le serveur ne crash pas et ne tente pas un spawn final non implemente
 
 ## Limites connues du smoke test
@@ -415,24 +420,45 @@ Ou, si PostgreSQL est indisponible :
 3. appliquer `database/migrations/001_init.sql`
 4. dans le vrai `Config.toml` local du serveur nanos world, renseigner les `custom_settings` `gr_database_*`
 5. ajouter `gr_characters_dev_tools_enabled = "true"`
-6. laisser `gr_characters_dev_platform_id = "local-dev-platform-id"` ou definir une valeur de dev explicite
-7. lancer le serveur nanos world local
+6. lancer le serveur nanos world local
+7. connecter un joueur localement
 8. verifier les logs `gr_characters][server][dev]`
-9. verifier qu'un `players.platform_id` de dev est charge ou cree sans crash
-10. verifier que le personnage de test minimal est cree seulement si aucun personnage n'existe
+9. verifier que le fallback dev ne se declenche que si le joueur charge n'a aucun personnage
+10. verifier que le personnage de test minimal est cree seulement dans ce cas et jamais hors mode dev
 11. verifier qu'un personnage existant est selectionne et stocke en memoire serveur
-12. remettre `gr_characters_dev_tools_enabled = "false"` pour confirmer que l'outil ne se lance plus
+12. remettre `gr_characters_dev_tools_enabled = "false"` pour confirmer que le fallback ne se lance plus
 
 Logs complements attendus pour `#47` :
 
 - `[gr_characters][server][dev] Character dev tool enabled.`
-- `[gr_characters][server][dev] Loading player by platform_id=local-dev-platform-id`
-- `[gr_characters][server][dev] Player found id=...`
-- `[gr_characters][server][dev] Player created id=...`
+- `[gr_characters][server][dev] Character dev fallback enabled for platform_id=...`
 - `[gr_characters][server][dev] Characters found count=...`
 - `[gr_characters][server][dev] Test character created id=...`
 - `[gr_characters][server][dev] Active character selected id=...`
 - `[gr_characters][server][dev] Active character stored in memory.`
+
+## Procedure de validation premier flux joueur issue `#48`
+
+1. lancer PostgreSQL localement avec `docker/.env.example`
+2. verifier que `postgres` est `healthy`
+3. appliquer `database/migrations/001_init.sql`
+4. verifier le vrai `Config.toml` local non committe et mettre `gr_database_auto_connect = "true"`
+5. laisser `gr_characters_dev_tools_enabled = "false"` pour le cas nominal, puis le remettre a `"true"` seulement pour tester le fallback dev
+6. lancer le serveur nanos world local
+7. connecter un joueur localement
+8. verifier les logs `gr_characters` :
+   - `Player connected.`
+   - `Resolved platform_id=...`
+   - `Player DB loaded id=...` ou `Player DB created id=...`
+   - `Characters found count=...`
+   - `Active character selected id=...` puis `Active character stored for player.` si un personnage existe
+9. tester le cas d'un joueur sans personnage :
+   - verifier `Characters found count=0`
+   - verifier `No active character selected. Character creation UI will be required later.`
+10. tester le cas d'un joueur avec au moins un personnage :
+   - verifier la selection automatique du premier personnage retourne par la DB
+11. retester le cas sans personnage avec `gr_characters_dev_tools_enabled = "true"` pour confirmer le fallback local de creation de personnage de test
+12. verifier qu'aucun mot de passe PostgreSQL n'apparait dans les logs
 
 ### Fichier `Config.toml` manquant
 

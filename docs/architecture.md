@@ -104,13 +104,15 @@ Etat initial de `gr-characters` :
 
 - `Package.toml` declare un package nanos world de type script avec configuration minimale.
 - `Server/CharacterPlayerRepository.lua` prepare la lecture server-only de la table `players` via `players.platform_id`.
-- `Server/CharacterPlayerService.lua` prepare la resolution de l'identifiant stable nanos world, le chargement asynchrone d'une ligne `players` existante et l'etat memoire si la ligne manque encore.
+- `Server/CharacterPlayerService.lua` prepare la resolution de l'identifiant stable nanos world, le chargement asynchrone d'une ligne `players`, sa creation minimale si necessaire et l'etat memoire associe.
 - `Server/CharacterRepository.lua` prepare les acces serveur a la table `characters` pour le listing par joueur, la creation de personnage, la validation de selection et la mise a jour de `position_x`, `position_y`, `position_z`.
 - `Server/CharacterCreationService.lua` centralise la validation stricte des champs autorises a la creation et interdit tout champ sensible venu du client.
 - `Server/CharacterSelectionService.lua` prepare le chargement de la liste des personnages d'un joueur, verifie l'ownership du `character_id` demande et conserve le personnage actif cible uniquement en memoire serveur transitoire.
+- `Server/CharacterDevTool.lua` reserve la creation d'un personnage minimal au dev/local/test explicite.
+- `Server/CharacterFlowService.lua` orchestre le premier flux observable `Player.Ready -> player row -> character list -> active character en memoire`.
 - `Server/CharacterPositionService.lua` prepare la sauvegarde autoritative de la position du personnage actif, la cadence lente d'auto-save, l'anti-spam DB et le fallback futur `position persistante -> spawn point de map`.
 - `Server/CharacterService.lua` orchestre ces flux serveur et sert de facade pour le chargement player, la creation, la selection et la preparation de sauvegarde de position.
-- `Server/Index.lua` charge le package, instancie tous les services serveur, s'abonne au cycle `Player.Subscribe("Spawn")` et `Player.Subscribe("Destroy")`, puis prepare le chargement de session joueur, la liste de personnages et la sauvegarde finale de position.
+- `Server/Index.lua` charge le package, instancie tous les services serveur, s'abonne au cycle `Player.Subscribe("Ready")` et `Player.Subscribe("Destroy")`, puis prepare le chargement de session joueur, la liste de personnages, la selection memoire et la sauvegarde finale de position.
 - `Shared/Index.lua` limite le partage a des constantes et noms d'evenements non sensibles.
 - `Client/Index.lua` se limite a un log de chargement et rappelle qu'aucune logique autoritative personnage n'est exposee cote client.
 - aucune UI complete de selection, aucun spawn final complet, aucun Datapad complet ni gameplay RP complet n'est encore implementee dans ce lot.

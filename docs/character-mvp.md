@@ -146,6 +146,8 @@ Les fichiers reels presents dans `server/Packages/gr-characters/Server/` sont :
 - `CharacterPlayerRepository.lua`
 - `CharacterPlayerService.lua`
 - `CharacterCreationService.lua`
+- `CharacterDevTool.lua`
+- `CharacterFlowService.lua`
 - `CharacterSelectionService.lua`
 - `CharacterPositionService.lua`
 - `CharacterRepository.lua`
@@ -158,7 +160,7 @@ Les fichiers reels presents dans `server/Packages/gr-characters/Server/` sont :
 
 - lit la table `players` par `players.platform_id`
 - normalise la ligne retournee
-- peut inserer une ligne `players` minimale cote serveur pour le dev/local/test a partir de `platform_id` et `username`
+- peut inserer une ligne `players` minimale cote serveur a partir de `platform_id` et `username`
 
 #### `CharacterPlayerService.lua`
 
@@ -166,7 +168,22 @@ Les fichiers reels presents dans `server/Packages/gr-characters/Server/` sont :
 - resout le nom observe avec `Player:GetName()`
 - maintient l'etat memoire `resolving_player`, `player-row-loaded`, `player-row-missing` ou `blocked`
 - conserve en memoire la `player row` chargee par `platform_id`
-- expose aussi un chargement et une creation controles par `platform_id` pour l'outil serveur dev/local/test
+- expose aussi un chargement et une creation controles par `platform_id` pour le flux joueur serveur et l'outil dev/local/test
+
+#### `CharacterDevTool.lua`
+
+- reserve la creation d'un personnage minimal au dev/local/test explicite
+- ne s'active qu'avec `gr_characters_dev_tools_enabled = "true"`
+- peut creer un personnage de test minimal puis recharger la liste et selectionner un personnage actif en memoire
+
+#### `CharacterFlowService.lua`
+
+- orchestre le premier flux observable `Player.Ready -> players -> characters -> active_character`
+- cree la ligne `players` si elle n'existe pas encore
+- charge la liste des personnages pour `players.id`
+- selectionne automatiquement le premier personnage retourne par la DB selon l'ordre stable du repository
+- journalise proprement le cas "aucun personnage" sans spawn ni possession
+- peut deleguer au dev tool la creation d'un personnage de test uniquement si le mode dev/local/test est explicitement actif
 
 #### `CharacterRepository.lua`
 
@@ -211,9 +228,9 @@ Les fichiers reels presents dans `server/Packages/gr-characters/Server/` sont :
 - charge les fichiers serveur via `Package.Require(...)`
 - recupere `GRDatabase.Server.Service` si `gr-database` est charge
 - instancie repositories et services
-- s'abonne a `Player.Subscribe("Spawn")` pour charger la session joueur
+- s'abonne a `Player.Subscribe("Ready")` pour lancer le premier flux serveur joueur -> personnage actif observable
 - s'abonne a `Player.Subscribe("Destroy")` pour nettoyer la session et tenter une sauvegarde finale de position
-- s'abonne a `Package.Subscribe("Load")` et `Package.Subscribe("Unload")` pour demarrer et arreter l'auto-save
+- s'abonne a `Package.Subscribe("Load")` et `Package.Subscribe("Unload")` pour demarrer et arreter l'auto-save, puis reconciler les joueurs deja connectes
 
 ## Dependances de package
 
@@ -260,7 +277,7 @@ Selon la documentation nanos world :
 
 Conception MVP :
 
-1. `gr-characters` doit reagir a l'arrivee du `Player`.
+1. `gr-characters` doit reagir a l'evenement serveur `Player.Ready` pour un joueur reellement connecte et charge.
 2. Tant qu'aucun personnage actif n'est valide, le joueur ne doit pas recevoir de personnage gameplay.
 3. Le joueur peut voir une UI de chargement, de creation ou de selection, mais il ne doit pas pouvoir jouer.
 
@@ -304,10 +321,9 @@ Si une ligne `players` existe deja pour ce `platform_id` :
 Si aucune ligne `players` n'existe pour ce `platform_id` :
 
 1. le scaffold serveur considere l'etat comme `player-row-missing`
-2. le flux produit principal de creation de la ligne `players` reste distinct du vrai parcours joueur final
-3. un outil serveur dev/local/test peut toutefois creer une ligne minimale controlee pour valider le Character MVP sans UI complete
-4. hors outil dev/local/test, aucune etape de chargement des personnages ne doit commencer tant que cette ligne n'existe pas
-5. l'action future attendue reste la creation d'une ligne initiale avec `platform_id`, `username`, `first_join_at` et `last_join_at`
+2. le premier flux joueur serveur peut maintenant creer la ligne `players` minimale a partir de `platform_id` et `username`
+3. cette creation ne doit pas accorder de gameplay ni supposer qu'un personnage existe deja
+4. une fois la ligne creee, le flux peut poursuivre le chargement de la liste `characters`
 
 Regle cle :
 
@@ -329,7 +345,7 @@ Si la liste de personnages n'est pas vide :
 
 Politique MVP retenue :
 
-- meme si un seul personnage existe, la session passe par une selection explicite
+- si un ou plusieurs personnages existent deja, le serveur selectionne automatiquement le premier personnage selon l'ordre stable `ORDER BY created_at ASC, id ASC`
 - cette decision evite d'inventer un mecanisme de "dernier personnage actif" absent du schema actuel
 
 #### Cas D : le joueur n'a encore aucun personnage
@@ -340,6 +356,7 @@ Si la liste est vide :
 2. le client peut afficher un ecran de creation
 3. aucun personnage n'est encore actif
 4. aucun spawn gameplay n'a encore lieu
+5. si le mode dev/local/test est explicitement actif, le dev tool peut creer un personnage minimal de test comme fallback local
 
 Regle cle :
 
@@ -400,9 +417,9 @@ Regles MVP :
 
 Scaffold serveur retenu pour l'issue #25 :
 
-- le chargement du `player row` reussi declenche ensuite le chargement asynchrone de la liste `characters` associee a `players.id`
+- le chargement ou la creation du `player row` reussi declenche ensuite le chargement asynchrone de la liste `characters` associee a `players.id`
 - si aucun personnage valide n'est liste, la session passe a `waiting_character_creation`
-- si un ou plusieurs personnages valides sont listes, la session passe a `waiting_character_selection`
+- si un ou plusieurs personnages valides sont listes, la session passe a `waiting_character_selection` puis peut etre auto-selectionnee en memoire dans le premier flux serveur observable
 - la liste preparee cote serveur ne contient que les champs utiles a l'identite de selection : `id`, `player_id`, `first_name`, `last_name`, `age`, `species`, `biography`, `created_at`, `updated_at`
 - la selection d'un `character_id` repasse par une lecture serveur de la ligne cible avant de memoriser la session
 - si la ligne a disparu entre le listing et la selection, le resultat doit etre `character-unavailable`
@@ -513,15 +530,15 @@ Ces regles s'appliquent a tout le cycle MVP Character :
 
 Le flux technique actuellement documente et prepare dans le depot est le suivant :
 
-1. `Player.Subscribe("Spawn")` dans `gr-characters/Server/Index.lua` declenche `CharacterService:LoadPlayerSession(player)`.
-2. `CharacterPlayerService` resout `platform_id` et `observed_username`, puis demande a `CharacterPlayerRepository` de lire `players.platform_id`.
-3. Si aucune ligne `players` n'existe encore, la session reste dans un etat `player-row-missing` prepare pour une future creation de ligne.
-4. Si la ligne `players` existe, `CharacterSelectionService:LoadCharactersForPlayer(...)` charge la liste `characters` du `players.id`.
-5. Sans personnage valide, l'etat memoire passe a `waiting_character_creation`.
-6. Avec un ou plusieurs personnages valides, l'etat memoire passe a `waiting_character_selection`.
-7. Une future intention client de creation devra passer par `CharacterCreationService`, qui valide le payload puis delegue l'insertion a `CharacterRepository`.
-8. En dev/local/test uniquement, un outil serveur dedie peut creer une `player row`, creer un personnage minimal, recharger la liste et selectionner un personnage actif en memoire sans UI complete.
-9. Une future intention client de selection devra passer par `CharacterSelectionService`, qui relit la ligne serveur, verifie l'ownership et memorise un `active_character_id` de session.
+1. `Player.Subscribe("Ready")` dans `gr-characters/Server/Index.lua` declenche le premier flux serveur observable pour un joueur reellement charge.
+2. `CharacterFlowService` resout `platform_id` et un `observed_username` serveur, puis demande a `CharacterPlayerRepository` de lire `players.platform_id`.
+3. Si aucune ligne `players` n'existe encore, `CharacterPlayerService` peut la creer cote serveur avant de poursuivre.
+4. Une fois la ligne `players` disponible, `CharacterSelectionService:LoadCharactersForPlayer(...)` charge la liste `characters` du `players.id`.
+5. Sans personnage valide, l'etat memoire passe a `waiting_character_creation` et le serveur journalise qu'une future UI de creation sera necessaire.
+6. En dev/local/test uniquement, le dev tool peut alors creer un personnage minimal, recharger la liste et selectionner un personnage actif en memoire comme fallback explicite.
+7. Avec un ou plusieurs personnages valides, la liste reste ordonnee cote DB et le serveur selectionne automatiquement le premier personnage en memoire.
+8. Une future intention client de creation devra toujours passer par `CharacterCreationService`, qui valide le payload puis delegue l'insertion a `CharacterRepository`.
+9. Une future intention client de selection devra toujours repasser par `CharacterSelectionService`, qui relit la ligne serveur, verifie l'ownership et memorise un `active_character_id` de session.
 10. Le spawn final n'est pas encore active, mais `CharacterPositionService` prepare deja la resolution `position persistante -> spawn point de map`.
 11. Une fois le personnage gameplay reellement actif dans une future issue, `CharacterPositionService` est deja prepare pour sauvegarder sa position cote serveur avec une cadence lente et des garde-fous anti-spam DB.
 
