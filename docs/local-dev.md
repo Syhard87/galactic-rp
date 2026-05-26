@@ -216,6 +216,30 @@ map = "default-blank-map"
 
 ou conserver votre map locale deja validee si elle ne bloque pas le smoke test.
 
+### Custom settings PostgreSQL pour `gr-database`
+
+Le package `gr-database` lit sa configuration locale via `Server.GetCustomSettings()` a partir de la section `[custom_settings]` du vrai `Config.toml` du serveur nanos world local.
+
+Exemple local minimal :
+
+```toml
+[custom_settings]
+gr_database_host = "127.0.0.1"
+gr_database_port = "5432"
+gr_database_name = "galactic_rp"
+gr_database_user = "galactic"
+gr_database_password = "change-me-local-only"
+gr_database_auto_connect = "false"
+```
+
+Notes importantes :
+
+- ne pas versionner ce `Config.toml` local
+- ne pas reutiliser un vrai secret dans le depot
+- adapter `gr_database_name`, `gr_database_user` et `gr_database_password` a votre instance locale
+- `docker/.env.example` reste la reference locale pour les valeurs Docker par defaut
+- le log de `gr-database` ne doit jamais afficher `gr_database_password`, uniquement `has_password=true|false`
+
 ## Procedure smoke test local Character MVP `#41`
 
 ### 1. Preparer la base locale
@@ -246,7 +270,7 @@ Le depot ne versionne pas encore de script de lancement nanos world. Le chemin e
 Les logs suivants sont attendus ou probables au demarrage si les packages sont bien charges :
 
 - `[gr_core][server] Core package loaded.`
-- `[gr_database][config] Loaded source=... engine=postgresql host=127.0.0.1 port=5432 dbname=galactic_rp user=galactic has_password=true|false auto_connect=false`
+- `[gr_database][config] Loaded source=custom-settings|safe-defaults engine=postgresql host=127.0.0.1 port=5432 database=galactic_rp user=galactic has_password=true|false auto_connect=false`
 - `[gr_database][server] Database package loaded.`
 - `[gr_database][server] Sensitive database logic remains server-only.`
 - `[gr_database][server] No automatic PostgreSQL connection is attempted at package load.`

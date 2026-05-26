@@ -75,22 +75,22 @@ A task is done only if:
 
 Use a modular monolith architecture with nanos world packages:
 
-- `gr_core`
-- `gr_database`
-- `gr_characters`
-- `gr_progression`
-- `gr_skills`
-- `gr_inventory`
-- `gr_crafting`
-- `gr_quests`
-- `gr_factions`
-- `gr_reputation`
-- `gr_contracts`
-- `gr_chat`
-- `gr_voip`
-- `gr_admin`
-- `gr_hud`
-- `gr_datapad`
+- `gr-core`
+- `gr-database`
+- `gr-characters`
+- `gr-progression`
+- `gr-skills`
+- `gr-inventory`
+- `gr-crafting`
+- `gr-quests`
+- `gr-factions`
+- `gr-reputation`
+- `gr-contracts`
+- `gr-chat`
+- `gr-voip`
+- `gr-admin`
+- `gr-hud`
+- `gr-datapad`
 
 Each package should separate:
 - `Server/`
