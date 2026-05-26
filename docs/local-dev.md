@@ -270,12 +270,240 @@ Depuis le dossier local du serveur nanos world :
 
 Le depot ne versionne pas encore de script de lancement nanos world. Le chemin exact d'installation reste donc un TODO local a documenter dans votre environnement.
 
+## Procedure QA runtime locale complete issue `#49`
+
+Cette procedure consolide les validations runtime locales preparees par les issues `#45`, `#46`, `#47` et `#48`.
+
+Objectif :
+
+- verifier la lecture des `custom_settings`
+- verifier la connexion PostgreSQL reelle
+- verifier le smoke test `SELECT 1`
+- verifier le flux `player -> player DB -> characters -> active character`
+- verifier qu'aucun password n'apparait jamais dans les logs
+
+Important :
+
+- cette procedure ne commit jamais le vrai `Config.toml`
+- cette procedure ne prouve pas une mise en production
+- cette procedure ne valide pas encore le spawn final, `player:Possess(...)`, l'inventaire, les factions ou le gameplay RPG
+
+### Checklist QA
+
+- [ ] Docker Desktop ou moteur Compose operationnel
+- [ ] `docker/.env.example` verifie
+- [ ] PostgreSQL demarre et passe `healthy`
+- [ ] migration `database/migrations/001_init.sql` appliquee
+- [ ] vrai `Config.toml` local prepare sans secret reel committe
+- [ ] packages `gr-core`, `gr-database`, `gr-characters` listes dans le vrai serveur nanos world local
+- [ ] `gr-database` lit les `custom_settings`
+- [ ] `gr-database` confirme `has_password=true` et `auto_connect=true`
+- [ ] connexion PostgreSQL reelle OK
+- [ ] `SELECT 1` OK
+- [ ] joueur local connecte
+- [ ] `platform_id` resolu cote serveur
+- [ ] `player DB` charge ou cree
+- [ ] `characters count` visible dans les logs
+- [ ] `active character` selectionne si possible
+- [ ] aucun password PostgreSQL dans les logs
+
+### 1. Demarrer PostgreSQL
+
+Commande principale :
+
+```powershell
+docker compose --env-file docker/.env.example -f docker/docker-compose.yml up -d
+```
+
+Verification recommandee :
+
+```powershell
+docker compose --env-file docker/.env.example -f docker/docker-compose.yml ps
+```
+
+Attendu :
+
+- le service `postgres` doit etre `healthy`
+- le service `pgadmin` doit etre demarre
+
+### 2. Appliquer la migration initiale
+
+Commande :
+
+```powershell
+docker compose --env-file docker/.env.example -f docker/docker-compose.yml exec -T postgres psql -U galactic -d galactic_rp -f /workspace/database/migrations/001_init.sql
+```
+
+Verification recommandee :
+
+- pas d'erreur SQL fatale
+- les tables `players`, `characters` et `character_skills` existent
+
+### 3. Preparer le vrai `Config.toml` local
+
+Le depot ne versionne aucun `server/Config.example.toml` et le vrai `Config.toml` du serveur nanos world local doit rester hors Git.
+
+Exemple minimal de `custom_settings` pour le smoke test runtime :
+
+```toml
+[custom_settings]
+gr_database_host = "127.0.0.1"
+gr_database_port = "5432"
+gr_database_name = "galactic_rp"
+gr_database_user = "galactic"
+gr_database_password = "change-me-local-only"
+gr_database_auto_connect = "true"
+gr_characters_dev_tools_enabled = "true"
+```
+
+Notes :
+
+- `gr_database_password` ci-dessus est un exemple local uniquement
+- ne jamais commiter de vrai secret
+- mettre `gr_characters_dev_tools_enabled = "false"` pour le cas nominal sans fallback dev
+- remettre `gr_characters_dev_tools_enabled = "true"` seulement pour tester le fallback local de creation de personnage de test
+
+### 4. Demarrer le serveur nanos world local
+
+Verifier dans le vrai `Config.toml` local :
+
+```toml
+packages = [
+  "gr-core",
+  "gr-database",
+  "gr-characters",
+]
+```
+
+Puis lancer le vrai serveur nanos world local avec votre binaire ou script local documente.
+
+Attendu :
+
+- pas de crash Lua fatal au demarrage
+- pas d'erreur `Package.Require`
+- pas d'erreur de dependance `gr-database`
+
+### 5. Verifier les logs de demarrage
+
+Logs `gr-database` attendus ou proches :
+
+- `[gr_database][config] Loaded source=custom-settings|safe-defaults engine=postgresql host=127.0.0.1 port=5432 dbname=galactic_rp user=galactic has_password=true|false auto_connect=true|false`
+- `[gr_database][server] PostgreSQL auto_connect=true, attempting connection...`
+- `[gr_database][server] PostgreSQL connection successful.`
+- `[gr_database][server] PostgreSQL smoke test SELECT 1 OK. Result=1.`
+
+Logs `gr-characters` attendus ou proches :
+
+- `[gr_characters][server] Characters package loaded.`
+- `[gr_characters][server] Player-ready flow is server-only and uses players.platform_id lookup plus in-memory active character selection.`
+- `[gr_characters][server][dev] Character dev tool disabled.` ou `Character dev tool enabled.`
+
+Verification securite obligatoire :
+
+- le mot de passe PostgreSQL ne doit jamais apparaitre
+- seul `has_password=true` ou `has_password=false` est acceptable
+
+### 6. Connecter un joueur localement
+
+Une fois le serveur pret :
+
+1. connecter un joueur localement
+2. attendre l'evenement serveur `Player.Ready`
+3. observer les logs `gr_characters`
+
+Logs attendus ou proches :
+
+- `[gr_characters][server] Player connected.`
+- `[gr_characters][server] Resolved platform_id=...`
+- `[gr_characters][server] Player DB loaded id=...` ou `[gr_characters][server] Player DB created id=...`
+- `[gr_characters][server] Characters found count=...`
+
+### 7. Verifier le flux Character MVP
+
+Cas A : le joueur a deja au moins un personnage
+
+Attendu :
+
+- le premier personnage retourne par la DB est selectionne
+- le tri doit etre stable cote SQL
+- les logs montrent :
+
+```text
+[gr_characters][server] Active character selected id=...
+[gr_characters][server] Active character stored for player.
+```
+
+Cas B : le joueur n'a aucun personnage et le mode dev est desactive
+
+Attendu :
+
+```text
+[gr_characters][server] Characters found count=0.
+[gr_characters][server] No active character selected. Character creation UI will be required later.
+```
+
+Cas C : le joueur n'a aucun personnage et le mode dev est active explicitement
+
+Attendu :
+
+```text
+[gr_characters][server][dev] Character dev fallback enabled for platform_id=...
+[gr_characters][server][dev] Test character created id=...
+[gr_characters][server][dev] Active character selected id=...
+[gr_characters][server][dev] Active character stored in memory.
+```
+
+### 8. Cas d'erreur a verifier
+
+Docker ou PostgreSQL bloques :
+
+- relancer `docker compose ... ps`
+- suivre `docker compose --env-file docker/.env.example -f docker/docker-compose.yml logs -f postgres`
+- verifier que `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` et `POSTGRES_PORT` correspondent bien a `docker/.env.example`
+
+Connexion DB en echec :
+
+- verifier `gr_database_auto_connect = "true"`
+- verifier les `custom_settings` `gr_database_*`
+- verifier que PostgreSQL ecoute bien sur `127.0.0.1:5432`
+- verifier que la migration a bien ete appliquee
+
+Serveur nanos world bloque :
+
+- verifier que le vrai dossier `Packages/` contient bien `gr-core`, `gr-database`, `gr-characters`
+- verifier que `Config.toml` liste bien ces packages
+- verifier que le serveur a bien genere puis recharge le vrai `Config.toml`
+- verifier les erreurs `Package.Require`, dependances ou crash Lua dans la console serveur
+
+Flux joueur bloque :
+
+- verifier que l'evenement `Player.Ready` se produit bien dans votre build locale
+- verifier qu'un `platform_id` est resolu
+- verifier les logs `player-service`, `player-repository` et `selection-service`
+- si aucun personnage n'existe et que le mode dev est desactive, le log d'absence de personnage est le resultat attendu
+
+### 9. Limites connues du smoke test runtime
+
+Ce smoke test ne valide toujours pas :
+
+- le spawn final du personnage gameplay
+- `player:Possess(...)`
+- une UI complete de creation de personnage
+- une UI complete de selection
+- le Datapad
+- l'inventaire, les factions, la progression ou le gameplay RPG complet
+
+Lecture correcte du resultat :
+
+- si les logs DB et Character attendus apparaissent sans crash ni fuite de password, le socle runtime local du Character MVP est valide
+- cela ne signifie pas que l'experience joueur complete est terminee
+
 ## Logs attendus au demarrage
 
 Les logs suivants sont attendus ou probables au demarrage si les packages sont bien charges :
 
 - `[gr_core][server] Core package loaded.`
-- `[gr_database][config] Loaded source=custom-settings|safe-defaults engine=postgresql host=127.0.0.1 port=5432 database=galactic_rp user=galactic has_password=true|false auto_connect=true|false`
+- `[gr_database][config] Loaded source=custom-settings|safe-defaults engine=postgresql host=127.0.0.1 port=5432 dbname=galactic_rp user=galactic has_password=true|false auto_connect=true|false`
 - `[gr_database][server] PostgreSQL auto_connect=true, attempting connection...`
 - `[gr_database][server] PostgreSQL connection successful.`
 - `[gr_database][server] PostgreSQL smoke test SELECT 1 OK. Result=1.`
