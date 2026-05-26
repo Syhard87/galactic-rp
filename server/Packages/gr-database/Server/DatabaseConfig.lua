@@ -26,30 +26,121 @@ local function copy_table(source)
     return destination
 end
 
-local function normalize_optional_string(value)
+local function trim_string(value)
     if type(value) ~= "string" then
         return nil
     end
 
-    if value == "" then
+    local trimmed_value = value:match("^%s*(.-)%s*$")
+
+    if trimmed_value == "" then
         return nil
     end
 
-    return value
+    return trimmed_value
+end
+
+local function normalize_optional_string(value)
+    return trim_string(value)
 end
 
 local function normalize_positive_integer(value, fallback)
-    if type(value) ~= "number" then
+    local numeric_value = value
+
+    if type(numeric_value) == "string" then
+        numeric_value = tonumber(trim_string(numeric_value))
+    end
+
+    if type(numeric_value) ~= "number" then
         return fallback
     end
 
-    local integer_value = math.floor(value)
+    local integer_value = math.floor(numeric_value)
 
     if integer_value <= 0 then
         return fallback
     end
 
     return integer_value
+end
+
+local function normalize_boolean(value, fallback)
+    if type(value) == "boolean" then
+        return value
+    end
+
+    local string_value = trim_string(value)
+
+    if string_value == nil then
+        return fallback
+    end
+
+    local lowered_value = string.lower(string_value)
+
+    if lowered_value == "true" or lowered_value == "1" or lowered_value == "yes" or lowered_value == "on" then
+        return true
+    end
+
+    if lowered_value == "false" or lowered_value == "0" or lowered_value == "no" or lowered_value == "off" then
+        return false
+    end
+
+    return fallback
+end
+
+local function read_server_custom_settings()
+    if type(Server) ~= "table" or type(Server.GetCustomSettings) ~= "function" then
+        return {}
+    end
+
+    local custom_settings = Server.GetCustomSettings()
+
+    if type(custom_settings) ~= "table" then
+        return {}
+    end
+
+    return custom_settings
+end
+
+local function has_custom_database_settings(custom_settings)
+    if type(custom_settings) ~= "table" then
+        return false
+    end
+
+    return custom_settings.gr_database_host ~= nil
+        or custom_settings.gr_database_port ~= nil
+        or custom_settings.gr_database_name ~= nil
+        or custom_settings.gr_database_user ~= nil
+        or custom_settings.gr_database_password ~= nil
+        or custom_settings.gr_database_auto_connect ~= nil
+end
+
+local function map_custom_settings_to_source(custom_settings)
+    if not has_custom_database_settings(custom_settings) then
+        return nil
+    end
+
+    return {
+        host = custom_settings.gr_database_host,
+        port = custom_settings.gr_database_port,
+        dbname = custom_settings.gr_database_name,
+        user = custom_settings.gr_database_user,
+        password = custom_settings.gr_database_password,
+        auto_connect = custom_settings.gr_database_auto_connect,
+        source_label = "custom-settings",
+    }
+end
+
+local function merge_table(destination, source)
+    if type(destination) ~= "table" or type(source) ~= "table" then
+        return destination
+    end
+
+    for key, value in pairs(source) do
+        destination[key] = value
+    end
+
+    return destination
 end
 
 function DatabaseConfig.BuildConnectionString(config)
@@ -69,12 +160,12 @@ function DatabaseConfig.BuildConnectionString(config)
 end
 
 function DatabaseConfig.Read(raw_config)
-    -- This bootstrap does not parse a real .env file and does not hardcode any
-    -- password. A future infra bridge can inject external configuration here.
-    local source = raw_config
+    -- Read runtime custom settings from nanos world first, then allow an
+    -- explicit table argument to override or extend that source when needed.
+    local source = map_custom_settings_to_source(read_server_custom_settings()) or {}
 
-    if type(source) ~= "table" then
-        source = {}
+    if type(raw_config) == "table" then
+        source = merge_table(source, raw_config)
     end
 
     local config = copy_table(DEFAULTS)
@@ -87,7 +178,7 @@ function DatabaseConfig.Read(raw_config)
     config.password = normalize_optional_string(source.password)
     config.connect_timeout = normalize_positive_integer(source.connect_timeout, config.connect_timeout)
     config.pool_size = normalize_positive_integer(source.pool_size, config.pool_size)
-    config.auto_connect = source.auto_connect == true
+    config.auto_connect = normalize_boolean(source.auto_connect, config.auto_connect)
     config.source_label = normalize_optional_string(source.source_label) or config.source_label
     config.connection_string = DatabaseConfig.BuildConnectionString(config)
 
