@@ -14,6 +14,189 @@ local SELECT_PLAYERS_SMOKE_TEST_QUERY = [[
     LIMIT 1
 ]]
 
+local function normalize_connection_error(error)
+    if type(error) ~= "string" or error == "" then
+        return "database-connection-failed"
+    end
+
+    if string.find(error, "database-", 1, true) == 1 or string.find(error, "postgresql-", 1, true) == 1 then
+        return error
+    end
+
+    local lowered_error = string.lower(error)
+
+    if string.find(lowered_error, "password authentication failed", 1, true) ~= nil
+        or string.find(lowered_error, "authentification par mot de passe", 1, true) ~= nil
+        or string.find(lowered_error, "authentication failed", 1, true) ~= nil
+    then
+        return "database-authentication-failed"
+    end
+
+    return "database-connection-failed"
+end
+
+local function escape_lua_pattern(value)
+    return (value:gsub("([^%w])", "%%%1"))
+end
+
+local function sanitize_database_error(error, password)
+    if type(error) ~= "string" or error == "" then
+        return nil
+    end
+
+    local sanitized_error = error
+
+    sanitized_error = sanitized_error:gsub("password%s*=%s*[^%s]+", "password=***")
+    sanitized_error = sanitized_error:gsub("pass%s*=%s*[^%s]+", "pass=***")
+
+    if type(password) == "string" and password ~= "" then
+        sanitized_error = sanitized_error:gsub(escape_lua_pattern(password), "***")
+    end
+
+    return sanitized_error
+end
+
+local function trim_string(value)
+    if type(value) ~= "string" then
+        return nil
+    end
+
+    local trimmed_value = value:match("^%s*(.-)%s*$")
+
+    if trimmed_value == "" then
+        return nil
+    end
+
+    return trimmed_value
+end
+
+local function quote_postgresql_conninfo_value(value)
+    local normalized_value = trim_string(tostring(value))
+
+    if normalized_value == nil then
+        return nil
+    end
+
+    normalized_value = normalized_value:gsub("\\", "\\\\")
+    normalized_value = normalized_value:gsub("'", "\\'")
+
+    return "'" .. normalized_value .. "'"
+end
+
+local function is_ipv4_address(value)
+    if type(value) ~= "string" then
+        return false
+    end
+
+    return string.match(value, "^%d+%.%d+%.%d+%.%d+$") ~= nil
+end
+
+local function build_keyword_connection_string(config, include_hostaddr)
+    local connection_parts = {}
+
+    local function add_part(key, raw_value)
+        local quoted_value = quote_postgresql_conninfo_value(raw_value)
+
+        if quoted_value ~= nil then
+            connection_parts[#connection_parts + 1] = key .. "=" .. quoted_value
+        end
+    end
+
+    add_part("host", config.host)
+
+    if include_hostaddr and is_ipv4_address(config.host) then
+        add_part("hostaddr", config.host)
+    end
+
+    add_part("port", config.port)
+    add_part("dbname", config.dbname)
+    add_part("user", config.user)
+    add_part("password", config.password)
+    add_part("connect_timeout", config.connect_timeout)
+
+    return table.concat(connection_parts, " ")
+end
+
+local function build_connection_string_candidates(config)
+    local candidates = {}
+    local seen = {}
+
+    local function add_candidate(value)
+        if type(value) ~= "string" or value == "" then
+            return
+        end
+
+        if seen[value] == true then
+            return
+        end
+
+        seen[value] = true
+        candidates[#candidates + 1] = value
+    end
+
+    add_candidate(build_keyword_connection_string(config, true))
+    add_candidate(build_keyword_connection_string(config, false))
+    add_candidate(config.connection_string)
+
+    return candidates
+end
+
+local function resolve_database_constructor()
+    local runtime_type = type(Database)
+
+    if runtime_type == "function" or runtime_type == "table" or runtime_type == "userdata" then
+        return Database, runtime_type
+    end
+
+    return nil, runtime_type
+end
+
+local function is_database_entity_valid(database)
+    if database == nil then
+        return false
+    end
+
+    if type(database.IsValid) ~= "function" then
+        return true
+    end
+
+    local is_called, is_valid = pcall(database.IsValid, database)
+
+    if not is_called then
+        return false
+    end
+
+    return is_valid == true
+end
+
+local function is_database_connection_usable(database)
+    if not is_database_entity_valid(database) then
+        return false
+    end
+
+    if type(database.SelectAsync) ~= "function" then
+        return false
+    end
+
+    if type(database.ExecuteAsync) ~= "function" then
+        return false
+    end
+
+    return true
+end
+
+local function close_database_if_possible(database)
+    if not is_database_entity_valid(database) then
+        return
+    end
+
+    if type(database.Close) ~= "function" then
+        return
+    end
+
+    pcall(database.Close, database)
+end
+
 function DatabaseService.Create(config)
     local self = setmetatable({}, DatabaseService)
 
@@ -24,29 +207,36 @@ function DatabaseService.Create(config)
 end
 
 function DatabaseService:IsConnected()
-    return self.connection ~= nil
+    return is_database_connection_usable(self.connection)
 end
 
 function DatabaseService:GetConnection()
+    if not is_database_connection_usable(self.connection) then
+        self.connection = nil
+        return nil
+    end
+
     return self.connection
 end
 
-local function normalize_connection_error(error)
-    if type(error) ~= "string" or error == "" then
-        return "database-connection-failed"
-    end
-
-    return error
-end
-
 function DatabaseService:Connect()
-    if self.connection ~= nil then
+    if is_database_connection_usable(self.connection) then
         Console.Log("[gr_database][service] Reusing existing database connection.")
         return true, self.connection
     end
 
-    if type(Database) ~= "function" then
-        Console.Log("[gr_database][service] Database runtime is unavailable. Connection skipped.")
+    if self.connection ~= nil then
+        close_database_if_possible(self.connection)
+        self.connection = nil
+    end
+
+    local database_constructor, database_runtime_type = resolve_database_constructor()
+
+    if database_constructor == nil then
+        Console.Log(
+            "[gr_database][service] Database runtime is unavailable in this build. Global Database type=%s.",
+            tostring(database_runtime_type)
+        )
         return false, "database-runtime-unavailable"
     end
 
@@ -55,46 +245,78 @@ function DatabaseService:Connect()
         return false, "postgresql-engine-unavailable"
     end
 
-    if self.config == nil or self.config.connection_string == nil then
+    if type(self.config) ~= "table" then
         Console.Log("[gr_database][service] Missing normalized database config. Connection skipped.")
         return false, "database-config-missing"
     end
 
-    Console.Log(
-        "[gr_database][service] Creating PostgreSQL connection with pool_size=%s.",
-        tostring(self.config.pool_size)
-    )
+    local connection_string_candidates = build_connection_string_candidates(self.config)
 
-    -- Future repository code will call this service. The nanos world Database
-    -- class is intentionally instantiated only on demand, never at package load.
-    local database = Database(
-        DatabaseEngine.PostgreSQL,
-        self.config.connection_string,
-        self.config.pool_size
-    )
-
-    if database == nil then
-        Console.Log("[gr_database][service] Database connection failed or PostgreSQL is not reachable.")
-        return false, "database-connection-failed"
+    if connection_string_candidates[1] == nil then
+        Console.Log("[gr_database][service] No PostgreSQL connection string candidate could be built from the config.")
+        return false, "database-config-missing"
     end
 
-    self.connection = database
+    Console.Log(
+        "[gr_database][service] Creating PostgreSQL connection with pool_size=%s using Database runtime type=%s.",
+        tostring(self.config.pool_size),
+        tostring(database_runtime_type)
+    )
 
-    Console.Log("[gr_database][service] Database connection created successfully.")
+    local last_error = nil
 
-    return true, self.connection
+    for candidate_index, connection_string in ipairs(connection_string_candidates) do
+        local function construct_database()
+            return database_constructor(
+                DatabaseEngine.PostgreSQL,
+                connection_string,
+                self.config.pool_size
+            )
+        end
+
+        local is_constructed, database_or_error = pcall(construct_database)
+
+        if not is_constructed then
+            last_error = sanitize_database_error(database_or_error, self.config.password) or "database-constructor-failed"
+            Console.Log(
+                "[gr_database][service] PostgreSQL constructor attempt #%s failed: %s",
+                tostring(candidate_index),
+                tostring(last_error)
+            )
+        else
+            local database = database_or_error
+
+            if is_database_connection_usable(database) then
+                self.connection = database
+                Console.Log("[gr_database][service] Database connection created successfully.")
+                return true, self.connection
+            end
+
+            close_database_if_possible(database)
+            last_error = "database-connection-failed"
+            Console.Log(
+                "[gr_database][service] PostgreSQL constructor attempt #%s returned an unusable Database entity.",
+                tostring(candidate_index)
+            )
+        end
+    end
+
+    return false, normalize_connection_error(last_error)
 end
 
 function DatabaseService:RunPlayersSmokeTest()
-    if self.connection == nil then
+    if not is_database_connection_usable(self.connection) then
+        self.connection = nil
         return false, "database-not-connected"
     end
 
     self.connection:SelectAsync(SELECT_PLAYERS_SMOKE_TEST_QUERY, function(rows, error)
         if error ~= nil then
+            local safe_error = sanitize_database_error(tostring(error), self.config.password)
+
             Console.Log(
                 "[gr_database][server] PostgreSQL optional players smoke test failed: %s",
-                tostring(error)
+                tostring(safe_error or "players-smoke-test-failed")
             )
 
             return
@@ -119,15 +341,18 @@ function DatabaseService:RunPlayersSmokeTest()
 end
 
 function DatabaseService:RunSmokeTests()
-    if self.connection == nil then
+    if not is_database_connection_usable(self.connection) then
+        self.connection = nil
         return false, "database-not-connected"
     end
 
     self.connection:SelectAsync(SELECT_ONE_SMOKE_TEST_QUERY, function(rows, error)
         if error ~= nil then
+            local safe_error = sanitize_database_error(tostring(error), self.config.password)
+
             Console.Log(
                 "[gr_database][server] PostgreSQL smoke test SELECT 1 failed: %s",
-                tostring(error)
+                tostring(safe_error or "select-one-smoke-test-failed")
             )
             Console.Log("[gr_database][server] Server continues with database connection available but smoke test failed.")
             return
@@ -154,7 +379,9 @@ function DatabaseService:ConnectAndRunSmokeTests()
     local is_connected, database_or_error = self:Connect()
 
     if not is_connected then
-        local safe_error = normalize_connection_error(database_or_error)
+        local safe_error = normalize_connection_error(
+            sanitize_database_error(database_or_error, self.config and self.config.password) or database_or_error
+        )
 
         Console.Log(
             "[gr_database][server] PostgreSQL connection failed: %s",
@@ -186,7 +413,7 @@ function DatabaseService:Disconnect()
         return false
     end
 
-    self.connection:Close()
+    close_database_if_possible(self.connection)
     self.connection = nil
 
     Console.Log("[gr_database][service] Database connection closed.")
