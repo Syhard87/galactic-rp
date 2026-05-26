@@ -17,7 +17,7 @@ local SELECT_CHARACTERS_BY_PLAYER_ID_QUERY = [[
         updated_at
     FROM characters
     WHERE player_id = :0
-    ORDER BY id ASC
+    ORDER BY created_at ASC, id ASC
 ]]
 
 local SELECT_CHARACTER_BY_ID_QUERY = [[

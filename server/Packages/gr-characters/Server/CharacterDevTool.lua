@@ -350,8 +350,7 @@ function CharacterDevTool:LoadOrCreatePlayer(platform_id, observed_username)
 end
 
 function CharacterDevTool:Run()
-    if not self:IsEnabled() then
-        Console.Log("[gr_characters][server][dev] Character dev tool disabled.")
+    if not self:LogStatus() then
         return false
     end
 
@@ -363,9 +362,18 @@ function CharacterDevTool:Run()
     local platform_id = self:GetPlatformId()
     local observed_username = self:GetObservedUsername()
 
-    Console.Log("[gr_characters][server][dev] Character dev tool enabled.")
     self:LoadOrCreatePlayer(platform_id, observed_username)
 
+    return true
+end
+
+function CharacterDevTool:LogStatus()
+    if not self:IsEnabled() then
+        Console.Log("[gr_characters][server][dev] Character dev tool disabled.")
+        return false
+    end
+
+    Console.Log("[gr_characters][server][dev] Character dev tool enabled.")
     return true
 end
 

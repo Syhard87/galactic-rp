@@ -202,14 +202,14 @@ function CharacterPlayerService:LoadPlayerSessionByPlatformId(platform_id, obser
                 platform_id = platform_id,
                 observed_username = observed_username,
                 next_action = "create-player-row",
-                implementation = "pending",
+                implementation = "available",
             }
 
             self.player_rows_by_platform_id[platform_id] = nil
             self:SetPlayerLoadState(platform_id, missing_state)
 
             Console.Log(
-                "[gr_characters][player-service] No players row currently exists for platform_id=%s. Main player bootstrap remains pending outside the temporary dev/local/test flow.",
+                "[gr_characters][player-service] No players row currently exists for platform_id=%s. Server-side player bootstrap can create it if needed.",
                 tostring(platform_id)
             )
 
@@ -254,7 +254,7 @@ function CharacterPlayerService:CreatePlayerRowByPlatformId(platform_id, observe
     end
 
     Console.Log(
-        "[gr_characters][player-service] Creating players row for platform_id=%s username=%s through server-side dev flow.",
+        "[gr_characters][player-service] Creating players row for platform_id=%s username=%s through server-side bootstrap.",
         tostring(platform_id),
         tostring(observed_username)
     )
