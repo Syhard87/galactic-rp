@@ -6,6 +6,8 @@ CharacterRuntimeSelfTest.__index = CharacterRuntimeSelfTest
 
 local DEFAULT_PLATFORM_ID = "dev-player-001"
 local DEFAULT_USERNAME = "dev_test_operator"
+local MAX_DATABASE_READY_RETRIES = 5
+local DATABASE_READY_RETRY_DELAY_MS = 500
 
 local function trim_string(value)
     if type(value) ~= "string" then
@@ -90,6 +92,7 @@ function CharacterRuntimeSelfTest.Create(database_service, character_service, pl
     self.character_service = character_service
     self.player_service = player_service
     self.custom_settings = read_custom_settings()
+    self.has_started = false
 
     return self
 end
@@ -106,26 +109,96 @@ function CharacterRuntimeSelfTest:GetObservedUsername()
     return trim_string(self.custom_settings.gr_characters_dev_username) or DEFAULT_USERNAME
 end
 
+function CharacterRuntimeSelfTest:ResolveDatabaseService()
+    if self.database_service ~= nil then
+        return self.database_service
+    end
+
+    if GRDatabase ~= nil and GRDatabase.Server ~= nil then
+        self.database_service = GRDatabase.Server.Service
+    end
+
+    return self.database_service
+end
+
+function CharacterRuntimeSelfTest:AttachDatabaseService(database_service)
+    if database_service == nil then
+        return false
+    end
+
+    if self.player_service ~= nil and self.player_service.repository ~= nil then
+        self.player_service.repository.database_service = database_service
+    end
+
+    if self.character_service ~= nil then
+        if self.character_service.repository ~= nil then
+            self.character_service.repository.database_service = database_service
+        end
+
+        if self.character_service.creation_service ~= nil
+            and self.character_service.creation_service.repository ~= nil
+        then
+            self.character_service.creation_service.repository.database_service = database_service
+        end
+
+        if self.character_service.selection_service ~= nil
+            and self.character_service.selection_service.repository ~= nil
+        then
+            self.character_service.selection_service.repository.database_service = database_service
+        end
+
+        if self.character_service.position_service ~= nil
+            and self.character_service.position_service.repository ~= nil
+        then
+            self.character_service.position_service.repository.database_service = database_service
+        end
+    end
+
+    return true
+end
+
 function CharacterRuntimeSelfTest:EnsureDatabaseReady()
-    if self.database_service == nil then
-        Console.Log("[gr_characters][server][self-test] Database service unavailable. Runtime character self-test skipped.")
-        return false
+    local database_service = self:ResolveDatabaseService()
+
+    if database_service == nil then
+        return false, "database-service-missing"
     end
 
-    if type(self.database_service.Connect) ~= "function" then
-        Console.Log("[gr_characters][server][self-test] Database service has no Connect method. Runtime character self-test skipped.")
-        return false
+    if type(database_service.Connect) ~= "function" then
+        return false, "database-service-connect-missing"
     end
 
-    local is_connected, database_or_error = self.database_service:Connect()
+    local is_connected, database_or_error = database_service:Connect()
 
     if not is_connected then
-        Console.Log(
-            "[gr_characters][server][self-test] Database connection unavailable with error=%s. Runtime character self-test skipped.",
-            tostring(database_or_error)
-        )
+        return false, database_or_error
+    end
+
+    self:AttachDatabaseService(database_service)
+
+    return true, database_or_error
+end
+
+function CharacterRuntimeSelfTest:RetryWhenDatabaseNotReady(next_attempt)
+    if next_attempt > MAX_DATABASE_READY_RETRIES then
+        Console.Log("[gr_characters][server][self-test] Database service unavailable after retries. Runtime character self-test skipped.")
         return false
     end
+
+    Console.Log(
+        "[gr_characters][server][self-test] Database service not ready. Retrying attempt=%s/%s.",
+        tostring(next_attempt),
+        tostring(MAX_DATABASE_READY_RETRIES)
+    )
+
+    if Timer == nil or type(Timer.SetTimeout) ~= "function" then
+        Console.Log("[gr_characters][server][self-test] Timer.SetTimeout unavailable. Runtime character self-test skipped.")
+        return false
+    end
+
+    Timer.SetTimeout(function()
+        self:RunAttempt(next_attempt)
+    end, DATABASE_READY_RETRY_DELAY_MS)
 
     return true
 end
@@ -296,15 +369,24 @@ function CharacterRuntimeSelfTest:Run()
 
     Console.Log("[gr_characters][server][self-test] Runtime character self-test enabled.")
 
+    return self:RunAttempt(0)
+end
+
+function CharacterRuntimeSelfTest:RunAttempt(attempt)
+    if self.has_started then
+        return true
+    end
+
     if self.character_service == nil or self.player_service == nil then
         Console.Log("[gr_characters][server][self-test] Required character services unavailable. Runtime character self-test skipped.")
         return false
     end
 
     if not self:EnsureDatabaseReady() then
-        return false
+        return self:RetryWhenDatabaseNotReady((attempt or 0) + 1)
     end
 
+    self.has_started = true
     self:LoadOrCreatePlayer(self:GetPlatformId(), self:GetObservedUsername())
 
     return true
