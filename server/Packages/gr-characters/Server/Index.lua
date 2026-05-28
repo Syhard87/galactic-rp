@@ -9,6 +9,7 @@ local CharacterRepository = Package.Require("CharacterRepository.lua")
 local CharacterService = Package.Require("CharacterService.lua")
 local CharacterDevTool = Package.Require("CharacterDevTool.lua")
 local CharacterFlowService = Package.Require("CharacterFlowService.lua")
+local CharacterRuntimeSelfTest = Package.Require("CharacterRuntimeSelfTest.lua")
 
 GRCharacters = GRCharacters or {}
 GRCharacters.Server = GRCharacters.Server or {}
@@ -47,6 +48,11 @@ GRCharacters.Server.FlowService = CharacterFlowService.Create(
     GRCharacters.Server.Service,
     GRCharacters.Server.PlayerService,
     GRCharacters.Server.DevTool
+)
+GRCharacters.Server.RuntimeSelfTest = CharacterRuntimeSelfTest.Create(
+    database_service,
+    GRCharacters.Server.Service,
+    GRCharacters.Server.PlayerService
 )
 
 local function start_player_character_flow(player, source_label)
@@ -96,6 +102,7 @@ end)
 
 Package.Subscribe("Load", function()
     GRCharacters.Server.Service:StartPositionAutoSave()
+    GRCharacters.Server.RuntimeSelfTest:Run()
 
     for _, player in pairs(Player.GetAll()) do
         start_player_character_flow(player, "package-load-reconcile")
