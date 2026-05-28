@@ -609,12 +609,20 @@ Verifier :
 - l'etat `healthy` du service `postgres`
 - le port expose `5432`
 - les logs `docker compose ... logs postgres`
+- le log `Database runtime type=...` cote `gr-database`
 
 Rappel :
 
 - si `gr_database_auto_connect = "true"`, `gr-database` tente une connexion PostgreSQL au chargement du package
 - si `gr_database_auto_connect = "false"`, aucune connexion automatique n'est tentee
 - en cas d'indisponibilite PostgreSQL, le serveur doit continuer sans crash avec un log d'erreur propre
+
+Diagnostic runtime nanos world :
+
+- si le log affiche `[gr_database][service] Database runtime is unavailable in this build. Global Database type=nil.`, le build serveur local n'expose pas la classe officielle `Database`
+- si le log affiche `[gr_database][service] Creating PostgreSQL connection ... using Database runtime type=table.` puis une connexion reussie, le runtime etait bien disponible mais le garde Lua precedent etait trop strict
+- si nanos world affiche une erreur native `Error when creating connection to Database: ...` puis `The entity will be nullified.`, le package doit traiter cet objet `Database` comme invalide via `:IsValid()` et ne jamais logger un faux succes
+- la doc officielle locale verifiee pour ce package est `scripting-reference/classes/database.mdx`, qui documente `Database(DatabaseEngine.PostgreSQL, connection_string, pool_size)` ainsi que `SelectAsync` et `ExecuteAsync`
 
 ## Procedure de validation PostgreSQL issue `#46`
 
@@ -640,6 +648,16 @@ Ou, si PostgreSQL est indisponible :
 
 - `[gr_database][server] PostgreSQL connection failed: database-connection-failed`
 - `[gr_database][server] Server continues without database connection.`
+
+Ou, si l'authentification est detectable :
+
+- `[gr_database][server] PostgreSQL connection failed: database-authentication-failed`
+- `[gr_database][server] Server continues without database connection.`
+
+Ou, si le build nanos world n'expose pas `Database` :
+
+- `[gr_database][service] Database runtime is unavailable in this build. Global Database type=nil.`
+- `[gr_database][server] PostgreSQL connection failed: database-runtime-unavailable`
 
 ## Procedure de validation Character dev tool issue `#47`
 
