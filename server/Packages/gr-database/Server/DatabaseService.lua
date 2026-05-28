@@ -56,6 +56,54 @@ local function sanitize_database_error(error, password)
     return sanitized_error
 end
 
+local function normalize_conninfo_value(value)
+    if value == nil then
+        return nil
+    end
+
+    if type(value) == "string" then
+        local trimmed_value = value:match("^%s*(.-)%s*$")
+
+        if trimmed_value == "" then
+            return nil
+        end
+
+        return trimmed_value
+    end
+
+    if type(value) == "number" then
+        return tostring(value)
+    end
+
+    return nil
+end
+
+local function build_postgresql_connection_string(config)
+    local connection_parts = {}
+
+    local function add_part(key, raw_value)
+        local normalized_value = normalize_conninfo_value(raw_value)
+
+        if normalized_value == nil then
+            return
+        end
+
+        connection_parts[#connection_parts + 1] = key .. "=" .. normalized_value
+    end
+
+    add_part("host", config.host)
+    add_part("port", config.port)
+    add_part("dbname", config.dbname)
+    add_part("user", config.user)
+    add_part("password", config.password)
+
+    if config.connect_timeout ~= nil then
+        add_part("connect_timeout", config.connect_timeout)
+    end
+
+    return table.concat(connection_parts, " ")
+end
+
 local function resolve_database_constructor()
     local runtime_type = type(Database)
 
@@ -84,28 +132,32 @@ local function is_database_entity_valid(database)
     return is_valid == true
 end
 
-local function get_database_connection_failure_reason(database)
-    if database == nil then
-        return "database-constructor-returned-nil"
-    end
-
+local function is_database_connection_usable(database)
     if not is_database_entity_valid(database) then
-        return "database-entity-nullified"
+        return false
     end
 
     if type(database.SelectAsync) ~= "function" then
-        return "database-selectasync-unavailable"
+        return false
     end
 
     if type(database.ExecuteAsync) ~= "function" then
-        return "database-executeasync-unavailable"
+        return false
     end
 
-    return nil
+    return true
 end
 
-local function is_database_connection_usable(database)
-    return get_database_connection_failure_reason(database) == nil
+local function close_database_if_possible(database)
+    if not is_database_entity_valid(database) then
+        return
+    end
+
+    if type(database.Close) ~= "function" then
+        return
+    end
+
+    pcall(database.Close, database)
 end
 
 function DatabaseService.Create(config)
@@ -137,7 +189,7 @@ function DatabaseService:Connect()
     end
 
     if self.connection ~= nil then
-        Console.Log("[gr_database][service] Discarding cached database connection because it is not usable anymore.")
+        close_database_if_possible(self.connection)
         self.connection = nil
     end
 
@@ -156,13 +208,25 @@ function DatabaseService:Connect()
         return false, "postgresql-engine-unavailable"
     end
 
-    if self.config == nil or self.config.connection_string == nil then
+    if type(self.config) ~= "table" then
         Console.Log("[gr_database][service] Missing normalized database config. Connection skipped.")
         return false, "database-config-missing"
     end
 
+    local connection_string = build_postgresql_connection_string(self.config)
+
+    if connection_string == "" then
+        Console.Log("[gr_database][service] PostgreSQL connection string could not be built from the config.")
+        return false, "database-config-missing"
+    end
+
     Console.Log(
-        "[gr_database][service] Creating PostgreSQL connection with pool_size=%s using Database runtime type=%s.",
+        "[gr_database][service] Creating PostgreSQL connection with host=%s port=%s dbname=%s user=%s has_password=%s pool_size=%s using Database runtime type=%s.",
+        tostring(self.config.host),
+        tostring(self.config.port),
+        tostring(self.config.dbname),
+        tostring(self.config.user),
+        tostring(self.config.password ~= nil),
         tostring(self.config.pool_size),
         tostring(database_runtime_type)
     )
@@ -170,7 +234,7 @@ function DatabaseService:Connect()
     local function construct_database()
         return database_constructor(
             DatabaseEngine.PostgreSQL,
-            self.config.connection_string,
+            connection_string,
             self.config.pool_size
         )
     end
@@ -189,13 +253,9 @@ function DatabaseService:Connect()
     end
 
     local database = database_or_error
-    local unusable_reason = get_database_connection_failure_reason(database)
 
-    if unusable_reason ~= nil then
-        Console.Log(
-            "[gr_database][service] Database connection failed or was nullified by nanos world: %s.",
-            tostring(unusable_reason)
-        )
+    if not is_database_connection_usable(database) then
+        close_database_if_possible(database)
         return false, "database-connection-failed"
     end
 
@@ -315,10 +375,7 @@ function DatabaseService:Disconnect()
         return false
     end
 
-    if type(self.connection.Close) == "function" and is_database_entity_valid(self.connection) then
-        self.connection:Close()
-    end
-
+    close_database_if_possible(self.connection)
     self.connection = nil
 
     Console.Log("[gr_database][service] Database connection closed.")
