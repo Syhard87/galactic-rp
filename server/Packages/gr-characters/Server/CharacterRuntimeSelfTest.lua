@@ -114,9 +114,24 @@ function CharacterRuntimeSelfTest:ResolveDatabaseService()
         return self.database_service
     end
 
-    if GRDatabase ~= nil and GRDatabase.Server ~= nil then
-        self.database_service = GRDatabase.Server.Service
+    if GRDatabaseBridge == nil then
+        Console.Log("[gr_characters][server][self-test] Database bridge unavailable: GRDatabaseBridge is nil.")
+        return nil
     end
+
+    if type(GRDatabaseBridge.GetService) ~= "function" then
+        Console.Log("[gr_characters][server][self-test] Database bridge invalid: GetService is missing.")
+        return nil
+    end
+
+    self.database_service = GRDatabaseBridge.GetService()
+
+    if self.database_service == nil then
+        Console.Log("[gr_characters][server][self-test] Database bridge returned nil service.")
+        return nil
+    end
+
+    Console.Log("[gr_characters][server][self-test] Database service resolved through GRDatabaseBridge.")
 
     return self.database_service
 end
