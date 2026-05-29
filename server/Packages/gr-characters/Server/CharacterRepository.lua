@@ -66,6 +66,19 @@ local INSERT_CHARACTER_QUERY = [[
         :4,
         :5
     )
+    RETURNING
+        id,
+        player_id,
+        first_name,
+        last_name,
+        age,
+        species,
+        biography,
+        position_x,
+        position_y,
+        position_z,
+        created_at,
+        updated_at
 ]]
 
 local function normalize_character_row(row)
@@ -282,9 +295,9 @@ function CharacterRepository:InsertCharacter(player_id, character_payload, callb
         tostring(player_id)
     )
 
-    database_or_error:ExecuteAsync(
+    database_or_error:SelectAsync(
         INSERT_CHARACTER_QUERY,
-        function(rows_affected, error)
+        function(rows, error)
             if error ~= nil then
                 Console.Log(
                     "[gr_characters][repository] Character insert failed for player_id=%s with error=%s.",
@@ -296,19 +309,26 @@ function CharacterRepository:InsertCharacter(player_id, character_payload, callb
                 return
             end
 
-            if rows_affected ~= 1 then
+            if type(rows) ~= "table" or rows[1] == nil then
                 Console.Log(
-                    "[gr_characters][repository] Character insert for player_id=%s returned unexpected rows_affected=%s.",
-                    tostring(player_id),
-                    tostring(rows_affected)
+                    "[gr_characters][repository] Character insert for player_id=%s returned no created row.",
+                    tostring(player_id)
                 )
 
-                callback(false, "character-insert-unexpected-rows-affected")
+                callback(false, "character-insert-created-row-missing")
+                return
+            end
+
+            local normalized_row = normalize_character_row(rows[1])
+
+            if normalized_row == nil then
+                callback(false, "character-insert-created-row-invalid")
                 return
             end
 
             callback(true, {
-                rows_affected = rows_affected,
+                rows_affected = 1,
+                character = normalized_row,
             })
         end,
         player_id,

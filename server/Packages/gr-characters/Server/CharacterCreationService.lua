@@ -13,10 +13,12 @@ local ALLOWED_FIELDS = {
 }
 
 local MAX_NAME_LENGTH = 64
+local MIN_NAME_LENGTH = 2
 local MAX_SPECIES_LENGTH = 64
 local MAX_BIOGRAPHY_LENGTH = 280
 local MIN_AGE = 16
 local MAX_AGE = 120
+local DEFAULT_SPECIES = "Human"
 
 local function clone_table(source)
     if type(source) ~= "table" then
@@ -114,8 +116,10 @@ function CharacterCreationService:GetPolicy()
         min_age = MIN_AGE,
         max_age = MAX_AGE,
         max_name_length = MAX_NAME_LENGTH,
+        min_name_length = MIN_NAME_LENGTH,
         max_species_length = MAX_SPECIES_LENGTH,
         max_biography_length = MAX_BIOGRAPHY_LENGTH,
+        default_species = DEFAULT_SPECIES,
     }
 end
 
@@ -143,6 +147,8 @@ function CharacterCreationService:ValidateCharacterPayload(character_payload)
 
     if first_name == nil or first_name == "" then
         validation_errors[#validation_errors + 1] = "first-name-required"
+    elseif #first_name < MIN_NAME_LENGTH then
+        validation_errors[#validation_errors + 1] = "first-name-too-short"
     elseif #first_name > MAX_NAME_LENGTH then
         validation_errors[#validation_errors + 1] = "first-name-too-long"
     else
@@ -153,6 +159,8 @@ function CharacterCreationService:ValidateCharacterPayload(character_payload)
 
     if last_name == nil or last_name == "" then
         validation_errors[#validation_errors + 1] = "last-name-required"
+    elseif #last_name < MIN_NAME_LENGTH then
+        validation_errors[#validation_errors + 1] = "last-name-too-short"
     elseif #last_name > MAX_NAME_LENGTH then
         validation_errors[#validation_errors + 1] = "last-name-too-long"
     else
@@ -172,7 +180,7 @@ function CharacterCreationService:ValidateCharacterPayload(character_payload)
     local species = trim_string(character_payload.species)
 
     if species == nil or species == "" then
-        validation_errors[#validation_errors + 1] = "species-required"
+        sanitized_payload.species = DEFAULT_SPECIES
     elseif #species > MAX_SPECIES_LENGTH then
         validation_errors[#validation_errors + 1] = "species-too-long"
     else
@@ -250,6 +258,7 @@ function CharacterCreationService:CreateCharacterForPlayer(player_or_row, charac
             callback(true, {
                 player_id = player_row_id,
                 rows_affected = result_or_error.rows_affected,
+                character = clone_table(result_or_error.character),
                 sanitized_payload = clone_table(sanitized_payload_or_error),
                 defaults_applied = {
                     money_cash = 0,
