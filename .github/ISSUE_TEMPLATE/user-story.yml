@@ -1,0 +1,61 @@
+name: User Story
+description: Capturer une fonctionnalité orientée joueur ou staff avec critères d'acceptation.
+title: "US: "
+labels:
+  - type: feature
+body:
+  - type: textarea
+    id: story
+    attributes:
+      label: Description
+      description: Décrire le besoin utilisateur en format user story.
+      placeholder: "En tant que ..., je veux ..., afin de ..."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Critères d'acceptation
+      description: Lister les critères observables qui valident la story.
+      placeholder: |
+        - ...
+        - ...
+    validations:
+      required: true
+  - type: input
+    id: impacted_package
+    attributes:
+      label: Package impacté
+      placeholder: "ex: gr-characters, gr-datapad"
+    validations:
+      required: true
+  - type: textarea
+    id: db_ui_impact
+    attributes:
+      label: Impact DB / UI
+      placeholder: "Préciser les impacts base de données, WebUI ou absence d'impact."
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priorité
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+    validations:
+      required: true
+  - type: dropdown
+    id: complexity
+    attributes:
+      label: Complexité
+      options:
+        - XS
+        - S
+        - M
+        - L
+        - XL
+    validations:
+      required: true

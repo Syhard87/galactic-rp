@@ -1,0 +1,3 @@
+[submodule "external/nanos-world-docs"]
+	path = external/nanos-world-docs
+	url = https://github.com/nanos-world/docs.git

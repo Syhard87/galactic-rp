@@ -587,18 +587,18 @@ Structure recommandée :
 
 ```txt
 Packages/
-  gr_core/
+  gr-core/
     Server/
     Client/
     Shared/
     Package.toml
 
-  gr_database/
+  gr-database/
     Server/
     Shared/
     Package.toml
 
-  gr_characters/
+  gr-characters/
     Server/
     Client/
     Shared/
@@ -1540,11 +1540,11 @@ Objectif : obtenir une base technique propre.
 1. Créer le repo Git.
 2. Créer la structure des dossiers serveur.
 3. Installer serveur nanos world local.
-4. Créer package `gr_core`.
-5. Créer package `gr_database`.
+4. Créer package `gr-core`.
+5. Créer package `gr-database`.
 6. Tester connexion DB.
 7. Créer script SQL initial.
-8. Créer package `gr_characters`.
+8. Créer package `gr-characters`.
 9. Faire un spawn simple.
 10. Documenter lancement local.
 
@@ -3238,22 +3238,22 @@ galactic-rp/
   server/
     Config.example.toml
     Packages/
-      gr_core/
-      gr_database/
-      gr_characters/
-      gr_progression/
-      gr_skills/
-      gr_inventory/
-      gr_crafting/
-      gr_quests/
-      gr_factions/
-      gr_reputation/
-      gr_contracts/
-      gr_chat/
-      gr_voip/
-      gr_admin/
-      gr_hud/
-      gr_datapad/
+      gr-core/
+      gr-database/
+      gr-characters/
+      gr-progression/
+      gr-skills/
+      gr-inventory/
+      gr-crafting/
+      gr-quests/
+      gr-factions/
+      gr-reputation/
+      gr-contracts/
+      gr-chat/
+      gr-voip/
+      gr-admin/
+      gr-hud/
+      gr-datapad/
 
   ui/
     hud/
