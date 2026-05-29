@@ -4,7 +4,7 @@ GRCharacters.Server = GRCharacters.Server or {}
 local CharacterService = {}
 CharacterService.__index = CharacterService
 
-function CharacterService.Create(repository, creation_service, player_service, selection_service, position_service)
+function CharacterService.Create(repository, creation_service, player_service, selection_service, position_service, session_state)
     local self = setmetatable({}, CharacterService)
 
     self.repository = repository
@@ -12,6 +12,7 @@ function CharacterService.Create(repository, creation_service, player_service, s
     self.player_service = player_service
     self.selection_service = selection_service
     self.position_service = position_service
+    self.session_state = session_state
 
     return self
 end
@@ -110,6 +111,10 @@ function CharacterService:ForgetPlayerSession(player_or_platform_id)
         return false, player_error
     end
 
+    if self.session_state ~= nil then
+        self.session_state:Clear(player_or_platform_id)
+    end
+
     return true
 end
 
@@ -149,7 +154,21 @@ function CharacterService:SelectActiveCharacter(player_or_platform_id, character
         return false, "selection-service-missing"
     end
 
-    return self.selection_service:SelectCharacterForPlayer(player_or_platform_id, character_id, callback)
+    return self.selection_service:SelectCharacterForPlayer(player_or_platform_id, character_id, function(is_success, result)
+        if is_success and self.session_state ~= nil and type(result) == "table" then
+            local active_character = result.character or result.active_character
+
+            if type(active_character) ~= "table" then
+                active_character = self:GetActiveCharacterRow(result.platform_id or player_or_platform_id)
+            end
+
+            self.session_state:SetActiveCharacter(result.platform_id, result.player_id, active_character)
+        end
+
+        if type(callback) == "function" then
+            callback(is_success, result)
+        end
+    end)
 end
 
 function CharacterService:SaveActiveCharacterPosition(player_or_id, callback, options)

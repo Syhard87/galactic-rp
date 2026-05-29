@@ -1,5 +1,6 @@
 Package.Require("../Shared/Index.lua")
 
+local CharacterSessionState = Package.Require("CharacterSessionState.lua")
 local CharacterPlayerRepository = Package.Require("CharacterPlayerRepository.lua")
 local CharacterPlayerService = Package.Require("CharacterPlayerService.lua")
 local CharacterCreationService = Package.Require("CharacterCreationService.lua")
@@ -14,12 +15,32 @@ local CharacterRuntimeSelfTest = Package.Require("CharacterRuntimeSelfTest.lua")
 GRCharacters = GRCharacters or {}
 GRCharacters.Server = GRCharacters.Server or {}
 
-local database_service = nil
+local function resolve_database_service()
+    if GRDatabaseBridge == nil then
+        Console.Log("[gr_characters][server] Database bridge unavailable. Character repositories start without a DB service.")
+        return nil
+    end
 
-if GRDatabase ~= nil and GRDatabase.Server ~= nil then
-    database_service = GRDatabase.Server.Service
+    if type(GRDatabaseBridge.GetService) ~= "function" then
+        Console.Log("[gr_characters][server] Database bridge invalid. GetService is missing.")
+        return nil
+    end
+
+    local database_service = GRDatabaseBridge.GetService()
+
+    if database_service == nil then
+        Console.Log("[gr_characters][server] Database bridge returned nil service.")
+        return nil
+    end
+
+    Console.Log("[gr_characters][server] Database service resolved through GRDatabaseBridge.")
+
+    return database_service
 end
 
+local database_service = resolve_database_service()
+
+GRCharacters.Server.CharacterSessionState = CharacterSessionState.Create()
 GRCharacters.Server.PlayerRepository = CharacterPlayerRepository.Create(database_service)
 GRCharacters.Server.PlayerService = CharacterPlayerService.Create(GRCharacters.Server.PlayerRepository)
 GRCharacters.Server.Repository = CharacterRepository.Create(database_service)
@@ -38,7 +59,8 @@ GRCharacters.Server.Service = CharacterService.Create(
     GRCharacters.Server.CreationService,
     GRCharacters.Server.PlayerService,
     GRCharacters.Server.SelectionService,
-    GRCharacters.Server.PositionService
+    GRCharacters.Server.PositionService,
+    GRCharacters.Server.CharacterSessionState
 )
 GRCharacters.Server.DevTool = CharacterDevTool.Create(
     GRCharacters.Server.Service,
@@ -47,7 +69,8 @@ GRCharacters.Server.DevTool = CharacterDevTool.Create(
 GRCharacters.Server.FlowService = CharacterFlowService.Create(
     GRCharacters.Server.Service,
     GRCharacters.Server.PlayerService,
-    GRCharacters.Server.DevTool
+    GRCharacters.Server.DevTool,
+    GRCharacters.Server.CharacterSessionState
 )
 GRCharacters.Server.RuntimeSelfTest = CharacterRuntimeSelfTest.Create(
     database_service,
@@ -121,4 +144,5 @@ Console.Log("[gr_characters][server] Player-ready flow is server-only and uses p
 Console.Log("[gr_characters][server] Character creation is prepared server-side with strict field validation and safe defaults.")
 Console.Log("[gr_characters][server] Character selection is prepared server-side with ownership validation and transient active character state.")
 Console.Log("[gr_characters][server] Active character position saving is prepared server-side with a slow timer, DB anti-spam and spawn fallback resolution.")
+Console.Log("[gr_characters][server] Character session readiness gate is tracked server-side by platform_id.")
 Console.Log("[gr_characters][server] Character repositories and services remain separated from character creation, selection, spawn and persistence flows.")

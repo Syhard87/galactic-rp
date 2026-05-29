@@ -31,25 +31,82 @@ local function normalize_optional_string(value)
         return nil
     end
 
-    if value == "" then
+    local normalized_value = value:match("^%s*(.-)%s*$")
+
+    if normalized_value == "" then
         return nil
     end
 
-    return value
+    return normalized_value
 end
 
 local function normalize_positive_integer(value, fallback)
-    if type(value) ~= "number" then
+    local numeric_value = value
+
+    if type(numeric_value) == "string" then
+        numeric_value = tonumber(normalize_optional_string(numeric_value))
+    end
+
+    if type(numeric_value) ~= "number" then
         return fallback
     end
 
-    local integer_value = math.floor(value)
+    local integer_value = math.floor(numeric_value)
 
     if integer_value <= 0 then
         return fallback
     end
 
     return integer_value
+end
+
+local function normalize_boolean(value, fallback)
+    if type(value) == "boolean" then
+        return value
+    end
+
+    local string_value = normalize_optional_string(value)
+
+    if string_value ~= nil then
+        local lowered_value = string.lower(string_value)
+
+        if lowered_value == "true" then
+            return true
+        end
+
+        if lowered_value == "false" then
+            return false
+        end
+    end
+
+    return fallback
+end
+
+local function read_custom_settings()
+    if type(Server) ~= "table" and type(Server) ~= "userdata" then
+        return nil
+    end
+
+    if type(Server.GetCustomSettings) ~= "function" then
+        return nil
+    end
+
+    local is_read, custom_settings = pcall(Server.GetCustomSettings)
+
+    if not is_read or type(custom_settings) ~= "table" then
+        return nil
+    end
+
+    return custom_settings
+end
+
+local function has_gr_database_settings(source)
+    return source.gr_database_host ~= nil
+        or source.gr_database_port ~= nil
+        or source.gr_database_name ~= nil
+        or source.gr_database_user ~= nil
+        or source.gr_database_password ~= nil
+        or source.gr_database_auto_connect ~= nil
 end
 
 function DatabaseConfig.BuildConnectionString(config)
@@ -69,26 +126,37 @@ function DatabaseConfig.BuildConnectionString(config)
 end
 
 function DatabaseConfig.Read(raw_config)
-    -- This bootstrap does not parse a real .env file and does not hardcode any
-    -- password. A future infra bridge can inject external configuration here.
     local source = raw_config
+
+    if source == nil then
+        source = read_custom_settings()
+    end
 
     if type(source) ~= "table" then
         source = {}
     end
 
     local config = copy_table(DEFAULTS)
+    local has_custom_settings = has_gr_database_settings(source)
 
     config.engine = normalize_optional_string(source.engine) or config.engine
-    config.host = normalize_optional_string(source.host) or config.host
-    config.port = normalize_positive_integer(source.port, config.port)
-    config.dbname = normalize_optional_string(source.dbname) or config.dbname
-    config.user = normalize_optional_string(source.user) or config.user
-    config.password = normalize_optional_string(source.password)
+    config.host = normalize_optional_string(source.gr_database_host) or normalize_optional_string(source.host) or config.host
+    config.port = normalize_positive_integer(source.gr_database_port, normalize_positive_integer(source.port, config.port))
+    config.dbname = normalize_optional_string(source.gr_database_name) or normalize_optional_string(source.dbname) or config.dbname
+    config.user = normalize_optional_string(source.gr_database_user) or normalize_optional_string(source.user) or config.user
+    config.password = normalize_optional_string(source.gr_database_password) or normalize_optional_string(source.password)
     config.connect_timeout = normalize_positive_integer(source.connect_timeout, config.connect_timeout)
     config.pool_size = normalize_positive_integer(source.pool_size, config.pool_size)
-    config.auto_connect = source.auto_connect == true
+    config.auto_connect = normalize_boolean(
+        source.gr_database_auto_connect,
+        normalize_boolean(source.auto_connect, config.auto_connect)
+    )
     config.source_label = normalize_optional_string(source.source_label) or config.source_label
+
+    if has_custom_settings then
+        config.source_label = "custom-settings"
+    end
+
     config.connection_string = DatabaseConfig.BuildConnectionString(config)
 
     return config
