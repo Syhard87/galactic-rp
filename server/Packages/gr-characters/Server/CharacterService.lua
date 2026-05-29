@@ -86,6 +86,30 @@ function CharacterService:GetCachedCharacterList(player_or_platform_id)
     return self.selection_service:GetCachedCharacterList(player_or_platform_id)
 end
 
+function CharacterService:GetCharacterSessionStatus(player_or_platform_id)
+    if self.session_state == nil then
+        return nil
+    end
+
+    return self.session_state:GetStatus(player_or_platform_id)
+end
+
+function CharacterService:HasActiveCharacter(player_or_platform_id)
+    if self.session_state == nil then
+        return false
+    end
+
+    return self.session_state:HasActiveCharacter(player_or_platform_id)
+end
+
+function CharacterService:IsGameplayReady(player_or_platform_id)
+    if self.session_state == nil then
+        return false, "session-state-missing"
+    end
+
+    return self.session_state:IsGameplayReady(player_or_platform_id)
+end
+
 function CharacterService:ForgetPlayerSession(player_or_platform_id)
     local cleared_selection = true
     local cleared_player = true

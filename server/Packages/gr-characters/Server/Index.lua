@@ -89,8 +89,46 @@ local function start_player_character_flow(player, source_label)
     end
 end
 
+local function guard_player_gameplay_readiness(player, source_label)
+    if GRCharacters.Server.Service == nil or type(GRCharacters.Server.Service.IsGameplayReady) ~= "function" then
+        Console.Log(
+            "[gr_characters][server] gameplay-ready=false source=%s reason=%s status=%s.",
+            tostring(source_label or "unknown"),
+            "character-service-unavailable",
+            "unknown"
+        )
+        return false, "character-service-unavailable"
+    end
+
+    local platform_id = nil
+
+    if type(player) == "table" or type(player) == "userdata" then
+        if type(player.GetAccountID) == "function" then
+            platform_id = player:GetAccountID()
+        end
+    end
+
+    local is_ready, reason = GRCharacters.Server.Service:IsGameplayReady(platform_id or player)
+    local status = GRCharacters.Server.Service:GetCharacterSessionStatus(platform_id or player) or "missing"
+
+    Console.Log(
+        "[gr_characters][server] gameplay-ready=%s platform_id=%s source=%s reason=%s status=%s.",
+        tostring(is_ready),
+        tostring(platform_id),
+        tostring(source_label or "unknown"),
+        tostring(reason),
+        tostring(status)
+    )
+
+    return is_ready, reason
+end
+
 Player.Subscribe("Ready", function(player)
     start_player_character_flow(player, "player-ready")
+end)
+
+Player.Subscribe("Spawn", function(player)
+    guard_player_gameplay_readiness(player, "player-spawn")
 end)
 
 Player.Subscribe("Destroy", function(player)

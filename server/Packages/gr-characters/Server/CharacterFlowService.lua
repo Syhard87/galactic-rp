@@ -58,6 +58,37 @@ function CharacterFlowService:ResolveObservedUsername(player, platform_id)
     return tostring(platform_id)
 end
 
+function CharacterFlowService:LogGameplayReadiness(platform_id, source_label)
+    if self.character_service == nil or type(self.character_service.IsGameplayReady) ~= "function" then
+        Console.Log(
+            "[gr_characters][server] gameplay-ready=false platform_id=%s source=%s reason=%s status=%s.",
+            tostring(platform_id),
+            tostring(source_label or "unknown"),
+            "gameplay-readiness-api-missing",
+            "unknown"
+        )
+        return false, "gameplay-readiness-api-missing"
+    end
+
+    local is_ready, reason = self.character_service:IsGameplayReady(platform_id)
+    local status = "unknown"
+
+    if type(self.character_service.GetCharacterSessionStatus) == "function" then
+        status = self.character_service:GetCharacterSessionStatus(platform_id) or "missing"
+    end
+
+    Console.Log(
+        "[gr_characters][server] gameplay-ready=%s platform_id=%s source=%s reason=%s status=%s.",
+        tostring(is_ready),
+        tostring(platform_id),
+        tostring(source_label or "unknown"),
+        tostring(reason),
+        tostring(status)
+    )
+
+    return is_ready, reason
+end
+
 function CharacterFlowService:SelectFirstCharacter(platform_id, selection_state)
     local first_character = resolve_first_character(selection_state)
 
@@ -74,6 +105,7 @@ function CharacterFlowService:SelectFirstCharacter(platform_id, selection_state)
             tostring(platform_id)
         )
         Console.Log("[gr_characters][server] No active character selected. Character creation UI will be required later.")
+        self:LogGameplayReadiness(platform_id, "character-selection-empty")
         return
     end
 
@@ -89,6 +121,7 @@ function CharacterFlowService:SelectFirstCharacter(platform_id, selection_state)
                 tostring(result and result.code or "selection-failed")
             )
 
+            self:LogGameplayReadiness(platform_id, "active-character-selection-failed")
             return
         end
 
@@ -100,6 +133,8 @@ function CharacterFlowService:SelectFirstCharacter(platform_id, selection_state)
         if self.character_service:GetActiveCharacterRow(platform_id) ~= nil then
             Console.Log("[gr_characters][server] Active character stored for player.")
         end
+
+        self:LogGameplayReadiness(platform_id, "active-character-selected")
     end)
 
     if not is_started then
@@ -112,6 +147,8 @@ function CharacterFlowService:SelectFirstCharacter(platform_id, selection_state)
             tostring(platform_id),
             tostring(error)
         )
+
+        self:LogGameplayReadiness(platform_id, "active-character-selection-dispatch-failed")
     end
 end
 
@@ -130,6 +167,7 @@ function CharacterFlowService:HandleMissingCharacters(platform_id)
     end
 
     Console.Log("[gr_characters][server] No active character selected. Character creation UI will be required later.")
+    self:LogGameplayReadiness(platform_id, "pending-character-creation")
 
     if self.dev_tool == nil or not self.dev_tool:IsEnabled() then
         return
@@ -159,6 +197,7 @@ function CharacterFlowService:LoadCharacters(platform_id)
                 tostring(selection_state and selection_state.code or "character-list-load-failed")
             )
 
+            self:LogGameplayReadiness(platform_id, "character-list-load-failed")
             return
         end
 
@@ -187,6 +226,8 @@ function CharacterFlowService:LoadCharacters(platform_id)
             tostring(platform_id),
             tostring(error)
         )
+
+        self:LogGameplayReadiness(platform_id, "character-list-dispatch-failed")
     end
 end
 
@@ -206,6 +247,7 @@ function CharacterFlowService:CreatePlayerAndContinue(platform_id, observed_user
                 tostring(created_state and created_state.error or "player-create-failed")
             )
 
+            self:LogGameplayReadiness(platform_id, "player-create-failed")
             return
         end
 
@@ -227,6 +269,8 @@ function CharacterFlowService:CreatePlayerAndContinue(platform_id, observed_user
             tostring(platform_id),
             tostring(error)
         )
+
+        self:LogGameplayReadiness(platform_id, "player-create-dispatch-failed")
     end
 end
 
@@ -246,6 +290,7 @@ function CharacterFlowService:LoadOrCreatePlayer(platform_id, observed_username)
                 tostring(player_state and player_state.error or "player-load-failed")
             )
 
+            self:LogGameplayReadiness(platform_id, "player-load-failed")
             return
         end
 
@@ -259,6 +304,7 @@ function CharacterFlowService:LoadOrCreatePlayer(platform_id, observed_username)
                 tostring(platform_id)
             )
 
+            self:LogGameplayReadiness(platform_id, "player-state-invalid")
             return
         end
 
@@ -286,6 +332,8 @@ function CharacterFlowService:LoadOrCreatePlayer(platform_id, observed_username)
         if self.session_state ~= nil then
             self.session_state:SetFailed(platform_id, player_state.status or "player-load-unexpected-status")
         end
+
+        self:LogGameplayReadiness(platform_id, "player-load-unexpected-status")
     end)
 
     if not is_started then
@@ -298,6 +346,8 @@ function CharacterFlowService:LoadOrCreatePlayer(platform_id, observed_username)
             tostring(platform_id),
             tostring(error)
         )
+
+        self:LogGameplayReadiness(platform_id, "player-load-dispatch-failed")
     end
 end
 

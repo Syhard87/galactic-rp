@@ -193,6 +193,24 @@ function CharacterSessionState:HasActiveCharacter(platform_id)
     return self:GetActiveCharacter(platform_id) ~= nil
 end
 
+function CharacterSessionState:IsGameplayReady(platform_id)
+    local status = self:GetStatus(platform_id)
+
+    if status == nil then
+        return false, "session-missing"
+    end
+
+    if status ~= STATUS_ACTIVE_CHARACTER_SELECTED then
+        return false, status
+    end
+
+    if not self:HasActiveCharacter(platform_id) then
+        return false, "active-character-missing"
+    end
+
+    return true, STATUS_ACTIVE_CHARACTER_SELECTED
+end
+
 function CharacterSessionState:Clear(platform_id)
     local normalized_platform_id = normalize_platform_id(platform_id)
 
@@ -201,6 +219,11 @@ function CharacterSessionState:Clear(platform_id)
     end
 
     self.sessions_by_platform_id[normalized_platform_id] = nil
+
+    Console.Log(
+        "[gr_characters][session-state] Session cleared for platform_id=%s.",
+        tostring(normalized_platform_id)
+    )
 
     return true
 end
