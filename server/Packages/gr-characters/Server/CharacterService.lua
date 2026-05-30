@@ -429,6 +429,34 @@ function CharacterService:ResolveActiveCharacterSpawnData(player_or_platform_id)
     return self.position_service:ResolveSpawnDataForActiveCharacter(player_or_platform_id)
 end
 
+function CharacterService:GetActiveCharacterSpawnTransform(player_or_platform_id)
+    return self:ResolveActiveCharacterSpawnData(player_or_platform_id)
+end
+
+function CharacterService:SpawnActiveCharacter(player_or_platform_id, options)
+    if self.position_service == nil then
+        return false, {
+            code = "position-service-missing",
+        }
+    end
+
+    if not self:HasActiveCharacter(player_or_platform_id) then
+        Console.Log("[gr_characters][server] active character spawn refused because no active character.")
+
+        return false, {
+            code = "active-character-required",
+        }
+    end
+
+    if type(self.position_service.SpawnActiveCharacter) ~= "function" then
+        return false, {
+            code = "active-character-spawn-api-missing",
+        }
+    end
+
+    return self.position_service:SpawnActiveCharacter(player_or_platform_id, options)
+end
+
 function CharacterService:GetActiveCharacterId(player_or_platform_id)
     if self.selection_service == nil then
         return nil

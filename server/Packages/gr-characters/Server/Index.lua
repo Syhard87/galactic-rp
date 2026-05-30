@@ -268,6 +268,43 @@ local function send_character_selection_result(player, result)
     return true
 end
 
+local function spawn_active_character_for_player(player, platform_id, source_label)
+    if GRCharacters.Server.Service == nil or type(GRCharacters.Server.Service.SpawnActiveCharacter) ~= "function" then
+        Console.Log(
+            "[gr_characters][server] Active character spawn skipped for platform_id=%s source=%s reason=%s.",
+            tostring(platform_id),
+            tostring(source_label or "unknown"),
+            "spawn-api-unavailable"
+        )
+        return false, {
+            code = "spawn-api-unavailable",
+        }
+    end
+
+    local is_spawned, spawn_result = GRCharacters.Server.Service:SpawnActiveCharacter(player, {
+        reason = source_label or "active-character-selected",
+    })
+
+    if not is_spawned then
+        Console.Log(
+            "[gr_characters][server] Active character spawn failed for platform_id=%s source=%s code=%s.",
+            tostring(platform_id),
+            tostring(source_label or "unknown"),
+            tostring(spawn_result and spawn_result.code or "active-character-spawn-failed")
+        )
+        return false, spawn_result
+    end
+
+    Console.Log(
+        "[gr_characters][server] Active character spawn completed for platform_id=%s source=%s spawn_source=%s.",
+        tostring(platform_id),
+        tostring(source_label or "unknown"),
+        tostring(spawn_result and spawn_result.source or "unknown")
+    )
+
+    return true, spawn_result
+end
+
 local function resolve_requested_character_id(payload)
     if type(payload) == "number" or type(payload) == "string" then
         return payload
@@ -332,6 +369,7 @@ Events.SubscribeRemote(GRCharacters.Shared.Events.SUBMIT_CHARACTER_SELECTION, fu
 
         local is_ready, readiness_reason = GRCharacters.Server.Service:IsGameplayReady(platform_id)
         local selected_character = result and result.character or nil
+        local is_spawned, spawn_result = spawn_active_character_for_player(player, platform_id, "character-selection")
 
         Console.Log(
             "[gr_characters][server] Character selection request completed for platform_id=%s character_id=%s gameplay-ready=%s.",
@@ -348,6 +386,8 @@ Events.SubscribeRemote(GRCharacters.Shared.Events.SUBMIT_CHARACTER_SELECTION, fu
             last_name = selected_character and selected_character.last_name or nil,
             gameplay_ready = is_ready,
             readiness_reason = readiness_reason,
+            spawned = is_spawned,
+            spawn_source = spawn_result and spawn_result.source or nil,
         })
     end)
 
@@ -414,6 +454,7 @@ Events.SubscribeRemote(GRCharacters.Shared.Events.SUBMIT_CHARACTER_CREATION, fun
         end
 
         local created_character = result and result.character or nil
+        local is_spawned, spawn_result = spawn_active_character_for_player(player, platform_id, "character-creation")
 
         Console.Log(
             "[gr_characters][server] Character creation request completed for platform_id=%s character_id=%s gameplay-ready=%s.",
@@ -429,6 +470,8 @@ Events.SubscribeRemote(GRCharacters.Shared.Events.SUBMIT_CHARACTER_CREATION, fun
             first_name = created_character and created_character.first_name or nil,
             last_name = created_character and created_character.last_name or nil,
             gameplay_ready = result and result.gameplay_ready or false,
+            spawned = is_spawned,
+            spawn_source = spawn_result and spawn_result.source or nil,
         })
     end)
 

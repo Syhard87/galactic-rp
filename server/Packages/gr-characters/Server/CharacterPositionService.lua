@@ -7,6 +7,11 @@ CharacterPositionService.__index = CharacterPositionService
 local AUTO_SAVE_INTERVAL_MS = 60000
 local MIN_SAVE_INTERVAL_MS = 45000
 local MIN_POSITION_DELTA_UNITS = 100
+local FALLBACK_SPAWN_LOCATION = {
+    x = 0,
+    y = 0,
+    z = 150,
+}
 
 local function clone_table(source)
     if type(source) ~= "table" then
@@ -83,11 +88,19 @@ local function read_coordinate(value, lower_key, upper_key)
 
     local coordinate = value[lower_key]
 
-    if type(coordinate) ~= "number" then
+    if type(coordinate) ~= "number" and type(coordinate) ~= "string" then
         coordinate = value[upper_key]
     end
 
+    if type(coordinate) == "string" then
+        coordinate = tonumber(coordinate)
+    end
+
     if type(coordinate) ~= "number" then
+        return nil
+    end
+
+    if coordinate ~= coordinate or coordinate == math.huge or coordinate == -math.huge then
         return nil
     end
 
@@ -116,6 +129,26 @@ local function normalize_rotation(rotation)
     end
 
     return rotation
+end
+
+local function build_default_rotation()
+    if type(Rotator) == "function" then
+        return Rotator(0, 0, 0)
+    end
+
+    return {
+        pitch = 0,
+        yaw = 0,
+        roll = 0,
+    }
+end
+
+local function build_vector(position)
+    if type(Vector) == "function" then
+        return Vector(position.x, position.y, position.z)
+    end
+
+    return clone_table(position)
 end
 
 local function is_position_uninitialized(position)
@@ -150,9 +183,11 @@ function CharacterPositionService:GetPolicy()
         min_save_interval_ms = MIN_SAVE_INTERVAL_MS,
         min_position_delta_units = MIN_POSITION_DELTA_UNITS,
         zero_vector_is_uninitialized = true,
+        fallback_spawn_location = clone_table(FALLBACK_SPAWN_LOCATION),
         fallback_order = {
             "persisted-character-position",
             "map-spawn-point",
+            "server-fallback-position",
         },
     }
 end
@@ -194,41 +229,59 @@ function CharacterPositionService:ResolveSpawnDataForCharacterRow(character_row)
     })
 
     if persisted_position ~= nil and not is_position_uninitialized(persisted_position) then
+        Console.Log(
+            "[gr_characters][position-service] active character spawn resolved from DB character_id=%s location=%s,%s,%s.",
+            tostring(character_row.id),
+            tostring(persisted_position.x),
+            tostring(persisted_position.y),
+            tostring(persisted_position.z)
+        )
+
         return true, {
             source = "persisted-character-position",
             location = persisted_position,
-            rotation = nil,
+            rotation = build_default_rotation(),
         }
     end
 
-    if type(Server) ~= "table" or type(Server.GetMapSpawnPoints) ~= "function" then
-        return false, {
-            code = "map-spawn-points-unavailable",
-        }
-    end
+    if type(Server) == "table" and type(Server.GetMapSpawnPoints) == "function" then
+        local spawn_points = Server.GetMapSpawnPoints()
 
-    local spawn_points = Server.GetMapSpawnPoints()
+        if type(spawn_points) == "table" then
+            for _, spawn_point in ipairs(spawn_points) do
+                local spawn_location = normalize_position(spawn_point.location)
 
-    if type(spawn_points) ~= "table" then
-        return false, {
-            code = "map-spawn-points-unavailable",
-        }
-    end
+                if spawn_location ~= nil then
+                    Console.Log(
+                        "[gr_characters][position-service] active character spawn fallback used source=map-spawn-point character_id=%s location=%s,%s,%s.",
+                        tostring(character_row.id),
+                        tostring(spawn_location.x),
+                        tostring(spawn_location.y),
+                        tostring(spawn_location.z)
+                    )
 
-    for _, spawn_point in ipairs(spawn_points) do
-        local spawn_location = normalize_position(spawn_point.location)
-
-        if spawn_location ~= nil then
-            return true, {
-                source = "map-spawn-point",
-                location = spawn_location,
-                rotation = normalize_rotation(spawn_point.rotation),
-            }
+                    return true, {
+                        source = "map-spawn-point",
+                        location = spawn_location,
+                        rotation = normalize_rotation(spawn_point.rotation) or build_default_rotation(),
+                    }
+                end
+            end
         end
     end
 
-    return false, {
-        code = "map-spawn-point-required",
+    Console.Log(
+        "[gr_characters][position-service] active character spawn fallback used source=server-fallback-position character_id=%s location=%s,%s,%s.",
+        tostring(character_row.id),
+        tostring(FALLBACK_SPAWN_LOCATION.x),
+        tostring(FALLBACK_SPAWN_LOCATION.y),
+        tostring(FALLBACK_SPAWN_LOCATION.z)
+    )
+
+    return true, {
+        source = "server-fallback-position",
+        location = clone_table(FALLBACK_SPAWN_LOCATION),
+        rotation = build_default_rotation(),
     }
 end
 
@@ -242,12 +295,83 @@ function CharacterPositionService:ResolveSpawnDataForActiveCharacter(player_or_p
     local active_character_row = self.selection_service:GetActiveCharacterRow(player_or_platform_id)
 
     if active_character_row == nil then
+        Console.Log("[gr_characters][position-service] active character spawn refused because no active character.")
+
         return false, {
             code = "active-character-required",
         }
     end
 
     return self:ResolveSpawnDataForCharacterRow(active_character_row)
+end
+
+function CharacterPositionService:SpawnActiveCharacter(player, options)
+    options = options or {}
+
+    if type(player) ~= "table" and type(player) ~= "userdata" then
+        return false, {
+            code = "player-required",
+        }
+    end
+
+    if type(player.GetAccountID) ~= "function" then
+        return false, {
+            code = "platform-id-required",
+        }
+    end
+
+    if type(Character) ~= "function" or type(Vector) ~= "function" or type(Rotator) ~= "function" then
+        return false, {
+            code = "character-spawn-api-unavailable",
+        }
+    end
+
+    if type(player.Possess) ~= "function" then
+        return false, {
+            code = "player-possess-unavailable",
+        }
+    end
+
+    local platform_id = player:GetAccountID()
+    local is_resolved, spawn_data_or_error = self:ResolveSpawnDataForActiveCharacter(platform_id)
+
+    if not is_resolved then
+        return false, spawn_data_or_error
+    end
+
+    local location = build_vector(spawn_data_or_error.location)
+    local rotation = spawn_data_or_error.rotation or build_default_rotation()
+    local skeletal_mesh = options.skeletal_mesh or "nanos-world::SK_Male"
+
+    local previous_character = nil
+
+    if type(player.GetControlledCharacter) == "function" then
+        previous_character = player:GetControlledCharacter()
+    end
+
+    local spawned_character = Character(location, rotation, skeletal_mesh)
+    player:Possess(spawned_character)
+
+    if previous_character ~= nil and previous_character ~= spawned_character and type(previous_character.Destroy) == "function" then
+        previous_character:Destroy()
+    end
+
+    Console.Log(
+        "[gr_characters][position-service] Active character spawned for platform_id=%s source=%s location=%s,%s,%s.",
+        tostring(platform_id),
+        tostring(spawn_data_or_error.source),
+        tostring(spawn_data_or_error.location.x),
+        tostring(spawn_data_or_error.location.y),
+        tostring(spawn_data_or_error.location.z)
+    )
+
+    return true, {
+        code = "active-character-spawned",
+        platform_id = platform_id,
+        source = spawn_data_or_error.source,
+        location = clone_table(spawn_data_or_error.location),
+        character = spawned_character,
+    }
 end
 
 function CharacterPositionService:CollectControlledCharacterPosition(player)

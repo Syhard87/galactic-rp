@@ -227,6 +227,25 @@ function CharacterRuntimeSelfTest:LogSelectionOutcome(platform_id, selection_res
     if self.character_service:GetActiveCharacterRow(platform_id) ~= nil then
         Console.Log("[gr_characters][server][self-test] Active character stored in memory.")
     end
+
+    if type(self.character_service.GetActiveCharacterSpawnTransform) == "function" then
+        local is_resolved, spawn_data = self.character_service:GetActiveCharacterSpawnTransform(platform_id)
+
+        if is_resolved then
+            Console.Log(
+                "[gr_characters][server][self-test] Active character spawn resolved source=%s location=%s,%s,%s.",
+                tostring(spawn_data and spawn_data.source or nil),
+                tostring(spawn_data and spawn_data.location and spawn_data.location.x or nil),
+                tostring(spawn_data and spawn_data.location and spawn_data.location.y or nil),
+                tostring(spawn_data and spawn_data.location and spawn_data.location.z or nil)
+            )
+        else
+            Console.Log(
+                "[gr_characters][server][self-test] Active character spawn resolution failed code=%s.",
+                tostring(spawn_data and spawn_data.code or "spawn-resolution-failed")
+            )
+        end
+    end
 end
 
 function CharacterRuntimeSelfTest:SelectFirstCharacter(platform_id, selection_state)
