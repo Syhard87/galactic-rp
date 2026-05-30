@@ -28,7 +28,7 @@ local function resolve_first_character(selection_state)
     return selection_state.characters[1]
 end
 
-function CharacterFlowService.Create(character_service, player_service, dev_tool, session_state, creation_ui_notifier)
+function CharacterFlowService.Create(character_service, player_service, dev_tool, session_state, creation_ui_notifier, selection_ui_notifier)
     local self = setmetatable({}, CharacterFlowService)
 
     self.character_service = character_service
@@ -36,6 +36,7 @@ function CharacterFlowService.Create(character_service, player_service, dev_tool
     self.dev_tool = dev_tool
     self.session_state = session_state
     self.creation_ui_notifier = creation_ui_notifier
+    self.selection_ui_notifier = selection_ui_notifier
 
     return self
 end
@@ -90,7 +91,7 @@ function CharacterFlowService:LogGameplayReadiness(platform_id, source_label)
     return is_ready, reason
 end
 
-function CharacterFlowService:SelectFirstCharacter(platform_id, selection_state)
+function CharacterFlowService:RequestCharacterSelection(platform_id, selection_state)
     local first_character = resolve_first_character(selection_state)
 
     if type(first_character) ~= "table" or first_character.id == nil then
@@ -115,47 +116,22 @@ function CharacterFlowService:SelectFirstCharacter(platform_id, selection_state)
         return
     end
 
-    local is_started, error = self.character_service:SelectActiveCharacter(platform_id, first_character.id, function(is_success, result)
-        if not is_success then
-            if self.session_state ~= nil then
-                self.session_state:SetFailed(platform_id, result and result.code or "selection-failed")
-            end
+    Console.Log(
+        "[gr_characters][server] Character selection UI will be required for platform_id=%s character_count=%s.",
+        tostring(platform_id),
+        tostring(resolve_character_count(selection_state))
+    )
+    self:LogGameplayReadiness(platform_id, "waiting-character-selection")
 
-            Console.Log(
-                "[gr_characters][server] Active character selection failed for platform_id=%s with code=%s.",
-                tostring(platform_id),
-                tostring(result and result.code or "selection-failed")
-            )
-
-            self:LogGameplayReadiness(platform_id, "active-character-selection-failed")
-            return
-        end
-
-        Console.Log(
-            "[gr_characters][server] Active character selected id=%s.",
-            tostring(result and result.active_character_id or nil)
-        )
-
-        if self.character_service:GetActiveCharacterRow(platform_id) ~= nil then
-            Console.Log("[gr_characters][server] Active character stored for player.")
-        end
-
-        self:LogGameplayReadiness(platform_id, "active-character-selected")
-    end)
-
-    if not is_started then
-        if self.session_state ~= nil then
-            self.session_state:SetFailed(platform_id, error)
-        end
-
-        Console.Log(
-            "[gr_characters][server] Active character selection dispatch failed for platform_id=%s with error=%s.",
-            tostring(platform_id),
-            tostring(error)
-        )
-
-        self:LogGameplayReadiness(platform_id, "active-character-selection-dispatch-failed")
+    if type(self.selection_ui_notifier) == "function" then
+        self.selection_ui_notifier(platform_id, selection_state)
+        return
     end
+
+    Console.Log(
+        "[gr_characters][server] Character selection UI notifier missing for platform_id=%s.",
+        tostring(platform_id)
+    )
 end
 
 function CharacterFlowService:HandleMissingCharacters(platform_id)
@@ -223,7 +199,7 @@ function CharacterFlowService:LoadCharacters(platform_id)
             return
         end
 
-        self:SelectFirstCharacter(platform_id, selection_state)
+        self:RequestCharacterSelection(platform_id, selection_state)
     end)
 
     if not is_started then
