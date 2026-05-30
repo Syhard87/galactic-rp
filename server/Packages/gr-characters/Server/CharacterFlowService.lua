@@ -28,13 +28,14 @@ local function resolve_first_character(selection_state)
     return selection_state.characters[1]
 end
 
-function CharacterFlowService.Create(character_service, player_service, dev_tool, session_state)
+function CharacterFlowService.Create(character_service, player_service, dev_tool, session_state, creation_ui_notifier)
     local self = setmetatable({}, CharacterFlowService)
 
     self.character_service = character_service
     self.player_service = player_service
     self.dev_tool = dev_tool
     self.session_state = session_state
+    self.creation_ui_notifier = creation_ui_notifier
 
     return self
 end
@@ -106,6 +107,11 @@ function CharacterFlowService:SelectFirstCharacter(platform_id, selection_state)
         )
         Console.Log("[gr_characters][server] No active character selected. Character creation UI will be required later.")
         self:LogGameplayReadiness(platform_id, "character-selection-empty")
+
+        if type(self.creation_ui_notifier) == "function" then
+            self.creation_ui_notifier(platform_id, selection_state and selection_state.player_id or nil)
+        end
+
         return
     end
 
@@ -168,6 +174,10 @@ function CharacterFlowService:HandleMissingCharacters(platform_id)
 
     Console.Log("[gr_characters][server] No active character selected. Character creation UI will be required later.")
     self:LogGameplayReadiness(platform_id, "pending-character-creation")
+
+    if type(self.creation_ui_notifier) == "function" then
+        self.creation_ui_notifier(platform_id, loaded_player_row and loaded_player_row.id or nil)
+    end
 
     if self.dev_tool == nil or not self.dev_tool:IsEnabled() then
         return

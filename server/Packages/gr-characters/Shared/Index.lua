@@ -9,3 +9,9 @@ GRCharacters.Shared.Constants = {
     EVENT_PREFIX = "gr.characters",
     SERVER_ONLY_NOTE = "Character lifecycle logic stays in Server/.",
 }
+
+GRCharacters.Shared.Events = {
+    OPEN_CHARACTER_CREATION = "gr.characters.creation.open",
+    SUBMIT_CHARACTER_CREATION = "gr.characters.creation.submit",
+    CHARACTER_CREATION_RESULT = "gr.characters.creation.result",
+}

@@ -40,6 +40,82 @@ end
 
 local database_service = resolve_database_service()
 
+local function resolve_player_platform_id(player)
+    if type(player) ~= "table" and type(player) ~= "userdata" then
+        return nil
+    end
+
+    if type(player.GetAccountID) ~= "function" then
+        return nil
+    end
+
+    return player:GetAccountID()
+end
+
+local function find_player_by_platform_id(platform_id)
+    if platform_id == nil then
+        return nil
+    end
+
+    for _, connected_player in pairs(Player.GetAll()) do
+        if resolve_player_platform_id(connected_player) == platform_id then
+            return connected_player
+        end
+    end
+
+    return nil
+end
+
+local function get_creation_policy_for_client()
+    if GRCharacters.Server == nil or GRCharacters.Server.CreationService == nil then
+        return nil
+    end
+
+    if type(GRCharacters.Server.CreationService.GetPolicy) ~= "function" then
+        return nil
+    end
+
+    local policy = GRCharacters.Server.CreationService:GetPolicy()
+
+    if type(policy) ~= "table" then
+        return nil
+    end
+
+    return {
+        min_age = policy.min_age,
+        max_age = policy.max_age,
+        min_name_length = policy.min_name_length,
+        max_name_length = policy.max_name_length,
+        max_species_length = policy.max_species_length,
+        max_biography_length = policy.max_biography_length,
+        default_species = policy.default_species,
+    }
+end
+
+local function notify_character_creation_required(platform_id)
+    local player = find_player_by_platform_id(platform_id)
+
+    if player == nil then
+        Console.Log(
+            "[gr_characters][server] Character creation UI request skipped because player is not connected for platform_id=%s.",
+            tostring(platform_id)
+        )
+        return false
+    end
+
+    Events.CallRemote(GRCharacters.Shared.Events.OPEN_CHARACTER_CREATION, player, {
+        status = "pending-character-creation",
+        policy = get_creation_policy_for_client(),
+    })
+
+    Console.Log(
+        "[gr_characters][server] Character creation UI requested for platform_id=%s.",
+        tostring(platform_id)
+    )
+
+    return true
+end
+
 GRCharacters.Server.CharacterSessionState = CharacterSessionState.Create()
 GRCharacters.Server.PlayerRepository = CharacterPlayerRepository.Create(database_service)
 GRCharacters.Server.PlayerService = CharacterPlayerService.Create(GRCharacters.Server.PlayerRepository)
@@ -70,7 +146,8 @@ GRCharacters.Server.FlowService = CharacterFlowService.Create(
     GRCharacters.Server.Service,
     GRCharacters.Server.PlayerService,
     GRCharacters.Server.DevTool,
-    GRCharacters.Server.CharacterSessionState
+    GRCharacters.Server.CharacterSessionState,
+    notify_character_creation_required
 )
 GRCharacters.Server.RuntimeSelfTest = CharacterRuntimeSelfTest.Create(
     database_service,
@@ -122,6 +199,96 @@ local function guard_player_gameplay_readiness(player, source_label)
 
     return is_ready, reason
 end
+
+local function send_character_creation_result(player, result)
+    if player == nil then
+        return false
+    end
+
+    Events.CallRemote(GRCharacters.Shared.Events.CHARACTER_CREATION_RESULT, player, result)
+    return true
+end
+
+Events.SubscribeRemote(GRCharacters.Shared.Events.SUBMIT_CHARACTER_CREATION, function(player, character_payload)
+    local platform_id = resolve_player_platform_id(player)
+
+    if platform_id == nil then
+        Console.Log("[gr_characters][server] Character creation request rejected because platform_id is unavailable.")
+        send_character_creation_result(player, {
+            success = false,
+            code = "platform-id-required",
+        })
+        return
+    end
+
+    if GRCharacters.Server.Service == nil or type(GRCharacters.Server.Service.CreateCharacterAndSelect) ~= "function" then
+        Console.Log(
+            "[gr_characters][server] Character creation request rejected for platform_id=%s because service is unavailable.",
+            tostring(platform_id)
+        )
+        send_character_creation_result(player, {
+            success = false,
+            code = "character-service-unavailable",
+        })
+        return
+    end
+
+    Console.Log(
+        "[gr_characters][server] Character creation request received for platform_id=%s.",
+        tostring(platform_id)
+    )
+
+    local is_started, error = GRCharacters.Server.Service:CreateCharacterAndSelect(platform_id, character_payload, function(is_success, result)
+        if not is_success then
+            local error_code = result and result.code or "character-create-failed"
+
+            Console.Log(
+                "[gr_characters][server] Character creation request failed for platform_id=%s with code=%s.",
+                tostring(platform_id),
+                tostring(error_code)
+            )
+
+            send_character_creation_result(player, {
+                success = false,
+                code = error_code,
+                details = result and result.details or nil,
+                status = result and result.status or nil,
+            })
+            return
+        end
+
+        local created_character = result and result.character or nil
+
+        Console.Log(
+            "[gr_characters][server] Character creation request completed for platform_id=%s character_id=%s gameplay-ready=%s.",
+            tostring(platform_id),
+            tostring(result and result.active_character_id or nil),
+            tostring(result and result.gameplay_ready or false)
+        )
+
+        send_character_creation_result(player, {
+            success = true,
+            code = "character-created-and-selected",
+            active_character_id = result and result.active_character_id or nil,
+            first_name = created_character and created_character.first_name or nil,
+            last_name = created_character and created_character.last_name or nil,
+            gameplay_ready = result and result.gameplay_ready or false,
+        })
+    end)
+
+    if not is_started then
+        Console.Log(
+            "[gr_characters][server] Character creation request dispatch failed for platform_id=%s with error=%s.",
+            tostring(platform_id),
+            tostring(error)
+        )
+
+        send_character_creation_result(player, {
+            success = false,
+            code = error or "character-create-dispatch-failed",
+        })
+    end
+end)
 
 Player.Subscribe("Ready", function(player)
     start_player_character_flow(player, "player-ready")
