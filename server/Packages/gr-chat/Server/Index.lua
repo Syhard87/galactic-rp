@@ -13,6 +13,7 @@ local EXTERNAL_CHAT_COMMANDS = {
     f = true,
     giveitem = true,
     inv = true,
+    useitem = true,
     whoami = true,
 }
 

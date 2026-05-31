@@ -125,6 +125,10 @@ local function summarize_inventory_rows(rows)
     return lines
 end
 
+local function is_usable_item(item_key)
+    return item_key == "medkit_basic"
+end
+
 local database_service = resolve_database_service()
 
 GRInventory.Server.Repository = InventoryRepository.Create(database_service)
@@ -325,6 +329,44 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 Chat.SendMessage(
                     player,
                     string.format("Objet retire : %s x%s", tostring(result.item_key), tostring(result.quantity))
+                )
+            end)
+
+            return false
+        end
+
+        if command_name == "useitem" then
+            local item_key = trim_string(payload)
+
+            if item_key == nil or item_key:find("%s") ~= nil then
+                Chat.SendMessage(player, "Usage : /useitem <item_key>")
+                return false
+            end
+
+            if not is_usable_item(item_key) then
+                Chat.SendMessage(player, "Objet non utilisable.")
+                return false
+            end
+
+            GRInventory.Server.Service:RemoveItemFromActiveCharacter(player, item_key, 1, function(is_success, result, error)
+                if not is_success then
+                    if error == "active-character-missing" then
+                        Chat.SendMessage(player, "Aucun personnage actif.")
+                        return
+                    end
+
+                    if error == "inventory-item-quantity-insufficient" then
+                        Chat.SendMessage(player, "Objet indisponible.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Impossible de retirer l'objet.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format("Objet utilise : %s", tostring(result.item_key))
                 )
             end)
 
