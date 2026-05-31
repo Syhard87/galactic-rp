@@ -36,6 +36,46 @@ local function trim_string(value)
     return trimmed_value
 end
 
+local function normalize_boolean(value, fallback)
+    if type(value) == "boolean" then
+        return value
+    end
+
+    local string_value = trim_string(value)
+
+    if string_value ~= nil then
+        local lowered_value = string.lower(string_value)
+
+        if lowered_value == "true" then
+            return true
+        end
+
+        if lowered_value == "false" then
+            return false
+        end
+    end
+
+    return fallback
+end
+
+local function read_custom_settings()
+    if type(Server) ~= "table" and type(Server) ~= "userdata" then
+        return nil
+    end
+
+    if type(Server.GetCustomSettings) ~= "function" then
+        return nil
+    end
+
+    local is_read, custom_settings = pcall(Server.GetCustomSettings)
+
+    if not is_read or type(custom_settings) ~= "table" then
+        return nil
+    end
+
+    return custom_settings
+end
+
 local function get_platform_id(player)
     if type(player) ~= "table" and type(player) ~= "userdata" then
         return nil
@@ -46,6 +86,16 @@ local function get_platform_id(player)
     end
 
     return player:GetAccountID()
+end
+
+local function resolve_platform_id(player_or_platform_id)
+    local platform_id = get_platform_id(player_or_platform_id)
+
+    if platform_id ~= nil then
+        return platform_id
+    end
+
+    return trim_string(player_or_platform_id)
 end
 
 local function normalize_chat_submit_arguments(first_argument, second_argument)
@@ -94,6 +144,70 @@ local function get_chat_command(message)
     end
 
     return string.lower(command_name), trim_string(payload)
+end
+
+local function parse_platform_id_allowlist(value)
+    local allowlist = {}
+    local has_entries = false
+
+    local function add_entry(entry_value)
+        local normalized_entry = trim_string(entry_value)
+
+        if normalized_entry == nil then
+            return
+        end
+
+        allowlist[normalized_entry] = true
+        has_entries = true
+    end
+
+    if type(value) == "string" then
+        for raw_entry in string.gmatch(value, "([^,]+)") do
+            add_entry(raw_entry)
+        end
+    elseif type(value) == "table" then
+        for _, entry_value in ipairs(value) do
+            add_entry(entry_value)
+        end
+    end
+
+    return allowlist, has_entries
+end
+
+local function can_use_giveitem_command(player_or_platform_id)
+    local platform_id = resolve_platform_id(player_or_platform_id)
+    local custom_settings = nil
+    local debug_commands_enabled = false
+    local allowlist = nil
+    local has_allowlist_entries = false
+
+    if platform_id == nil then
+        return false, nil, "platform-id-missing"
+    end
+
+    custom_settings = read_custom_settings()
+
+    if type(custom_settings) ~= "table" then
+        return false, platform_id, "custom-settings-missing"
+    end
+
+    debug_commands_enabled = normalize_boolean(custom_settings.gr_inventory_debug_commands_enabled, false)
+
+    if not debug_commands_enabled then
+        return false, platform_id, "debug-disabled"
+    end
+
+    allowlist, has_allowlist_entries = parse_platform_id_allowlist(custom_settings.gr_inventory_debug_allowed_platform_ids)
+
+    if not has_allowlist_entries then
+        return false, platform_id, "allowlist-missing"
+    end
+
+    if allowlist[platform_id] ~= true then
+        return false, platform_id, "not-authorized"
+    end
+
+    return true, platform_id, nil
 end
 
 local function summarize_inventory_rows(rows)
@@ -240,9 +354,24 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         end
 
         if command_name == "giveitem" then
+            local is_allowed = false
+            local platform_id = nil
+            local guard_error = nil
             local item_key = nil
             local quantity_text = nil
             local quantity = nil
+
+            is_allowed, platform_id, guard_error = can_use_giveitem_command(player)
+
+            if not is_allowed then
+                Console.Log(
+                    "[gr_inventory][server] Give item command denied platform_id=%s reason=%s.",
+                    tostring(platform_id),
+                    tostring(guard_error)
+                )
+                Chat.SendMessage(player, "Commande reservee au staff/dev.")
+                return false
+            end
 
             if payload == nil then
                 Chat.SendMessage(player, "Usage : /giveitem <item_key> <quantity>")
