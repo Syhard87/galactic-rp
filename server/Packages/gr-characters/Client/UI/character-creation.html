@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Character Creation</title>
+    <style>
+        :root {
+            --bg: #101417;
+            --panel: rgba(20, 28, 32, 0.96);
+            --panel-border: rgba(151, 178, 172, 0.34);
+            --text: #edf2ee;
+            --muted: #a9b7af;
+            --field: #172025;
+            --field-border: #3b4c4d;
+            --accent: #c7e76c;
+            --accent-dark: #8aa33d;
+            --danger: #ff8170;
+            --success: #8ee6a8;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+        }
+
+        body {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 32px;
+            background:
+                linear-gradient(135deg, rgba(16, 20, 23, 0.92), rgba(30, 45, 45, 0.82)),
+                repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 64px);
+            color: var(--text);
+            font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+        }
+
+        body.is-open {
+            display: flex;
+        }
+
+        main {
+            width: min(760px, 100%);
+            border: 1px solid var(--panel-border);
+            border-radius: 8px;
+            background: var(--panel);
+            box-shadow: 0 22px 80px rgba(0, 0, 0, 0.46);
+        }
+
+        header {
+            padding: 24px 28px 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        h1 {
+            margin: 0 0 8px;
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: 0;
+        }
+
+        p {
+            margin: 0;
+            color: var(--muted);
+            line-height: 1.45;
+        }
+
+        form {
+            display: grid;
+            gap: 18px;
+            padding: 24px 28px 28px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+        }
+
+        label {
+            display: grid;
+            gap: 7px;
+            color: var(--muted);
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        input,
+        textarea {
+            width: 100%;
+            border: 1px solid var(--field-border);
+            border-radius: 6px;
+            background: var(--field);
+            color: var(--text);
+            font: inherit;
+            outline: none;
+            padding: 12px 13px;
+        }
+
+        input:focus,
+        textarea:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(199, 231, 108, 0.16);
+        }
+
+        textarea {
+            min-height: 96px;
+            resize: vertical;
+        }
+
+        .actions {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        button {
+            min-width: 190px;
+            border: 0;
+            border-radius: 6px;
+            background: var(--accent);
+            color: #15190e;
+            cursor: pointer;
+            font: inherit;
+            font-weight: 800;
+            padding: 13px 18px;
+        }
+
+        button:disabled {
+            background: var(--accent-dark);
+            cursor: wait;
+            opacity: 0.72;
+        }
+
+        .message {
+            min-height: 22px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .message.error {
+            color: var(--danger);
+        }
+
+        .message.success {
+            color: var(--success);
+        }
+
+        @media (max-width: 620px) {
+            body {
+                padding: 16px;
+            }
+
+            header,
+            form {
+                padding-left: 18px;
+                padding-right: 18px;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+            }
+
+            .actions {
+                align-items: stretch;
+                flex-direction: column;
+            }
+
+            button {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <header>
+            <h1>Create Character</h1>
+            <p>Your identity is created only after the server validates and stores it.</p>
+        </header>
+
+        <form id="character-form">
+            <div class="grid">
+                <label>
+                    First name
+                    <input id="first_name" name="first_name" autocomplete="off" required maxlength="64">
+                </label>
+
+                <label>
+                    Last name
+                    <input id="last_name" name="last_name" autocomplete="off" required maxlength="64">
+                </label>
+
+                <label>
+                    Age
+                    <input id="age" name="age" type="number" required min="16" max="120" step="1">
+                </label>
+
+                <label>
+                    Species
+                    <input id="species" name="species" autocomplete="off" maxlength="64">
+                </label>
+            </div>
+
+            <label>
+                Biography
+                <textarea id="biography" name="biography" maxlength="280"></textarea>
+            </label>
+
+            <div class="actions">
+                <div id="message" class="message"></div>
+                <button id="submit-button" type="submit">Create Character</button>
+            </div>
+        </form>
+    </main>
+
+    <script>
+        const form = document.getElementById("character-form");
+        const submitButton = document.getElementById("submit-button");
+        const message = document.getElementById("message");
+
+        function setMessage(text, kind) {
+            message.textContent = text || "";
+            message.className = "message" + (kind ? " " + kind : "");
+        }
+
+        function setSubmitting(isSubmitting) {
+            submitButton.disabled = isSubmitting;
+            submitButton.textContent = isSubmitting ? "Creating..." : "Create Character";
+        }
+
+        function applyPolicy(policy) {
+            if (!policy) {
+                return;
+            }
+
+            const age = document.getElementById("age");
+            const firstName = document.getElementById("first_name");
+            const lastName = document.getElementById("last_name");
+            const species = document.getElementById("species");
+            const biography = document.getElementById("biography");
+
+            if (policy.min_age) {
+                age.min = String(policy.min_age);
+            }
+
+            if (policy.max_age) {
+                age.max = String(policy.max_age);
+            }
+
+            if (policy.min_name_length) {
+                firstName.minLength = policy.min_name_length;
+                lastName.minLength = policy.min_name_length;
+            }
+
+            if (policy.max_name_length) {
+                firstName.maxLength = policy.max_name_length;
+                lastName.maxLength = policy.max_name_length;
+            }
+
+            if (policy.max_species_length) {
+                species.maxLength = policy.max_species_length;
+            }
+
+            if (policy.max_biography_length) {
+                biography.maxLength = policy.max_biography_length;
+            }
+
+            if (policy.default_species && species.value.trim() === "") {
+                species.placeholder = policy.default_species;
+            }
+        }
+
+        function buildPayload() {
+            return {
+                first_name: document.getElementById("first_name").value.trim(),
+                last_name: document.getElementById("last_name").value.trim(),
+                age: document.getElementById("age").value.trim(),
+                species: document.getElementById("species").value.trim(),
+                biography: document.getElementById("biography").value.trim()
+            };
+        }
+
+        function formatFailure(result) {
+            if (!result || !result.code) {
+                return "Character creation failed.";
+            }
+
+            if (Array.isArray(result.details) && result.details.length > 0) {
+                return result.details.join(", ");
+            }
+
+            return result.code;
+        }
+
+        Events.Subscribe("OpenCharacterCreation", function(payload) {
+            document.body.classList.add("is-open");
+            setSubmitting(false);
+            setMessage("Complete the required fields to enter the server.", "");
+            applyPolicy(payload && payload.policy);
+        });
+
+        Events.Subscribe("CharacterCreationResult", function(result) {
+            setSubmitting(false);
+
+            if (result && result.success === true) {
+                setMessage("Character created. Entering gameplay...", "success");
+                window.setTimeout(function() {
+                    Events.Call("CloseCharacterCreation");
+                }, 900);
+                return;
+            }
+
+            setMessage(formatFailure(result), "error");
+        });
+
+        form.addEventListener("submit", function(event) {
+            event.preventDefault();
+            setSubmitting(true);
+            setMessage("Sending character to server...", "");
+            Events.Call("SubmitCharacterCreation", buildPayload());
+        });
+
+        Events.Call("Ready");
+    </script>
+</body>
+</html>

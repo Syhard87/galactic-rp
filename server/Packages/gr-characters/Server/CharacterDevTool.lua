@@ -205,7 +205,10 @@ function CharacterDevTool:ReloadCharactersAfterCreate(platform_id)
 end
 
 function CharacterDevTool:CreateTestCharacter(platform_id)
-    local is_started, error = self.character_service:CreateCharacter(platform_id, TEST_CHARACTER_PAYLOAD, function(is_success, result)
+    local create_method = self.character_service.CreateCharacterAndSelect
+        or self.character_service.CreateCharacterForPlayer
+        or self.character_service.CreateCharacter
+    local is_started, error = create_method(self.character_service, platform_id, TEST_CHARACTER_PAYLOAD, function(is_success, result)
         if not is_success then
             Console.Log(
                 "[gr_characters][server][dev] Test character creation failed for platform_id=%s with code=%s.",
@@ -216,7 +219,11 @@ function CharacterDevTool:CreateTestCharacter(platform_id)
             return
         end
 
-        self:ReloadCharactersAfterCreate(platform_id)
+        Console.Log(
+            "[gr_characters][server][dev] Test character created and selected id=%s gameplay-ready=%s.",
+            tostring(result and result.active_character_id or nil),
+            tostring(result and result.gameplay_ready or false)
+        )
     end)
 
     if not is_started then
