@@ -222,6 +222,72 @@ function ProgressionService:AddXpToActiveCharacter(player_or_platform_id, amount
     return self:AddXp(active_character_id, amount, reason, callback)
 end
 
+function ProgressionService:SetClass(character_id, class_key, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if type(ProgressionConfig) ~= "table" or type(ProgressionConfig.IsValidClassKey) ~= "function" then
+        callback(false, nil, "progression-config-missing")
+        return true
+    end
+
+    if not ProgressionConfig.IsValidClassKey(class_key) then
+        callback(false, nil, "invalid-class")
+        return true
+    end
+
+    return self:GetOrCreateProgression(normalized_character_id, nil, function(is_success, progression, error)
+        if not is_success then
+            callback(false, nil, error)
+            return
+        end
+
+        progression.class_key = ProgressionConfig.NormalizeClassKey(class_key)
+
+        Console.Log(
+            "[gr_progression][service] Class set character_id=%s class_key=%s.",
+            tostring(normalized_character_id),
+            tostring(progression.class_key)
+        )
+
+        self.repository:SaveProgression(progression, callback)
+    end)
+end
+
+function ProgressionService:SetActiveCharacterClass(player_or_platform_id, class_key, callback)
+    local active_character_id = nil
+    local resolve_error = nil
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    active_character_id, resolve_error = resolve_active_character_id(player_or_platform_id)
+
+    if active_character_id == nil then
+        callback(false, nil, resolve_error)
+        return true
+    end
+
+    return self:SetClass(active_character_id, class_key, callback)
+end
+
 GRProgression.Server.ProgressionServiceClass = ProgressionService
 
 return ProgressionService

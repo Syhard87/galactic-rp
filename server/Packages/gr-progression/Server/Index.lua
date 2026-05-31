@@ -7,6 +7,7 @@ local ProgressionService = Package.Require("ProgressionService.lua")
 
 GRProgression = GRProgression or {}
 GRProgression.Server = GRProgression.Server or {}
+local ProgressionConfig = GRProgression.Shared and GRProgression.Shared.ProgressionConfig
 
 local function resolve_database_service()
     if type(GRDatabaseBridge) == "table" and type(GRDatabaseBridge.GetService) == "function" then
@@ -255,6 +256,20 @@ local GRProgressionBridge = {
 
         return GRProgression.Server.Service:AddXpToActiveCharacter(player_or_platform_id, amount, reason, callback)
     end,
+    SetClass = function(character_id, class_key, callback)
+        if GRProgression.Server.Service == nil then
+            return callback_service_missing(callback)
+        end
+
+        return GRProgression.Server.Service:SetClass(character_id, class_key, callback)
+    end,
+    SetActiveCharacterClass = function(player_or_platform_id, class_key, callback)
+        if GRProgression.Server.Service == nil then
+            return callback_service_missing(callback)
+        end
+
+        return GRProgression.Server.Service:SetActiveCharacterClass(player_or_platform_id, class_key, callback)
+    end,
 }
 
 Package.Export("GRProgressionBridge", GRProgressionBridge)
@@ -298,6 +313,58 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         tostring(progression.class_key)
                     )
                 )
+            end)
+
+            return false
+        end
+
+        if command_name == "classes" then
+            local classes = nil
+
+            if type(ProgressionConfig) ~= "table" or type(ProgressionConfig.ListClasses) ~= "function" then
+                Chat.SendMessage(player, "Classes indisponibles.")
+                return false
+            end
+
+            classes = ProgressionConfig.ListClasses()
+
+            Chat.SendMessage(player, "Classes disponibles :")
+
+            for _, class_definition in ipairs(classes) do
+                Chat.SendMessage(
+                    player,
+                    string.format("- %s : %s", tostring(class_definition.key), tostring(class_definition.label))
+                )
+            end
+
+            return false
+        end
+
+        if command_name == "setclass" then
+            local class_key = trim_string(payload)
+
+            if class_key == nil or class_key:find("%s") ~= nil then
+                Chat.SendMessage(player, "Usage : /setclass <class_key>")
+                return false
+            end
+
+            GRProgression.Server.Service:SetActiveCharacterClass(player, class_key, function(is_success, progression, error)
+                if not is_success then
+                    if error == "active-character-missing" then
+                        Chat.SendMessage(player, "Aucun personnage actif.")
+                        return
+                    end
+
+                    if error == "invalid-class" then
+                        Chat.SendMessage(player, "Classe inconnue.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Impossible de definir la classe.")
+                    return
+                end
+
+                Chat.SendMessage(player, string.format("Classe definie : %s", tostring(progression.class_key)))
             end)
 
             return false

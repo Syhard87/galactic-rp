@@ -6,13 +6,41 @@ local ProgressionConfig = {
     MAX_LEVEL = 20,
     FALLBACK_CLASS_KEY = "civilian",
     CLASSES = {
-        civilian = true,
-        military_recruit = true,
-        medic = true,
-        engineer = true,
-        merchant = true,
-        smuggler = true,
-        explorer = true,
+        civilian = {
+            key = "civilian",
+            label = "Civil",
+            description = "Profil neutre sans specialisation.",
+        },
+        military_recruit = {
+            key = "military_recruit",
+            label = "Recrue militaire",
+            description = "Combat, discipline et operations.",
+        },
+        medic = {
+            key = "medic",
+            label = "Medecin",
+            description = "Soin, diagnostic et soutien medical.",
+        },
+        engineer = {
+            key = "engineer",
+            label = "Ingenieur",
+            description = "Reparation, mecanique et fabrication.",
+        },
+        merchant = {
+            key = "merchant",
+            label = "Marchand",
+            description = "Commerce, logistique et contrats.",
+        },
+        smuggler = {
+            key = "smuggler",
+            label = "Contrebandier",
+            description = "Discretion, marche noir et falsification.",
+        },
+        explorer = {
+            key = "explorer",
+            label = "Explorateur",
+            description = "Exploration, recolte et survie.",
+        },
     },
     ORDERED_CLASSES = {
         "civilian",
@@ -39,19 +67,63 @@ local function trim_string(value)
     return trimmed_value
 end
 
-function ProgressionConfig.IsValidClassKey(class_key)
+local function normalize_class_key_for_lookup(class_key)
     local normalized_class_key = trim_string(class_key)
+
+    if normalized_class_key == nil then
+        return nil
+    end
+
+    return string.lower(normalized_class_key)
+end
+
+function ProgressionConfig.IsValidClassKey(class_key)
+    local normalized_class_key = normalize_class_key_for_lookup(class_key)
 
     if normalized_class_key == nil then
         return false
     end
 
-    return ProgressionConfig.CLASSES[normalized_class_key] == true
+    return type(ProgressionConfig.CLASSES[normalized_class_key]) == "table"
+end
+
+function ProgressionConfig.GetClassByKey(class_key)
+    local normalized_class_key = normalize_class_key_for_lookup(class_key)
+
+    if normalized_class_key == nil then
+        return nil
+    end
+
+    return ProgressionConfig.CLASSES[normalized_class_key]
+end
+
+function ProgressionConfig.GetClassLabel(class_key)
+    local class_definition = ProgressionConfig.GetClassByKey(class_key)
+
+    if type(class_definition) ~= "table" then
+        return nil
+    end
+
+    return class_definition.label
+end
+
+function ProgressionConfig.ListClasses()
+    local classes = {}
+
+    for _, class_key in ipairs(ProgressionConfig.ORDERED_CLASSES) do
+        local class_definition = ProgressionConfig.GetClassByKey(class_key)
+
+        if type(class_definition) == "table" then
+            classes[#classes + 1] = class_definition
+        end
+    end
+
+    return classes
 end
 
 function ProgressionConfig.NormalizeClassKey(class_key)
     if ProgressionConfig.IsValidClassKey(class_key) then
-        return trim_string(class_key)
+        return normalize_class_key_for_lookup(class_key)
     end
 
     return ProgressionConfig.FALLBACK_CLASS_KEY
