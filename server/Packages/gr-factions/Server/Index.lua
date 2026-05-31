@@ -82,6 +82,121 @@ local function send_identity_messages(player, active_character, resolution)
     Chat.SendMessage(player, string.format("Grade : %s", rank_name))
 end
 
+local function get_chat_command(message)
+    local trimmed_message = trim_string(message)
+
+    if trimmed_message == nil or trimmed_message:sub(1, 1) ~= "/" then
+        return nil, nil
+    end
+
+    local command_name, payload = trimmed_message:match("^/(%S+)%s*(.*)$")
+
+    if command_name == nil then
+        return nil, nil
+    end
+
+    return string.lower(command_name), trim_string(payload)
+end
+
+local function send_faction_chat_feedback(player, message)
+    Chat.SendMessage(player, message)
+end
+
+local function build_faction_chat_message(active_character, message)
+    local first_name = trim_string(active_character and active_character.first_name) or "Unknown"
+    local last_name = trim_string(active_character and active_character.last_name) or "Character"
+
+    return string.format("[Faction] %s %s : %s", first_name, last_name, message)
+end
+
+local function get_active_character_from_bridge(player_or_platform_id)
+    if GRCharactersBridge == nil or type(GRCharactersBridge.GetActiveCharacter) ~= "function" then
+        return nil
+    end
+
+    return GRCharactersBridge.GetActiveCharacter(player_or_platform_id)
+end
+
+local function collect_faction_chat_recipients(sender_faction_id)
+    local recipients = {}
+
+    if type(Player) ~= "table" or type(Player.GetAll) ~= "function" then
+        return recipients
+    end
+
+    for _, candidate_player in pairs(Player.GetAll()) do
+        local candidate_platform_id = get_platform_id(candidate_player)
+        local candidate_character = get_active_character_from_bridge(candidate_platform_id)
+
+        if type(candidate_character) == "table" and tostring(candidate_character.faction_id) == tostring(sender_faction_id) then
+            recipients[#recipients + 1] = candidate_player
+        end
+    end
+
+    return recipients
+end
+
+local function handle_faction_chat_command(player, platform_id, payload)
+    local active_character = nil
+    local faction_id = nil
+    local recipients = nil
+    local formatted_message = nil
+
+    if payload == nil then
+        send_faction_chat_feedback(player, "Usage : /f <message>")
+        Console.Log("[gr_factions][server] /f rejected reason=%s platform_id=%s.", "message-required", tostring(platform_id))
+        return false
+    end
+
+    if GRCharactersBridge == nil or type(GRCharactersBridge.GetActiveCharacter) ~= "function" then
+        send_faction_chat_feedback(player, "Aucun personnage actif.")
+        Console.Log("[gr_factions][server] /f rejected reason=%s platform_id=%s.", "characters-bridge-unavailable", tostring(platform_id))
+        return false
+    end
+
+    active_character = GRCharactersBridge.GetActiveCharacter(platform_id)
+
+    if type(active_character) ~= "table" then
+        send_faction_chat_feedback(player, "Aucun personnage actif.")
+        Console.Log("[gr_factions][server] /f rejected reason=%s platform_id=%s.", "active-character-missing", tostring(platform_id))
+        return false
+    end
+
+    faction_id = active_character.faction_id
+
+    if faction_id == nil or tostring(faction_id) == "" then
+        send_faction_chat_feedback(player, "Vous n'avez aucune faction.")
+        Console.Log(
+            "[gr_factions][server] /f rejected reason=%s platform_id=%s character_id=%s.",
+            "faction-missing",
+            tostring(platform_id),
+            tostring(active_character.id)
+        )
+        return false
+    end
+
+    recipients = collect_faction_chat_recipients(faction_id)
+
+    if #recipients < 1 then
+        recipients[1] = player
+    end
+
+    formatted_message = build_faction_chat_message(active_character, payload)
+
+    for _, recipient in ipairs(recipients) do
+        Chat.SendMessage(recipient, formatted_message)
+    end
+
+    Console.Log(
+        "[gr_factions][server] Faction chat sent faction_id=%s sender_character_id=%s recipients=%s.",
+        tostring(faction_id),
+        tostring(active_character.id),
+        tostring(#recipients)
+    )
+
+    return false
+end
+
 local database_service = resolve_database_service()
 
 GRFactions.Server.Repository = FactionRepository.Create(database_service)
@@ -215,9 +330,25 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         local player, message = normalize_chat_submit_arguments(first_argument, second_argument)
         local platform_id = nil
         local active_character = nil
+        local command_name = nil
+        local command_payload = nil
 
         if player == nil then
             return
+        end
+
+        command_name, command_payload = get_chat_command(message)
+
+        if command_name == "f" then
+            platform_id = get_platform_id(player)
+
+            if platform_id == nil then
+                Chat.SendMessage(player, "Aucun personnage actif.")
+                Console.Log("[gr_factions][server] /f rejected reason=%s.", "platform-id-required")
+                return false
+            end
+
+            return handle_faction_chat_command(player, platform_id, command_payload)
         end
 
         if trim_string(message) ~= "/whoami" then
