@@ -46,11 +46,11 @@ local SELECT_CHARACTER_BY_ID_QUERY = [[
 local UPDATE_CHARACTER_POSITION_QUERY = [[
     UPDATE characters
     SET
-        position_x = :1,
-        position_y = :2,
-        position_z = :3,
+        position_x = :0,
+        position_y = :1,
+        position_z = :2,
         updated_at = NOW()
-    WHERE id = :0
+    WHERE id = :3
 ]]
 
 local INSERT_CHARACTER_QUERY = [[
@@ -402,6 +402,14 @@ function CharacterRepository:UpdateCharacterPosition(character_id, position, cal
         return true
     end
 
+    Console.Log(
+        "[gr_characters][repository] Updating character position character_id=%s x=%s y=%s z=%s.",
+        tostring(character_id),
+        tostring(position.x),
+        tostring(position.y),
+        tostring(position.z)
+    )
+
     database_or_error:ExecuteAsync(
         UPDATE_CHARACTER_POSITION_QUERY,
         function(rows_affected, error)
@@ -431,10 +439,10 @@ function CharacterRepository:UpdateCharacterPosition(character_id, position, cal
                 rows_affected = rows_affected,
             })
         end,
-        character_id,
         position.x,
         position.y,
-        position.z
+        position.z,
+        character_id
     )
 
     return true
