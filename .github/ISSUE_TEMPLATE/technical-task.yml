@@ -1,0 +1,59 @@
+name: Technical Task
+description: Décrire une tâche technique, infra, CI/CD ou dette de structure.
+title: "TECH: "
+labels:
+  - type: tech-debt
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      placeholder: Décrire le besoin technique et sa raison.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Critères d'acceptation
+      placeholder: |
+        - ...
+        - ...
+    validations:
+      required: true
+  - type: input
+    id: impacted_package
+    attributes:
+      label: Zone impactée
+      placeholder: "ex: docker, database, .github/workflows"
+    validations:
+      required: true
+  - type: textarea
+    id: db_ui_impact
+    attributes:
+      label: Impact DB / UI
+      placeholder: "Préciser l'impact ou indiquer aucun."
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priorité
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+    validations:
+      required: true
+  - type: dropdown
+    id: complexity
+    attributes:
+      label: Complexité
+      options:
+        - XS
+        - S
+        - M
+        - L
+        - XL
+    validations:
+      required: true

@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate-and-package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify project structure
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_dirs=(
+            "server/Packages"
+            "ui/hud"
+            "ui/datapad"
+            "database/migrations"
+            "database/seeds"
+            "docker"
+            "tools"
+            ".github/ISSUE_TEMPLATE"
+            ".github/workflows"
+            "docs"
+          )
+
+          for dir in "${required_dirs[@]}"; do
+            if [ ! -d "$dir" ]; then
+              echo "Missing required directory: $dir" >&2
+              exit 1
+            fi
+          done
+
+      - name: Verify SQL migrations exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! find database/migrations -maxdepth 1 -type f -name '*.sql' | grep -q .; then
+            echo "No SQL migration found in database/migrations" >&2
+            exit 1
+          fi
+
+      - name: Check repository for obvious secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if find . -type f \( -name ".env" -o -name "*.pem" -o -name "*.key" \) | grep -q .; then
+            echo "Real environment or key files detected in repository" >&2
+            exit 1
+          fi
+
+          if grep -RInE "(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]+|-----BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----)" . \
+            --exclude-dir=.git \
+            --exclude=*.md \
+            --exclude=.env.example; then
+            echo "Obvious secret pattern detected" >&2
+            exit 1
+          fi
+
+      - name: Upload bootstrap artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: galactic-rp-bootstrap
+          path: |
+            server
+            database
+            docs
