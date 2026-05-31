@@ -132,6 +132,13 @@ local GRFactionsBridge = {
 
         return GRFactions.Server.Service:GetRankById(rank_id, callback)
     end,
+    GetSpawnPointForFaction = function(faction_id, callback)
+        if GRFactions.Server.Service == nil then
+            return callback_service_missing(callback)
+        end
+
+        return GRFactions.Server.Service:GetSpawnPointForFaction(faction_id, callback)
+    end,
     AssignCharacterFaction = function(character_id, faction_id, rank_id, callback)
         if GRFactions.Server.Service == nil then
             return callback_service_missing(callback)

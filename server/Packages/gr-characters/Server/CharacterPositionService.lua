@@ -205,6 +205,42 @@ local function is_position_uninitialized(position)
     return position.x == 0 and position.y == 0 and position.z == 0
 end
 
+local function resolve_faction_spawn_data(character_row)
+    local faction_id = normalize_character_id(character_row and character_row.faction_id or nil)
+    local spawn_point = nil
+    local spawn_location = nil
+    local spawn_rotation = nil
+
+    if faction_id == nil then
+        return nil
+    end
+
+    if type(GRFactionsBridge) ~= "table" or type(GRFactionsBridge.GetSpawnPointForFaction) ~= "function" then
+        return nil
+    end
+
+    spawn_point = GRFactionsBridge.GetSpawnPointForFaction(faction_id)
+
+    if type(spawn_point) ~= "table" then
+        return nil
+    end
+
+    spawn_location = normalize_position(spawn_point.location or spawn_point)
+
+    if spawn_location == nil then
+        return nil
+    end
+
+    spawn_rotation = normalize_rotation(spawn_point.rotation) or build_default_rotation()
+
+    return {
+        source = "faction-spawn-point",
+        faction_id = faction_id,
+        location = spawn_location,
+        rotation = spawn_rotation,
+    }
+end
+
 local function calculate_distance_squared(position_a, position_b)
     local delta_x = position_a.x - position_b.x
     local delta_y = position_a.y - position_b.y
@@ -235,6 +271,7 @@ function CharacterPositionService:GetPolicy()
         zero_vector_is_uninitialized = true,
         fallback_spawn_location = clone_table(FALLBACK_SPAWN_LOCATION),
         fallback_order = {
+            "faction-spawn-point",
             "persisted-character-position",
             "map-spawn-point",
             "server-fallback-position",
@@ -270,6 +307,20 @@ function CharacterPositionService:ResolveSpawnDataForCharacterRow(character_row)
         return false, {
             code = "character-row-required",
         }
+    end
+
+    local faction_spawn_data = resolve_faction_spawn_data(character_row)
+
+    if faction_spawn_data ~= nil then
+        Console.Log(
+            "[gr_characters][position-service] active character spawn faction used faction_id=%s location=%s,%s,%s.",
+            tostring(faction_spawn_data.faction_id),
+            tostring(faction_spawn_data.location.x),
+            tostring(faction_spawn_data.location.y),
+            tostring(faction_spawn_data.location.z)
+        )
+
+        return true, faction_spawn_data
     end
 
     local persisted_position = normalize_position({

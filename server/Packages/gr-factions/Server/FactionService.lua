@@ -4,6 +4,34 @@ GRFactions.Server = GRFactions.Server or {}
 local FactionService = {}
 FactionService.__index = FactionService
 
+local FACTION_SPAWN_POINTS = {
+    [1] = {
+        faction_id = 1,
+        location = { x = 0, y = 0, z = 100 },
+        rotation = { pitch = 0, yaw = 0, roll = 0 },
+    },
+    [2] = {
+        faction_id = 2,
+        location = { x = 500, y = 0, z = 100 },
+        rotation = { pitch = 0, yaw = 0, roll = 0 },
+    },
+    [3] = {
+        faction_id = 3,
+        location = { x = -500, y = 0, z = 100 },
+        rotation = { pitch = 0, yaw = 0, roll = 0 },
+    },
+    [4] = {
+        faction_id = 4,
+        location = { x = 0, y = 500, z = 100 },
+        rotation = { pitch = 0, yaw = 0, roll = 0 },
+    },
+    [5] = {
+        faction_id = 5,
+        location = { x = 0, y = -500, z = 100 },
+        rotation = { pitch = 0, yaw = 0, roll = 0 },
+    },
+}
+
 local function resolve_characters_bridge()
     if type(GRCharactersBridge) == "table"
         and type(GRCharactersBridge.GetActiveCharacter) == "function"
@@ -12,6 +40,50 @@ local function resolve_characters_bridge()
     end
 
     return nil
+end
+
+local function normalize_positive_integer(value)
+    if type(value) == "number" then
+        if value < 1 then
+            return nil
+        end
+
+        return math.floor(value)
+    end
+
+    if type(value) == "string" then
+        if value:match("^%d+$") == nil then
+            return nil
+        end
+
+        local parsed_value = tonumber(value)
+
+        if parsed_value == nil or parsed_value < 1 then
+            return nil
+        end
+
+        return math.floor(parsed_value)
+    end
+
+    return nil
+end
+
+local function clone_table(source)
+    local copy = {}
+
+    if type(source) ~= "table" then
+        return nil
+    end
+
+    for key, value in pairs(source) do
+        if type(value) == "table" then
+            copy[key] = clone_table(value)
+        else
+            copy[key] = value
+        end
+    end
+
+    return copy
 end
 
 local function callback_repository_missing(callback)
@@ -68,6 +140,22 @@ function FactionService:GetRankById(rank_id, callback)
     end
 
     return self.repository:GetRankById(rank_id, callback)
+end
+
+function FactionService:GetSpawnPointForFaction(faction_id, callback)
+    local normalized_faction_id = normalize_positive_integer(faction_id)
+    local spawn_point = nil
+
+    if normalized_faction_id ~= nil then
+        spawn_point = clone_table(FACTION_SPAWN_POINTS[normalized_faction_id])
+    end
+
+    if type(callback) == "function" then
+        callback(true, spawn_point, nil)
+        return true
+    end
+
+    return spawn_point
 end
 
 function FactionService:AssignCharacterFaction(character_id, faction_id, rank_id, callback)

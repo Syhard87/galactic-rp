@@ -8,6 +8,8 @@ local SELECT_CHARACTERS_BY_PLAYER_ID_QUERY = [[
     SELECT
         id,
         player_id,
+        faction_id,
+        rank_id,
         first_name,
         last_name,
         age,
@@ -24,6 +26,8 @@ local SELECT_CHARACTER_BY_ID_QUERY = [[
     SELECT
         id,
         player_id,
+        faction_id,
+        rank_id,
         first_name,
         last_name,
         age,
@@ -69,6 +73,8 @@ local INSERT_CHARACTER_QUERY = [[
     RETURNING
         id,
         player_id,
+        faction_id,
+        rank_id,
         first_name,
         last_name,
         age,
@@ -89,6 +95,8 @@ local function normalize_character_row(row)
     return {
         id = row.id,
         player_id = row.player_id,
+        faction_id = row.faction_id,
+        rank_id = row.rank_id,
         first_name = row.first_name,
         last_name = row.last_name,
         age = row.age,
