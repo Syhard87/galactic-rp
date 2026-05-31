@@ -72,6 +72,25 @@ local SELECT_RANK_BY_ID_QUERY = [[
     LIMIT 1
 ]]
 
+local SELECT_CHARACTER_AFFILIATION_BY_ID_QUERY = [[
+    SELECT
+        id,
+        faction_id,
+        rank_id
+    FROM characters
+    WHERE id = :0
+    LIMIT 1
+]]
+
+local UPDATE_CHARACTER_AFFILIATION_QUERY = [[
+    UPDATE characters
+    SET
+        faction_id = NULLIF(:1, 0),
+        rank_id = NULLIF(:2, 0),
+        updated_at = NOW()
+    WHERE id = :0
+]]
+
 local function normalize_positive_integer(value)
     if type(value) == "number" then
         if value < 1 then
@@ -164,6 +183,26 @@ local function normalize_rows(rows, normalizer)
     end
 
     return normalized_rows
+end
+
+local function normalize_character_affiliation_row(row)
+    local character_id = nil
+
+    if type(row) ~= "table" then
+        return nil
+    end
+
+    character_id = normalize_positive_integer(row.id)
+
+    if character_id == nil then
+        return nil
+    end
+
+    return {
+        id = character_id,
+        faction_id = normalize_positive_integer(row.faction_id),
+        rank_id = normalize_positive_integer(row.rank_id),
+    }
 end
 
 function FactionRepository.Create(database_service)
@@ -372,6 +411,164 @@ function FactionRepository:GetRankById(rank_id, callback)
             callback(true, normalized_rows[1], nil)
         end, normalized_rank_id)
     end, "rank-by-id")
+end
+
+function FactionRepository:GetCharacterAffiliation(character_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_CHARACTER_AFFILIATION_BY_ID_QUERY, function(rows, select_error)
+            local normalized_rows = nil
+
+            if select_error ~= nil then
+                Console.Log(
+                    "[gr_factions][repository] Character affiliation lookup failed for character_id=%s with error=%s.",
+                    tostring(normalized_character_id),
+                    tostring(select_error)
+                )
+
+                callback(false, nil, select_error)
+                return
+            end
+
+            normalized_rows = normalize_rows(rows, normalize_character_affiliation_row)
+            callback(true, normalized_rows[1], nil)
+        end, normalized_character_id)
+    end, "character-affiliation-by-id")
+end
+
+function FactionRepository:AssignCharacterFaction(character_id, faction_id, rank_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_faction_id = normalize_positive_integer(faction_id)
+    local normalized_rank_id = normalize_positive_integer(rank_id)
+    local faction_lookup_id = normalized_faction_id
+    local rank_lookup_id = normalized_rank_id
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if rank_lookup_id ~= nil and faction_lookup_id == nil then
+        callback(false, nil, "faction-id-required-when-rank-is-provided")
+        return true
+    end
+
+    self:GetCharacterAffiliation(normalized_character_id, function(is_success, character_row, error)
+        if not is_success then
+            callback(false, nil, error)
+            return
+        end
+
+        if character_row == nil then
+            callback(false, nil, "character-not-found")
+            return
+        end
+
+        local function persist_assignment()
+            self:Connect(function(is_connected, database_or_error, connect_error)
+                if not is_connected then
+                    callback(false, nil, connect_error)
+                    return
+                end
+
+                database_or_error:ExecuteAsync(
+                    UPDATE_CHARACTER_AFFILIATION_QUERY,
+                    function(rows_affected, execute_error)
+                        if execute_error ~= nil then
+                            Console.Log(
+                                "[gr_factions][repository] Character affiliation update failed for character_id=%s with error=%s.",
+                                tostring(normalized_character_id),
+                                tostring(execute_error)
+                            )
+
+                            callback(false, nil, execute_error)
+                            return
+                        end
+
+                        if rows_affected ~= 1 then
+                            callback(false, nil, "character-affiliation-update-unexpected-rows-affected")
+                            return
+                        end
+
+                        callback(true, {
+                            character_id = normalized_character_id,
+                            faction_id = faction_lookup_id,
+                            rank_id = rank_lookup_id,
+                        }, nil)
+                    end,
+                    normalized_character_id,
+                    faction_lookup_id or 0,
+                    rank_lookup_id or 0
+                )
+            end, "assign-character-faction")
+        end
+
+        local function validate_rank_or_persist()
+            if rank_lookup_id == nil then
+                persist_assignment()
+                return
+            end
+
+            self:GetRankById(rank_lookup_id, function(rank_success, rank_row, rank_error)
+                if not rank_success then
+                    callback(false, nil, rank_error)
+                    return
+                end
+
+                if rank_row == nil then
+                    callback(false, nil, "rank-not-found")
+                    return
+                end
+
+                if normalize_positive_integer(rank_row.faction_id) ~= faction_lookup_id then
+                    callback(false, nil, "rank-does-not-belong-to-faction")
+                    return
+                end
+
+                persist_assignment()
+            end)
+        end
+
+        if faction_lookup_id == nil then
+            persist_assignment()
+            return
+        end
+
+        self:GetFactionById(faction_lookup_id, function(faction_success, faction_row, faction_error)
+            if not faction_success then
+                callback(false, nil, faction_error)
+                return
+            end
+
+            if faction_row == nil then
+                callback(false, nil, "faction-not-found")
+                return
+            end
+
+            validate_rank_or_persist()
+        end)
+    end)
+
+    return true
 end
 
 function FactionRepository:ResolveFactionAndRank(character_row, callback)

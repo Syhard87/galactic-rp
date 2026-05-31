@@ -72,6 +72,13 @@ local GRFactionsBridge = {
 
         return GRFactions.Server.Service:GetRankById(rank_id, callback)
     end,
+    AssignCharacterFaction = function(character_id, faction_id, rank_id, callback)
+        if GRFactions.Server.Service == nil then
+            return callback_service_missing(callback)
+        end
+
+        return GRFactions.Server.Service:AssignCharacterFaction(character_id, faction_id, rank_id, callback)
+    end,
     ResolveActiveCharacterFaction = function(player_or_platform_id, callback)
         if GRFactions.Server.Service == nil then
             return callback_service_missing(callback)
@@ -89,6 +96,52 @@ local GRFactionsBridge = {
 }
 
 Package.Export("GRFactionsBridge", GRFactionsBridge)
+
+if type(Console) == "table" and type(Console.RegisterCommand) == "function" then
+    Console.RegisterCommand("setfaction", function(character_id, faction_id, rank_id)
+        local function normalize_assignment_value(raw_value)
+            if type(raw_value) ~= "string" then
+                return raw_value
+            end
+
+            local lowered_value = string.lower(raw_value)
+
+            if lowered_value == "" or lowered_value == "nil" or lowered_value == "null" or lowered_value == "none" or lowered_value == "0" then
+                return nil
+            end
+
+            return raw_value
+        end
+
+        if GRFactions.Server.Service == nil then
+            Console.Log("[gr_factions][server] setfaction failed because faction service is unavailable.")
+            return
+        end
+
+        GRFactions.Server.Service:AssignCharacterFaction(
+            character_id,
+            normalize_assignment_value(faction_id),
+            normalize_assignment_value(rank_id),
+            function(is_success, resolution, error)
+                if not is_success then
+                    Console.Log(
+                        "[gr_factions][server] setfaction failed character_id=%s error=%s.",
+                        tostring(character_id),
+                        tostring(error)
+                    )
+                    return
+                end
+
+                Console.Log(
+                    "[gr_factions][server] setfaction applied character_id=%s faction_id=%s rank_id=%s.",
+                    tostring(resolution and resolution.character_id),
+                    tostring(resolution and resolution.faction_id),
+                    tostring(resolution and resolution.rank_id)
+                )
+            end
+        )
+    end, "assigns or clears a faction and rank on a character", { "character_id", "faction_id|nil", "rank_id|nil" })
+end
 
 Console.Log("[gr_factions][server] Factions package loaded.")
 Console.Log("[gr_factions][server] Factions bridge exported.")

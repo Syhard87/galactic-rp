@@ -70,6 +70,43 @@ function FactionService:GetRankById(rank_id, callback)
     return self.repository:GetRankById(rank_id, callback)
 end
 
+function FactionService:AssignCharacterFaction(character_id, faction_id, rank_id, callback)
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    return self.repository:AssignCharacterFaction(character_id, faction_id, rank_id, function(is_success, result, error)
+        if not is_success then
+            callback(false, nil, error)
+            return
+        end
+
+        Console.Log(
+            "[gr_factions][server] Character faction updated character_id=%s faction_id=%s rank_id=%s.",
+            tostring(result.character_id),
+            tostring(result.faction_id),
+            tostring(result.rank_id)
+        )
+
+        self:ResolveCharacterFaction({
+            id = result.character_id,
+            faction_id = result.faction_id,
+            rank_id = result.rank_id,
+        }, function(resolve_success, resolution, resolve_error)
+            if not resolve_success then
+                callback(false, nil, resolve_error)
+                return
+            end
+
+            callback(true, resolution, nil)
+        end)
+    end)
+end
+
 function FactionService:ResolveCharacterFaction(character_row, callback)
     if self.repository == nil then
         return callback_repository_missing(callback)
@@ -81,6 +118,7 @@ end
 function FactionService:ResolveActiveCharacterFaction(player_or_platform_id, callback)
     local characters_bridge = nil
     local active_character = nil
+    local active_character_id = nil
 
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -106,7 +144,30 @@ function FactionService:ResolveActiveCharacterFaction(player_or_platform_id, cal
         return true
     end
 
-    return self:ResolveCharacterFaction(active_character, callback)
+    active_character_id = active_character.id
+
+    if active_character_id == nil then
+        callback(false, nil, "active-character-id-missing")
+        return true
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self.repository:GetCharacterAffiliation(active_character_id, function(is_success, character_affiliation, error)
+        if not is_success then
+            callback(false, nil, error)
+            return
+        end
+
+        if character_affiliation == nil then
+            callback(false, nil, "character-not-found")
+            return
+        end
+
+        self:ResolveCharacterFaction(character_affiliation, callback)
+    end)
 end
 
 function FactionService:DebugLogActiveCharacterFaction(player_or_platform_id, callback)
