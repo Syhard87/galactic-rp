@@ -65,6 +65,7 @@ docker compose --env-file docker/.env.example -f docker/docker-compose.yml down
 - Specification principale : [docs/cahier-des-charges.md](docs/cahier-des-charges.md)
 - Architecture : [docs/architecture.md](docs/architecture.md)
 - MVP Character : [docs/character-mvp.md](docs/character-mvp.md)
+- MVP Inventory : [docs/inventory-mvp.md](docs/inventory-mvp.md)
 - Backlog technique : [docs/backlog.md](docs/backlog.md)
 - Developpement local : [docs/local-dev.md](docs/local-dev.md)
 - CI/CD : [docs/ci-cd.md](docs/ci-cd.md)

@@ -7,6 +7,11 @@ CharacterPositionService.__index = CharacterPositionService
 local AUTO_SAVE_INTERVAL_MS = 60000
 local MIN_SAVE_INTERVAL_MS = 45000
 local MIN_POSITION_DELTA_UNITS = 100
+local FALLBACK_SPAWN_LOCATION = {
+    x = 0,
+    y = 0,
+    z = 150,
+}
 
 local function clone_table(source)
     if type(source) ~= "table" then
@@ -83,11 +88,19 @@ local function read_coordinate(value, lower_key, upper_key)
 
     local coordinate = value[lower_key]
 
-    if type(coordinate) ~= "number" then
+    if type(coordinate) ~= "number" and type(coordinate) ~= "string" then
         coordinate = value[upper_key]
     end
 
+    if type(coordinate) == "string" then
+        coordinate = tonumber(coordinate)
+    end
+
     if type(coordinate) ~= "number" then
+        return nil
+    end
+
+    if coordinate ~= coordinate or coordinate == math.huge or coordinate == -math.huge then
         return nil
     end
 
@@ -118,8 +131,114 @@ local function normalize_rotation(rotation)
     return rotation
 end
 
+local function build_default_rotation()
+    if Rotator ~= nil then
+        local is_created, rotation = pcall(Rotator, 0, 0, 0)
+
+        if is_created then
+            return rotation
+        end
+    end
+
+    return {
+        pitch = 0,
+        yaw = 0,
+        roll = 0,
+    }
+end
+
+local function build_vector(position)
+    if Vector ~= nil then
+        local is_created, vector = pcall(Vector, position.x, position.y, position.z)
+
+        if is_created then
+            return vector
+        end
+    end
+
+    return clone_table(position)
+end
+
+local function build_rotation_for_spawn(rotation)
+    if rotation ~= nil and type(rotation) == "userdata" then
+        return true, rotation
+    end
+
+    if Rotator == nil then
+        return false, "rotator-constructor-unavailable"
+    end
+
+    local pitch = 0
+    local yaw = 0
+    local roll = 0
+
+    if type(rotation) == "table" then
+        pitch = read_coordinate(rotation, "pitch", "Pitch") or 0
+        yaw = read_coordinate(rotation, "yaw", "Yaw") or 0
+        roll = read_coordinate(rotation, "roll", "Roll") or 0
+    end
+
+    local is_created, spawn_rotation = pcall(Rotator, pitch, yaw, roll)
+
+    if not is_created then
+        return false, "rotator-constructor-failed"
+    end
+
+    return true, spawn_rotation
+end
+
+local function build_vector_for_spawn(position)
+    if Vector == nil then
+        return false, "vector-constructor-unavailable"
+    end
+
+    local is_created, vector = pcall(Vector, position.x, position.y, position.z)
+
+    if not is_created then
+        return false, "vector-constructor-failed"
+    end
+
+    return true, vector
+end
+
 local function is_position_uninitialized(position)
     return position.x == 0 and position.y == 0 and position.z == 0
+end
+
+local function resolve_faction_spawn_data(character_row)
+    local faction_id = normalize_character_id(character_row and character_row.faction_id or nil)
+    local spawn_point = nil
+    local spawn_location = nil
+    local spawn_rotation = nil
+
+    if faction_id == nil then
+        return nil
+    end
+
+    if type(GRFactionsBridge) ~= "table" or type(GRFactionsBridge.GetSpawnPointForFaction) ~= "function" then
+        return nil
+    end
+
+    spawn_point = GRFactionsBridge.GetSpawnPointForFaction(faction_id)
+
+    if type(spawn_point) ~= "table" then
+        return nil
+    end
+
+    spawn_location = normalize_position(spawn_point.location or spawn_point)
+
+    if spawn_location == nil then
+        return nil
+    end
+
+    spawn_rotation = normalize_rotation(spawn_point.rotation) or build_default_rotation()
+
+    return {
+        source = "faction-spawn-point",
+        faction_id = faction_id,
+        location = spawn_location,
+        rotation = spawn_rotation,
+    }
 end
 
 local function calculate_distance_squared(position_a, position_b)
@@ -150,9 +269,12 @@ function CharacterPositionService:GetPolicy()
         min_save_interval_ms = MIN_SAVE_INTERVAL_MS,
         min_position_delta_units = MIN_POSITION_DELTA_UNITS,
         zero_vector_is_uninitialized = true,
+        fallback_spawn_location = clone_table(FALLBACK_SPAWN_LOCATION),
         fallback_order = {
             "persisted-character-position",
+            "faction-spawn-point",
             "map-spawn-point",
+            "server-fallback-position",
         },
     }
 end
@@ -194,41 +316,73 @@ function CharacterPositionService:ResolveSpawnDataForCharacterRow(character_row)
     })
 
     if persisted_position ~= nil and not is_position_uninitialized(persisted_position) then
+        Console.Log(
+            "[gr_characters][position-service] active character spawn saved position used character_id=%s location=%s,%s,%s.",
+            tostring(character_row.id),
+            tostring(persisted_position.x),
+            tostring(persisted_position.y),
+            tostring(persisted_position.z)
+        )
+
         return true, {
             source = "persisted-character-position",
             location = persisted_position,
-            rotation = nil,
+            rotation = build_default_rotation(),
         }
     end
 
-    if type(Server) ~= "table" or type(Server.GetMapSpawnPoints) ~= "function" then
-        return false, {
-            code = "map-spawn-points-unavailable",
-        }
+    local faction_spawn_data = resolve_faction_spawn_data(character_row)
+
+    if faction_spawn_data ~= nil then
+        Console.Log(
+            "[gr_characters][position-service] active character spawn faction used faction_id=%s location=%s,%s,%s.",
+            tostring(faction_spawn_data.faction_id),
+            tostring(faction_spawn_data.location.x),
+            tostring(faction_spawn_data.location.y),
+            tostring(faction_spawn_data.location.z)
+        )
+
+        return true, faction_spawn_data
     end
 
-    local spawn_points = Server.GetMapSpawnPoints()
+    if type(Server) == "table" and type(Server.GetMapSpawnPoints) == "function" then
+        local spawn_points = Server.GetMapSpawnPoints()
 
-    if type(spawn_points) ~= "table" then
-        return false, {
-            code = "map-spawn-points-unavailable",
-        }
-    end
+        if type(spawn_points) == "table" then
+            for _, spawn_point in ipairs(spawn_points) do
+                local spawn_location = normalize_position(spawn_point.location)
 
-    for _, spawn_point in ipairs(spawn_points) do
-        local spawn_location = normalize_position(spawn_point.location)
+                if spawn_location ~= nil then
+                    Console.Log(
+                        "[gr_characters][position-service] active character spawn fallback used source=map-spawn-point character_id=%s location=%s,%s,%s.",
+                        tostring(character_row.id),
+                        tostring(spawn_location.x),
+                        tostring(spawn_location.y),
+                        tostring(spawn_location.z)
+                    )
 
-        if spawn_location ~= nil then
-            return true, {
-                source = "map-spawn-point",
-                location = spawn_location,
-                rotation = normalize_rotation(spawn_point.rotation),
-            }
+                    return true, {
+                        source = "map-spawn-point",
+                        location = spawn_location,
+                        rotation = normalize_rotation(spawn_point.rotation) or build_default_rotation(),
+                    }
+                end
+            end
         end
     end
 
-    return false, {
-        code = "map-spawn-point-required",
+    Console.Log(
+        "[gr_characters][position-service] active character spawn fallback used source=server-fallback-position character_id=%s location=%s,%s,%s.",
+        tostring(character_row.id),
+        tostring(FALLBACK_SPAWN_LOCATION.x),
+        tostring(FALLBACK_SPAWN_LOCATION.y),
+        tostring(FALLBACK_SPAWN_LOCATION.z)
+    )
+
+    return true, {
+        source = "server-fallback-position",
+        location = clone_table(FALLBACK_SPAWN_LOCATION),
+        rotation = build_default_rotation(),
     }
 end
 
@@ -242,12 +396,152 @@ function CharacterPositionService:ResolveSpawnDataForActiveCharacter(player_or_p
     local active_character_row = self.selection_service:GetActiveCharacterRow(player_or_platform_id)
 
     if active_character_row == nil then
+        Console.Log("[gr_characters][position-service] active character spawn refused because no active character.")
+
         return false, {
             code = "active-character-required",
         }
     end
 
     return self:ResolveSpawnDataForCharacterRow(active_character_row)
+end
+
+function CharacterPositionService:SpawnActiveCharacter(player, options)
+    options = options or {}
+
+    if type(player) ~= "table" and type(player) ~= "userdata" then
+        return false, {
+            code = "player-required",
+        }
+    end
+
+    if type(player.GetAccountID) ~= "function" then
+        return false, {
+            code = "platform-id-required",
+        }
+    end
+
+    if Character == nil or Vector == nil or Rotator == nil then
+        return false, {
+            code = "character-spawn-api-unavailable",
+        }
+    end
+
+    if type(player.Possess) ~= "function" then
+        return false, {
+            code = "player-possess-unavailable",
+        }
+    end
+
+    local platform_id = player:GetAccountID()
+    local is_resolved, spawn_data_or_error = self:ResolveSpawnDataForActiveCharacter(platform_id)
+
+    if not is_resolved then
+        return false, spawn_data_or_error
+    end
+
+    local is_location_ready, location_or_error = build_vector_for_spawn(spawn_data_or_error.location)
+
+    if not is_location_ready then
+        return false, {
+            code = location_or_error,
+            platform_id = platform_id,
+        }
+    end
+
+    local is_rotation_ready, rotation_or_error = build_rotation_for_spawn(
+        spawn_data_or_error.rotation or build_default_rotation()
+    )
+
+    if not is_rotation_ready then
+        return false, {
+            code = rotation_or_error,
+            platform_id = platform_id,
+        }
+    end
+
+    local location = location_or_error
+    local rotation = rotation_or_error
+    local skeletal_mesh = options.skeletal_mesh or "nanos-world::SK_Male"
+
+    local previous_character = nil
+
+    if type(player.GetControlledCharacter) == "function" then
+        previous_character = player:GetControlledCharacter()
+    end
+
+    local is_character_created, spawned_character = pcall(Character, location, rotation, skeletal_mesh)
+
+    if not is_character_created or spawned_character == nil then
+        return false, {
+            code = "character-constructor-failed",
+            platform_id = platform_id,
+        }
+    end
+
+    local is_possess_ok = pcall(function()
+        player:Possess(spawned_character)
+    end)
+
+    if not is_possess_ok then
+        if type(spawned_character.Destroy) == "function" then
+            spawned_character:Destroy()
+        end
+
+        return false, {
+            code = "player-possess-failed",
+            platform_id = platform_id,
+        }
+    end
+
+    local possessed_character = nil
+
+    if type(player.GetControlledCharacter) == "function" then
+        possessed_character = player:GetControlledCharacter()
+    end
+
+    if possessed_character == nil then
+        if type(spawned_character.Destroy) == "function" then
+            spawned_character:Destroy()
+        end
+
+        return false, {
+            code = "controlled-character-missing-after-possess",
+            platform_id = platform_id,
+        }
+    end
+
+    if type(possessed_character.GetLocation) ~= "function" then
+        if type(spawned_character.Destroy) == "function" then
+            spawned_character:Destroy()
+        end
+
+        return false, {
+            code = "controlled-character-location-unavailable-after-possess",
+            platform_id = platform_id,
+        }
+    end
+
+    if previous_character ~= nil and previous_character ~= possessed_character and type(previous_character.Destroy) == "function" then
+        previous_character:Destroy()
+    end
+
+    Console.Log(
+        "[gr_characters][position-service] Active character spawned for platform_id=%s source=%s location=%s,%s,%s.",
+        tostring(platform_id),
+        tostring(spawn_data_or_error.source),
+        tostring(spawn_data_or_error.location.x),
+        tostring(spawn_data_or_error.location.y),
+        tostring(spawn_data_or_error.location.z)
+    )
+
+    return true, {
+        code = "active-character-spawned",
+        platform_id = platform_id,
+        source = spawn_data_or_error.source,
+        location = clone_table(spawn_data_or_error.location),
+        character = possessed_character,
+    }
 end
 
 function CharacterPositionService:CollectControlledCharacterPosition(player)
