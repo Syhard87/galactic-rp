@@ -181,6 +181,13 @@ local GRInventoryBridge = {
 
         return GRInventory.Server.Service:RemoveItem(character_id, item_key, quantity, callback)
     end,
+    RemoveItemFromActiveCharacter = function(player_or_platform_id, item_key, quantity, callback)
+        if GRInventory.Server.Service == nil then
+            return callback_service_missing(callback)
+        end
+
+        return GRInventory.Server.Service:RemoveItemFromActiveCharacter(player_or_platform_id, item_key, quantity, callback)
+    end,
 }
 
 Package.Export("GRInventoryBridge", GRInventoryBridge)
@@ -270,6 +277,54 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 Chat.SendMessage(
                     player,
                     string.format("Objet ajoute : %s x%s", tostring(result.item_key), tostring(result.quantity))
+                )
+            end)
+
+            return false
+        end
+
+        if command_name == "dropitem" then
+            local item_key = nil
+            local quantity_text = nil
+            local quantity = nil
+
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /dropitem <item_key> <quantity>")
+                return false
+            end
+
+            item_key, quantity_text = payload:match("^(%S+)%s+(%S+)$")
+            quantity = normalize_quantity(quantity_text)
+
+            if trim_string(item_key) == nil or quantity == nil then
+                Chat.SendMessage(player, "Usage : /dropitem <item_key> <quantity>")
+                return false
+            end
+
+            GRInventory.Server.Service:RemoveItemFromActiveCharacter(player, item_key, quantity, function(is_success, result, error)
+                if not is_success then
+                    if error == "active-character-missing" then
+                        Chat.SendMessage(player, "Aucun personnage actif.")
+                        return
+                    end
+
+                    if error == "inventory-item-quantity-insufficient" then
+                        Chat.SendMessage(player, "Quantite insuffisante.")
+                        return
+                    end
+
+                    if error == "quantity-required" or error == "item-key-required" then
+                        Chat.SendMessage(player, "Usage : /dropitem <item_key> <quantity>")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Impossible de retirer l'objet.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format("Objet retire : %s x%s", tostring(result.item_key), tostring(result.quantity))
                 )
             end)
 

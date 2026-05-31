@@ -104,6 +104,28 @@ function InventoryService:RemoveItem(character_id, item_key, quantity, callback)
     return self.repository:RemoveItem(character_id, item_key, quantity, callback)
 end
 
+function InventoryService:RemoveItemFromActiveCharacter(player_or_platform_id, item_key, quantity, callback)
+    local active_character_id = nil
+    local resolve_error = nil
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    active_character_id, resolve_error = resolve_active_character_id(player_or_platform_id)
+
+    if active_character_id == nil then
+        callback(false, nil, resolve_error)
+        return true
+    end
+
+    return self.repository:RemoveItem(active_character_id, item_key, quantity, callback)
+end
+
 GRInventory.Server.InventoryServiceClass = InventoryService
 
 return InventoryService
