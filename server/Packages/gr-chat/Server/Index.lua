@@ -12,9 +12,11 @@ local EXTERNAL_CHAT_COMMANDS = {
     dropitem = true,
     f = true,
     giveitem = true,
+    givexp = true,
     inv = true,
     useitem = true,
     whoami = true,
+    xpinfo = true,
 }
 
 local function trim_string(value)
