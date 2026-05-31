@@ -271,8 +271,8 @@ function CharacterPositionService:GetPolicy()
         zero_vector_is_uninitialized = true,
         fallback_spawn_location = clone_table(FALLBACK_SPAWN_LOCATION),
         fallback_order = {
-            "faction-spawn-point",
             "persisted-character-position",
+            "faction-spawn-point",
             "map-spawn-point",
             "server-fallback-position",
         },
@@ -309,6 +309,28 @@ function CharacterPositionService:ResolveSpawnDataForCharacterRow(character_row)
         }
     end
 
+    local persisted_position = normalize_position({
+        x = character_row.position_x,
+        y = character_row.position_y,
+        z = character_row.position_z,
+    })
+
+    if persisted_position ~= nil and not is_position_uninitialized(persisted_position) then
+        Console.Log(
+            "[gr_characters][position-service] active character spawn saved position used character_id=%s location=%s,%s,%s.",
+            tostring(character_row.id),
+            tostring(persisted_position.x),
+            tostring(persisted_position.y),
+            tostring(persisted_position.z)
+        )
+
+        return true, {
+            source = "persisted-character-position",
+            location = persisted_position,
+            rotation = build_default_rotation(),
+        }
+    end
+
     local faction_spawn_data = resolve_faction_spawn_data(character_row)
 
     if faction_spawn_data ~= nil then
@@ -321,28 +343,6 @@ function CharacterPositionService:ResolveSpawnDataForCharacterRow(character_row)
         )
 
         return true, faction_spawn_data
-    end
-
-    local persisted_position = normalize_position({
-        x = character_row.position_x,
-        y = character_row.position_y,
-        z = character_row.position_z,
-    })
-
-    if persisted_position ~= nil and not is_position_uninitialized(persisted_position) then
-        Console.Log(
-            "[gr_characters][position-service] active character spawn resolved from DB character_id=%s location=%s,%s,%s.",
-            tostring(character_row.id),
-            tostring(persisted_position.x),
-            tostring(persisted_position.y),
-            tostring(persisted_position.z)
-        )
-
-        return true, {
-            source = "persisted-character-position",
-            location = persisted_position,
-            rotation = build_default_rotation(),
-        }
     end
 
     if type(Server) == "table" and type(Server.GetMapSpawnPoints) == "function" then

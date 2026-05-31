@@ -564,18 +564,23 @@ end)
 
 Player.Subscribe("Destroy", function(player)
     local platform_id = nil
+    local function finalize_player_disconnect_cleanup()
+        if platform_id ~= nil then
+            GRCharacters.Server.Service:ForgetPlayerPositionState(platform_id)
+        end
+
+        GRCharacters.Server.Service:ForgetPlayerSession(platform_id or player)
+    end
 
     if type(player.GetAccountID) == "function" then
         platform_id = player:GetAccountID()
     end
 
     local is_save_started, save_error = GRCharacters.Server.Service:SaveActiveCharacterPosition(player, function()
-        if platform_id ~= nil then
-            GRCharacters.Server.Service:ForgetPlayerPositionState(platform_id)
-        end
+        finalize_player_disconnect_cleanup()
     end, {
         force = true,
-        reason = "player-destroy",
+        reason = "player-disconnect",
     })
 
     if not is_save_started then
@@ -584,12 +589,8 @@ Player.Subscribe("Destroy", function(player)
             tostring(save_error)
         )
 
-        if platform_id ~= nil then
-            GRCharacters.Server.Service:ForgetPlayerPositionState(platform_id)
-        end
+        finalize_player_disconnect_cleanup()
     end
-
-    GRCharacters.Server.Service:ForgetPlayerSession(platform_id or player)
 end)
 
 Package.Subscribe("Load", function()
