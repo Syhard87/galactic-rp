@@ -132,8 +132,12 @@ local function normalize_rotation(rotation)
 end
 
 local function build_default_rotation()
-    if type(Rotator) == "function" then
-        return Rotator(0, 0, 0)
+    if Rotator ~= nil then
+        local is_created, rotation = pcall(Rotator, 0, 0, 0)
+
+        if is_created then
+            return rotation
+        end
     end
 
     return {
@@ -144,11 +148,57 @@ local function build_default_rotation()
 end
 
 local function build_vector(position)
-    if type(Vector) == "function" then
-        return Vector(position.x, position.y, position.z)
+    if Vector ~= nil then
+        local is_created, vector = pcall(Vector, position.x, position.y, position.z)
+
+        if is_created then
+            return vector
+        end
     end
 
     return clone_table(position)
+end
+
+local function build_rotation_for_spawn(rotation)
+    if rotation ~= nil and type(rotation) == "userdata" then
+        return true, rotation
+    end
+
+    if Rotator == nil then
+        return false, "rotator-constructor-unavailable"
+    end
+
+    local pitch = 0
+    local yaw = 0
+    local roll = 0
+
+    if type(rotation) == "table" then
+        pitch = read_coordinate(rotation, "pitch", "Pitch") or 0
+        yaw = read_coordinate(rotation, "yaw", "Yaw") or 0
+        roll = read_coordinate(rotation, "roll", "Roll") or 0
+    end
+
+    local is_created, spawn_rotation = pcall(Rotator, pitch, yaw, roll)
+
+    if not is_created then
+        return false, "rotator-constructor-failed"
+    end
+
+    return true, spawn_rotation
+end
+
+local function build_vector_for_spawn(position)
+    if Vector == nil then
+        return false, "vector-constructor-unavailable"
+    end
+
+    local is_created, vector = pcall(Vector, position.x, position.y, position.z)
+
+    if not is_created then
+        return false, "vector-constructor-failed"
+    end
+
+    return true, vector
 end
 
 local function is_position_uninitialized(position)
@@ -320,7 +370,7 @@ function CharacterPositionService:SpawnActiveCharacter(player, options)
         }
     end
 
-    if type(Character) ~= "function" or type(Vector) ~= "function" or type(Rotator) ~= "function" then
+    if Character == nil or Vector == nil or Rotator == nil then
         return false, {
             code = "character-spawn-api-unavailable",
         }
@@ -339,8 +389,28 @@ function CharacterPositionService:SpawnActiveCharacter(player, options)
         return false, spawn_data_or_error
     end
 
-    local location = build_vector(spawn_data_or_error.location)
-    local rotation = spawn_data_or_error.rotation or build_default_rotation()
+    local is_location_ready, location_or_error = build_vector_for_spawn(spawn_data_or_error.location)
+
+    if not is_location_ready then
+        return false, {
+            code = location_or_error,
+            platform_id = platform_id,
+        }
+    end
+
+    local is_rotation_ready, rotation_or_error = build_rotation_for_spawn(
+        spawn_data_or_error.rotation or build_default_rotation()
+    )
+
+    if not is_rotation_ready then
+        return false, {
+            code = rotation_or_error,
+            platform_id = platform_id,
+        }
+    end
+
+    local location = location_or_error
+    local rotation = rotation_or_error
     local skeletal_mesh = options.skeletal_mesh or "nanos-world::SK_Male"
 
     local previous_character = nil
@@ -349,10 +419,59 @@ function CharacterPositionService:SpawnActiveCharacter(player, options)
         previous_character = player:GetControlledCharacter()
     end
 
-    local spawned_character = Character(location, rotation, skeletal_mesh)
-    player:Possess(spawned_character)
+    local is_character_created, spawned_character = pcall(Character, location, rotation, skeletal_mesh)
 
-    if previous_character ~= nil and previous_character ~= spawned_character and type(previous_character.Destroy) == "function" then
+    if not is_character_created or spawned_character == nil then
+        return false, {
+            code = "character-constructor-failed",
+            platform_id = platform_id,
+        }
+    end
+
+    local is_possess_ok = pcall(function()
+        player:Possess(spawned_character)
+    end)
+
+    if not is_possess_ok then
+        if type(spawned_character.Destroy) == "function" then
+            spawned_character:Destroy()
+        end
+
+        return false, {
+            code = "player-possess-failed",
+            platform_id = platform_id,
+        }
+    end
+
+    local possessed_character = nil
+
+    if type(player.GetControlledCharacter) == "function" then
+        possessed_character = player:GetControlledCharacter()
+    end
+
+    if possessed_character == nil then
+        if type(spawned_character.Destroy) == "function" then
+            spawned_character:Destroy()
+        end
+
+        return false, {
+            code = "controlled-character-missing-after-possess",
+            platform_id = platform_id,
+        }
+    end
+
+    if type(possessed_character.GetLocation) ~= "function" then
+        if type(spawned_character.Destroy) == "function" then
+            spawned_character:Destroy()
+        end
+
+        return false, {
+            code = "controlled-character-location-unavailable-after-possess",
+            platform_id = platform_id,
+        }
+    end
+
+    if previous_character ~= nil and previous_character ~= possessed_character and type(previous_character.Destroy) == "function" then
         previous_character:Destroy()
     end
 
@@ -370,7 +489,7 @@ function CharacterPositionService:SpawnActiveCharacter(player, options)
         platform_id = platform_id,
         source = spawn_data_or_error.source,
         location = clone_table(spawn_data_or_error.location),
-        character = spawned_character,
+        character = possessed_character,
     }
 end
 

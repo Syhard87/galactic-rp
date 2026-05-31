@@ -121,6 +121,14 @@ function CharacterService:GetCharacterSessionStatus(player_or_platform_id)
     return self.session_state:GetStatus(player_or_platform_id)
 end
 
+function CharacterService:GetActiveCharacter(player_or_platform_id)
+    if self.session_state == nil then
+        return nil
+    end
+
+    return self.session_state:GetActiveCharacter(player_or_platform_id)
+end
+
 function CharacterService:HasActiveCharacter(player_or_platform_id)
     if self.session_state == nil then
         return false

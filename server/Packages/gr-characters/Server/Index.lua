@@ -40,6 +40,22 @@ end
 
 local database_service = resolve_database_service()
 
+local function get_character_service()
+    if GRCharacters == nil or GRCharacters.Server == nil then
+        return nil
+    end
+
+    return GRCharacters.Server.Service
+end
+
+local function get_character_session_state()
+    if GRCharacters == nil or GRCharacters.Server == nil then
+        return nil
+    end
+
+    return GRCharacters.Server.CharacterSessionState
+end
+
 local function resolve_player_platform_id(player)
     if type(player) ~= "table" and type(player) ~= "userdata" then
         return nil
@@ -204,6 +220,55 @@ GRCharacters.Server.RuntimeSelfTest = CharacterRuntimeSelfTest.Create(
     GRCharacters.Server.Service,
     GRCharacters.Server.PlayerService
 )
+
+local function GetCharactersService()
+    return get_character_service()
+end
+
+local function IsCharactersGameplayReady(player_or_platform_id)
+    local service = get_character_service()
+
+    if service == nil or type(service.IsGameplayReady) ~= "function" then
+        return false, "character-service-unavailable"
+    end
+
+    return service:IsGameplayReady(player_or_platform_id)
+end
+
+local function GetActiveCharacter(player_or_platform_id)
+    local service = get_character_service()
+
+    if service ~= nil and type(service.GetActiveCharacter) == "function" then
+        return service:GetActiveCharacter(player_or_platform_id)
+    end
+
+    local session_state = get_character_session_state()
+
+    if session_state ~= nil and type(session_state.GetActiveCharacter) == "function" then
+        return session_state:GetActiveCharacter(player_or_platform_id)
+    end
+
+    return nil
+end
+
+local function GetCharacterSessionStatus(player_or_platform_id)
+    local service = get_character_service()
+
+    if service == nil or type(service.GetCharacterSessionStatus) ~= "function" then
+        return nil
+    end
+
+    return service:GetCharacterSessionStatus(player_or_platform_id)
+end
+
+GRCharactersBridge = {
+    GetService = GetCharactersService,
+    IsGameplayReady = IsCharactersGameplayReady,
+    GetActiveCharacter = GetActiveCharacter,
+    GetCharacterSessionStatus = GetCharacterSessionStatus,
+}
+
+Package.Export("GRCharactersBridge", GRCharactersBridge)
 
 local function start_player_character_flow(player, source_label)
     local is_started, error = GRCharacters.Server.FlowService:ProcessConnectedPlayer(player, source_label)
@@ -550,3 +615,4 @@ Console.Log("[gr_characters][server] Character selection is prepared server-side
 Console.Log("[gr_characters][server] Active character position saving is prepared server-side with a slow timer, DB anti-spam and spawn fallback resolution.")
 Console.Log("[gr_characters][server] Character session readiness gate is tracked server-side by platform_id.")
 Console.Log("[gr_characters][server] Character repositories and services remain separated from character creation, selection, spawn and persistence flows.")
+Console.Log("[gr_characters][server] Characters bridge exported.")
