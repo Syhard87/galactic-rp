@@ -8,6 +8,9 @@ local LOCAL_CHAT_RADIUS_UNITS = LOCAL_CHAT_RADIUS_METERS * 100
 local MAX_LOCAL_CHAT_MESSAGE_LENGTH = 180
 local LOCAL_CHAT_PREFIX = "[Local]"
 local LOCAL_COMMAND_DO_PREFIX = "[DO]"
+local EXTERNAL_CHAT_COMMANDS = {
+    whoami = true,
+}
 
 local function trim_string(value)
     if type(value) ~= "string" then
@@ -223,6 +226,10 @@ local function parse_local_chat_mode(message)
         return "do", command_payload
     end
 
+    if EXTERNAL_CHAT_COMMANDS[command_name] == true then
+        return nil, nil, "handled-externally"
+    end
+
     return nil, nil, "chat-command-not-supported"
 end
 
@@ -320,6 +327,10 @@ local function handle_local_rp_chat(sender_player, raw_message)
     local is_resolved, context_or_reason = resolve_local_chat_context(sender_player, raw_message)
 
     if not is_resolved then
+        if context_or_reason == "handled-externally" then
+            return false
+        end
+
         return reject_local_message(sender_player, context_or_reason)
     end
 

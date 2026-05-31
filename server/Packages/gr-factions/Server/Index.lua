@@ -22,6 +22,66 @@ local function callback_service_missing(callback)
     return true
 end
 
+local function get_platform_id(player)
+    if type(player) ~= "table" and type(player) ~= "userdata" then
+        return nil
+    end
+
+    if type(player.GetAccountID) ~= "function" then
+        return nil
+    end
+
+    return player:GetAccountID()
+end
+
+local function normalize_chat_submit_arguments(first_argument, second_argument)
+    if get_platform_id(first_argument) ~= nil then
+        return first_argument, second_argument
+    end
+
+    if get_platform_id(second_argument) ~= nil then
+        return second_argument, first_argument
+    end
+
+    return nil, nil
+end
+
+local function trim_string(value)
+    if type(value) ~= "string" then
+        return nil
+    end
+
+    local trimmed_value = value:match("^%s*(.-)%s*$")
+
+    if trimmed_value == "" then
+        return nil
+    end
+
+    return trimmed_value
+end
+
+local function send_identity_messages(player, active_character, resolution)
+    local first_name = trim_string(active_character and active_character.first_name) or "Unknown"
+    local last_name = trim_string(active_character and active_character.last_name) or "Character"
+    local faction_name = "Aucune"
+    local rank_name = "Aucun"
+
+    if type(resolution) == "table" then
+        if type(resolution.faction) == "table" and trim_string(resolution.faction.name) ~= nil then
+            faction_name = trim_string(resolution.faction.name)
+        end
+
+        if type(resolution.rank) == "table" and trim_string(resolution.rank.name) ~= nil then
+            rank_name = trim_string(resolution.rank.name)
+        end
+    end
+
+    Chat.SendMessage(player, "Identité RP :")
+    Chat.SendMessage(player, string.format("Nom : %s %s", first_name, last_name))
+    Chat.SendMessage(player, string.format("Faction : %s", faction_name))
+    Chat.SendMessage(player, string.format("Grade : %s", rank_name))
+end
+
 local database_service = resolve_database_service()
 
 GRFactions.Server.Repository = FactionRepository.Create(database_service)
@@ -141,6 +201,79 @@ if type(Console) == "table" and type(Console.RegisterCommand) == "function" then
             end
         )
     end, "assigns or clears a faction and rank on a character", { "character_id", "faction_id|nil", "rank_id|nil" })
+end
+
+if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.SendMessage) == "function" then
+    Chat.Subscribe("PlayerSubmit", function(first_argument, second_argument)
+        local player, message = normalize_chat_submit_arguments(first_argument, second_argument)
+        local platform_id = nil
+        local active_character = nil
+
+        if player == nil then
+            return
+        end
+
+        if trim_string(message) ~= "/whoami" then
+            return
+        end
+
+        platform_id = get_platform_id(player)
+
+        if platform_id == nil then
+            Chat.SendMessage(player, "Aucun personnage actif.")
+            Console.Log("[gr_factions][server] /whoami rejected reason=%s.", "platform-id-required")
+            return false
+        end
+
+        if GRCharactersBridge == nil or type(GRCharactersBridge.GetActiveCharacter) ~= "function" then
+            Chat.SendMessage(player, "Aucun personnage actif.")
+            Console.Log("[gr_factions][server] /whoami rejected reason=%s.", "characters-bridge-unavailable")
+            return false
+        end
+
+        active_character = GRCharactersBridge.GetActiveCharacter(platform_id)
+
+        if type(active_character) ~= "table" then
+            Chat.SendMessage(player, "Aucun personnage actif.")
+            Console.Log("[gr_factions][server] /whoami rejected reason=%s platform_id=%s.", "active-character-missing", tostring(platform_id))
+            return false
+        end
+
+        if GRFactions.Server.Service == nil then
+            Chat.SendMessage(player, "Faction : Aucune")
+            Chat.SendMessage(player, "Grade : Aucun")
+            Console.Log("[gr_factions][server] /whoami rejected reason=%s platform_id=%s.", "faction-service-missing", tostring(platform_id))
+            return false
+        end
+
+        GRFactions.Server.Service:ResolveActiveCharacterFaction(platform_id, function(is_success, resolution, error)
+            if not is_success then
+                Chat.SendMessage(player, "Identité RP :")
+                Chat.SendMessage(player, string.format(
+                    "Nom : %s %s",
+                    trim_string(active_character.first_name) or "Unknown",
+                    trim_string(active_character.last_name) or "Character"
+                ))
+                Chat.SendMessage(player, "Faction : Aucune")
+                Chat.SendMessage(player, "Grade : Aucun")
+                Console.Log(
+                    "[gr_factions][server] /whoami fallback platform_id=%s error=%s.",
+                    tostring(platform_id),
+                    tostring(error)
+                )
+                return
+            end
+
+            send_identity_messages(player, active_character, resolution)
+            Console.Log(
+                "[gr_factions][server] /whoami resolved platform_id=%s character_id=%s.",
+                tostring(platform_id),
+                tostring(active_character.id)
+            )
+        end)
+
+        return false
+    end)
 end
 
 Console.Log("[gr_factions][server] Factions package loaded.")
