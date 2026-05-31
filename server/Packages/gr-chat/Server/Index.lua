@@ -10,6 +10,8 @@ local LOCAL_CHAT_PREFIX = "[Local]"
 local LOCAL_COMMAND_DO_PREFIX = "[DO]"
 local EXTERNAL_CHAT_COMMANDS = {
     f = true,
+    giveitem = true,
+    inv = true,
     whoami = true,
 }
 
