@@ -149,6 +149,160 @@ local function get_chat_command(message)
     return string.lower(command_name), trim_string(payload)
 end
 
+local function get_active_character_from_bridge(player_or_platform_id)
+    if type(GRCharactersBridge) ~= "table" or type(GRCharactersBridge.GetActiveCharacter) ~= "function" then
+        return nil, "characters-bridge-unavailable"
+    end
+
+    local active_character = GRCharactersBridge.GetActiveCharacter(player_or_platform_id)
+
+    if type(active_character) ~= "table" or active_character.id == nil then
+        return nil, "active-character-missing"
+    end
+
+    return active_character, nil
+end
+
+local function extract_faction_name(resolution)
+    if type(resolution) ~= "table" then
+        return "Aucune"
+    end
+
+    if type(resolution.faction) ~= "table" then
+        return "Aucune"
+    end
+
+    return trim_string(resolution.faction.name) or "Aucune"
+end
+
+local function sort_profile_skills(skill_rows)
+    table.sort(skill_rows, function(left_skill, right_skill)
+        local left_level = tonumber(left_skill and left_skill.level) or 0
+        local right_level = tonumber(right_skill and right_skill.level) or 0
+
+        if left_level ~= right_level then
+            return left_level > right_level
+        end
+
+        local left_total_xp = tonumber(left_skill and left_skill.total_xp) or 0
+        local right_total_xp = tonumber(right_skill and right_skill.total_xp) or 0
+
+        if left_total_xp ~= right_total_xp then
+            return left_total_xp > right_total_xp
+        end
+
+        return tostring(left_skill and left_skill.skill_key) < tostring(right_skill and right_skill.skill_key)
+    end)
+end
+
+local function send_profile_messages(player, active_character, progression, faction_name, skill_rows)
+    local first_name = trim_string(active_character and active_character.first_name) or "Unknown"
+    local last_name = trim_string(active_character and active_character.last_name) or "Character"
+    local level = tonumber(progression and progression.level) or 1
+    local current_xp = tonumber(progression and progression.current_xp) or 0
+    local total_xp = tonumber(progression and progression.total_xp) or 0
+    local unspent_talent_points = tonumber(progression and progression.unspent_talent_points) or 0
+    local class_key = trim_string(progression and progression.class_key) or "civilian"
+    local required_xp = XpRules.GetRequiredXpForLevel(level)
+    local limited_skill_count = math.min(#skill_rows, 5)
+
+    Chat.SendMessage(player, "Profil personnage")
+    Chat.SendMessage(player, string.format("Nom : %s %s", first_name, last_name))
+    Chat.SendMessage(player, string.format("Classe : %s", class_key))
+    Chat.SendMessage(player, string.format("Niveau : %s", tostring(level)))
+    Chat.SendMessage(player, string.format("XP : %s/%s | Total : %s", tostring(current_xp), tostring(required_xp), tostring(total_xp)))
+    Chat.SendMessage(player, string.format("Points de talent : %s", tostring(unspent_talent_points)))
+    Chat.SendMessage(player, string.format("Faction : %s", tostring(faction_name or "Aucune")))
+
+    if limited_skill_count < 1 then
+        Chat.SendMessage(player, "Competences : aucune")
+        return
+    end
+
+    Chat.SendMessage(player, "Competences :")
+
+    for index = 1, limited_skill_count do
+        local skill_row = skill_rows[index]
+        local skill_level = tonumber(skill_row and skill_row.level) or 1
+        local skill_required_xp = SkillXpRules.GetRequiredXpForLevel(skill_level)
+
+        Chat.SendMessage(
+            player,
+            string.format(
+                "- %s niveau %s | XP %s/%s | total %s",
+                tostring(skill_row and skill_row.skill_key),
+                tostring(skill_level),
+                tostring(skill_row and skill_row.current_xp or 0),
+                tostring(skill_required_xp),
+                tostring(skill_row and skill_row.total_xp or 0)
+            )
+        )
+    end
+end
+
+local function handle_profile_command(player)
+    local active_character = nil
+    local character_error = nil
+
+    active_character, character_error = get_active_character_from_bridge(player)
+
+    if active_character == nil then
+        Chat.SendMessage(player, "Aucun personnage actif.")
+        return false
+    end
+
+    GRProgression.Server.Service:GetActiveCharacterProgression(player, function(is_progression_success, progression, progression_error)
+        if not is_progression_success then
+            if progression_error == "active-character-missing" then
+                Chat.SendMessage(player, "Aucun personnage actif.")
+                return
+            end
+
+            Chat.SendMessage(player, "Impossible de charger la progression.")
+            return
+        end
+
+        local function resolve_skills_and_send_profile(faction_name)
+            if type(GRSkillsBridge) ~= "table" or type(GRSkillsBridge.ListActiveCharacterSkills) ~= "function" then
+                send_profile_messages(player, active_character, progression, faction_name, {})
+                return
+            end
+
+            GRSkillsBridge.ListActiveCharacterSkills(player, function(is_skills_success, skill_rows, skills_error)
+                if not is_skills_success then
+                    if skills_error == "active-character-missing" then
+                        Chat.SendMessage(player, "Aucun personnage actif.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Impossible de charger les competences.")
+                    return
+                end
+
+                skill_rows = type(skill_rows) == "table" and skill_rows or {}
+                sort_profile_skills(skill_rows)
+                send_profile_messages(player, active_character, progression, faction_name, skill_rows)
+            end)
+        end
+
+        if type(GRFactionsBridge) ~= "table" or type(GRFactionsBridge.ResolveActiveCharacterFaction) ~= "function" then
+            resolve_skills_and_send_profile("Aucune")
+            return
+        end
+
+        GRFactionsBridge.ResolveActiveCharacterFaction(player, function(is_faction_success, resolution)
+            if not is_faction_success then
+                resolve_skills_and_send_profile("Aucune")
+                return
+            end
+
+            resolve_skills_and_send_profile(extract_faction_name(resolution))
+        end)
+    end)
+
+    return false
+end
+
 local function parse_platform_id_allowlist(value)
     local allowlist = {}
     local has_entries = false
@@ -285,6 +439,10 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         end
 
         command_name, payload = get_chat_command(message)
+
+        if command_name == "profile" then
+            return handle_profile_command(player)
+        end
 
         if command_name == "xpinfo" then
             GRProgression.Server.Service:GetActiveCharacterProgression(player, function(is_success, progression, error)

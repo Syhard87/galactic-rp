@@ -16,6 +16,7 @@ local EXTERNAL_CHAT_COMMANDS = {
     givexp = true,
     giveskillxp = true,
     inv = true,
+    profile = true,
     setclass = true,
     skills = true,
     useitem = true,
