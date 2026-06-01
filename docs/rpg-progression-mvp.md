@@ -297,7 +297,7 @@ Limites connues du MVP RPG :
 - pas de Datapad complet
 - pas de specialisation exploitable
 - pas de talents attribuables par le joueur
-- pas de quetes
+- pas de quetes dynamiques ou de journal de quetes integre dans cette documentation
 - pas d'anti-farm avance
 - pas de bonus passifs gameplay complets relies aux competences
 - `/givexp` et `/giveskillxp` restent des commandes debug, pas des outils admin de production
@@ -314,3 +314,4 @@ Evolutions recommandees apres ce MVP :
 - quetes et activites qui alimentent naturellement l'XP
 - anti-farm plus fin sur les gains repetitifs
 - integration plus riche entre factions, progression, inventaire et reputation
+- articulation documentaire avec le MVP quetes dans `docs/quests-mvp.md`

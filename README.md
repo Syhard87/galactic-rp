@@ -67,6 +67,7 @@ docker compose --env-file docker/.env.example -f docker/docker-compose.yml down
 - MVP Character : [docs/character-mvp.md](docs/character-mvp.md)
 - MVP Inventory : [docs/inventory-mvp.md](docs/inventory-mvp.md)
 - MVP RPG Progression : [docs/rpg-progression-mvp.md](docs/rpg-progression-mvp.md)
+- MVP Quests : [docs/quests-mvp.md](docs/quests-mvp.md)
 - Backlog technique : [docs/backlog.md](docs/backlog.md)
 - Developpement local : [docs/local-dev.md](docs/local-dev.md)
 - CI/CD : [docs/ci-cd.md](docs/ci-cd.md)
