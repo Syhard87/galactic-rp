@@ -65,6 +65,23 @@ local function get_max_level()
     return 20
 end
 
+local function calculate_general_xp_from_skill_xp(skill_xp_amount)
+    local normalized_amount = normalize_positive_integer(skill_xp_amount)
+    local general_xp_amount = 0
+
+    if normalized_amount == nil then
+        return nil
+    end
+
+    general_xp_amount = math.floor(normalized_amount * 0.25)
+
+    if general_xp_amount < 1 and normalized_amount > 0 then
+        general_xp_amount = 1
+    end
+
+    return general_xp_amount
+end
+
 local function current_utc_timestamp()
     return os.date("!%Y-%m-%dT%H:%M:%SZ")
 end
@@ -91,6 +108,50 @@ local function callback_repository_missing(callback)
     end
 
     return true
+end
+
+local function grant_general_xp_from_skill_xp(character_id, skill_key, skill_xp_amount, callback)
+    local general_xp_amount = calculate_general_xp_from_skill_xp(skill_xp_amount)
+    local reason = nil
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if general_xp_amount == nil then
+        callback(false, "general-xp-amount-required")
+        return true
+    end
+
+    if type(GRProgressionBridge) ~= "table" or type(GRProgressionBridge.AddXp) ~= "function" then
+        Console.Log("[gr_skills][service] General XP skipped reason=progression-bridge-unavailable.")
+        callback(false, "progression-bridge-unavailable")
+        return true
+    end
+
+    reason = string.format("skill-xp:%s", tostring(skill_key))
+
+    return GRProgressionBridge.AddXp(character_id, general_xp_amount, reason, function(is_success, _, error)
+        if not is_success then
+            Console.Log(
+                "[gr_skills][service] General XP grant failed character_id=%s skill_key=%s reason=%s.",
+                tostring(character_id),
+                tostring(skill_key),
+                tostring(error)
+            )
+            callback(false, error)
+            return
+        end
+
+        Console.Log(
+            "[gr_skills][service] General XP granted from skill XP character_id=%s skill_key=%s skill_xp=%s general_xp=%s.",
+            tostring(character_id),
+            tostring(skill_key),
+            tostring(skill_xp_amount),
+            tostring(general_xp_amount)
+        )
+        callback(true, nil)
+    end)
 end
 
 function SkillService.Create(repository)
@@ -208,7 +269,21 @@ function SkillService:AddSkillXp(character_id, skill_key, amount, reason, callba
             skill_row.current_xp = math.min(skill_row.current_xp, get_required_xp_for_level(max_level))
         end
 
-        self.repository:SaveSkill(skill_row, callback)
+        self.repository:SaveSkill(skill_row, function(is_save_success, saved_skill_row, save_error)
+            if not is_save_success then
+                callback(false, nil, save_error)
+                return
+            end
+
+            grant_general_xp_from_skill_xp(
+                normalized_character_id,
+                normalized_skill_key,
+                normalized_amount,
+                function() end
+            )
+
+            callback(true, saved_skill_row, nil)
+        end)
     end)
 end
 
