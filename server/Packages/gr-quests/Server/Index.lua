@@ -7,6 +7,8 @@ local QuestService = Package.Require("QuestService.lua")
 GRQuests = GRQuests or {}
 GRQuests.Server = GRQuests.Server or {}
 
+local MAX_EXPLORATION_REPORT_LENGTH = 240
+
 local function resolve_database_service()
     if type(GRDatabaseBridge) == "table" and type(GRDatabaseBridge.GetService) == "function" then
         return GRDatabaseBridge.GetService()
@@ -35,6 +37,14 @@ local function trim_string(value)
     end
 
     return trimmed_value
+end
+
+local function sanitize_chat_message(message)
+    if type(message) ~= "string" then
+        return nil
+    end
+
+    return message:gsub("[<>]", "")
 end
 
 local function normalize_boolean(value, fallback)
@@ -129,6 +139,20 @@ local function normalize_positive_integer(value)
     end
 
     return nil
+end
+
+local function get_active_character_from_bridge(player_or_platform_id)
+    if type(GRCharactersBridge) ~= "table" or type(GRCharactersBridge.GetActiveCharacter) ~= "function" then
+        return nil, "characters-bridge-unavailable"
+    end
+
+    local active_character = GRCharactersBridge.GetActiveCharacter(player_or_platform_id)
+
+    if type(active_character) ~= "table" or active_character.id == nil then
+        return nil, "active-character-missing"
+    end
+
+    return active_character, nil
 end
 
 local function parse_platform_id_allowlist(value)
@@ -277,6 +301,70 @@ local GRQuestsBridge = {
 }
 
 Package.Export("GRQuestsBridge", GRQuestsBridge)
+
+local function record_exploration_report_objective_progress(player_or_platform_id)
+    local platform_id = resolve_platform_id(player_or_platform_id)
+
+    if type(GRQuestsBridge) ~= "table" or type(GRQuestsBridge.RecordObjectiveProgressForActiveCharacter) ~= "function" then
+        Console.Log(
+            "[gr_quests][server] Exploration report objective progress skipped reason=quests-bridge-unavailable."
+        )
+        return
+    end
+
+    GRQuestsBridge.RecordObjectiveProgressForActiveCharacter(
+        player_or_platform_id,
+        "rp_action",
+        "exploration_report",
+        1,
+        function(is_success, _, error)
+            if not is_success then
+                Console.Log(
+                    "[gr_quests][server] Exploration report objective progress skipped reason=%s.",
+                    tostring(error or "objective-progress-failed")
+                )
+                return
+            end
+
+            Console.Log(
+                "[gr_quests][server] Exploration report objective progress recorded platform_id=%s.",
+                tostring(platform_id)
+            )
+        end
+    )
+end
+
+local function grant_exploration_report_skill_xp(player_or_platform_id)
+    local platform_id = resolve_platform_id(player_or_platform_id)
+
+    if type(GRSkillsBridge) ~= "table" or type(GRSkillsBridge.AddSkillXpToActiveCharacter) ~= "function" then
+        Console.Log(
+            "[gr_quests][server] Exploration report skill XP skipped reason=skills-bridge-unavailable."
+        )
+        return
+    end
+
+    GRSkillsBridge.AddSkillXpToActiveCharacter(
+        player_or_platform_id,
+        "exploration",
+        15,
+        "rp_action:exploration_report",
+        function(is_success, _, error)
+            if not is_success then
+                Console.Log(
+                    "[gr_quests][server] Exploration report skill XP skipped reason=%s.",
+                    tostring(error or "skill-xp-failed")
+                )
+                return
+            end
+
+            Console.Log(
+                "[gr_quests][server] Exploration report skill XP granted platform_id=%s skill_key=exploration amount=15.",
+                tostring(platform_id)
+            )
+        end
+    )
+end
 
 if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.SendMessage) == "function" then
     Chat.Subscribe("PlayerSubmit", function(first_argument, second_argument)
@@ -434,6 +522,42 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     )
                 end
             end)
+
+            return false
+        end
+
+        if command_name == "explorereport" then
+            local active_character = nil
+            local sanitized_payload = trim_string(sanitize_chat_message(payload))
+            local platform_id = resolve_platform_id(player)
+
+            if sanitized_payload == nil then
+                Chat.SendMessage(player, "Usage : /explorereport <texte>")
+                return false
+            end
+
+            if #sanitized_payload > MAX_EXPLORATION_REPORT_LENGTH then
+                Chat.SendMessage(player, "Rapport trop long.")
+                return false
+            end
+
+            active_character = get_active_character_from_bridge(player)
+
+            if active_character == nil then
+                Chat.SendMessage(player, "Aucun personnage actif.")
+                return false
+            end
+
+            Console.Log(
+                "[gr_quests][server] Exploration report submitted platform_id=%s character_id=%s text=%s.",
+                tostring(platform_id),
+                tostring(active_character.id),
+                tostring(sanitized_payload)
+            )
+
+            Chat.SendMessage(player, "Rapport d'exploration envoye.")
+            record_exploration_report_objective_progress(player)
+            grant_exploration_report_skill_xp(player)
 
             return false
         end

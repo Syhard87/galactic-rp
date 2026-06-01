@@ -11,6 +11,7 @@ local LOCAL_COMMAND_DO_PREFIX = "[DO]"
 local EXTERNAL_CHAT_COMMANDS = {
     classes = true,
     dropitem = true,
+    explorereport = true,
     f = true,
     giveitem = true,
     givexp = true,
