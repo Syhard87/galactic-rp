@@ -243,6 +243,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
             GRQuests.Server.Service:CompleteQuestForActiveCharacter(player, payload, function(is_success, result, error)
                 local reward_xp_granted = normalize_positive_integer(result and result.reward_xp_granted) or 0
+                local reward_item_quantity = normalize_positive_integer(result and result.reward_item_quantity) or 0
+                local reward_item_key = trim_string(result and result.reward_item_key)
                 local quest_key = tostring(result and result.quest and result.quest.key or payload)
 
                 if not is_success then
@@ -269,6 +271,13 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 if reward_xp_granted > 0 then
                     Chat.SendMessage(player, string.format("XP gagnee : %s", tostring(reward_xp_granted)))
+                end
+
+                if reward_item_key ~= nil and reward_item_quantity > 0 then
+                    Chat.SendMessage(
+                        player,
+                        string.format("Objet gagne : %s x%s", reward_item_key, tostring(reward_item_quantity))
+                    )
                 end
             end)
 

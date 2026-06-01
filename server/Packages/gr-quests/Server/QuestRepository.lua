@@ -12,6 +12,8 @@ local SELECT_AVAILABLE_QUESTS_QUERY = [[
         title,
         description,
         reward_xp,
+        reward_item_key,
+        reward_item_quantity,
         is_repeatable,
         is_active,
         created_at,
@@ -27,6 +29,8 @@ local SELECT_QUEST_BY_KEY_QUERY = [[
         title,
         description,
         reward_xp,
+        reward_item_key,
+        reward_item_quantity,
         is_repeatable,
         is_active,
         created_at,
@@ -47,7 +51,9 @@ local SELECT_CHARACTER_QUESTS_QUERY = [[
         cq.created_at,
         cq.updated_at,
         q.title,
-        q.reward_xp
+        q.reward_xp,
+        q.reward_item_key,
+        q.reward_item_quantity
     FROM character_quests cq
     INNER JOIN quests q
         ON q.key = cq.quest_key
@@ -66,7 +72,9 @@ local SELECT_STARTED_CHARACTER_QUEST_QUERY = [[
         cq.created_at,
         cq.updated_at,
         q.title,
-        q.reward_xp
+        q.reward_xp,
+        q.reward_item_key,
+        q.reward_item_quantity
     FROM character_quests cq
     INNER JOIN quests q
         ON q.key = cq.quest_key
@@ -195,6 +203,8 @@ local function normalize_quest_row(row)
         title = trim_string(row.title) or quest_key,
         description = trim_string(row.description),
         reward_xp = normalize_non_negative_integer(row.reward_xp, 0),
+        reward_item_key = normalize_quest_key(row.reward_item_key),
+        reward_item_quantity = normalize_non_negative_integer(row.reward_item_quantity, 0),
         is_repeatable = row.is_repeatable == true,
         is_active = row.is_active ~= false,
         created_at = row.created_at,
@@ -232,6 +242,8 @@ local function normalize_character_quest_row(row)
         updated_at = row.updated_at,
         title = trim_string(row.title),
         reward_xp = normalize_non_negative_integer(row.reward_xp, 0),
+        reward_item_key = normalize_quest_key(row.reward_item_key),
+        reward_item_quantity = normalize_non_negative_integer(row.reward_item_quantity, 0),
     }
 end
 
@@ -460,6 +472,8 @@ function QuestRepository:StartQuest(character_id, quest_key, callback)
                         status = "started",
                         title = quest_row.title,
                         reward_xp = quest_row.reward_xp,
+                        reward_item_key = quest_row.reward_item_key,
+                        reward_item_quantity = quest_row.reward_item_quantity,
                     }
 
                     Console.Log(
