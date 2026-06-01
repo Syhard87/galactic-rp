@@ -243,6 +243,58 @@ local function is_usable_item(item_key)
     return item_key == "medkit_basic"
 end
 
+local function grant_item_use_skill_xp(player_or_platform_id, item_key)
+    local active_character = nil
+
+    if item_key ~= "medkit_basic" then
+        return
+    end
+
+    if type(GRSkillsBridge) ~= "table" or type(GRSkillsBridge.AddSkillXpToActiveCharacter) ~= "function" then
+        Console.Log(
+            "[gr_inventory][server] Use item skill XP skipped item_key=%s reason=%s.",
+            tostring(item_key),
+            "skills-bridge-unavailable"
+        )
+        return
+    end
+
+    GRSkillsBridge.AddSkillXpToActiveCharacter(
+        player_or_platform_id,
+        "medicine",
+        10,
+        "useitem:medkit_basic",
+        function(is_success, skill_row, error)
+            if not is_success then
+                Console.Log(
+                    "[gr_inventory][server] Use item skill XP skipped item_key=%s reason=%s.",
+                    tostring(item_key),
+                    tostring(error or "skill-xp-failed")
+                )
+                return
+            end
+
+            active_character = nil
+
+            if type(GRCharactersBridge) == "table" and type(GRCharactersBridge.GetActiveCharacter) == "function" then
+                active_character = GRCharactersBridge.GetActiveCharacter(player_or_platform_id)
+            end
+
+            Console.Log(
+                "[gr_inventory][server] Use item skill XP granted character_id=%s item_key=%s skill_key=%s amount=%s.",
+                tostring((type(skill_row) == "table" and skill_row.character_id) or (type(active_character) == "table" and active_character.id)),
+                tostring(item_key),
+                "medicine",
+                "10"
+            )
+
+            if type(Chat) == "table" and type(Chat.SendMessage) == "function" then
+                Chat.SendMessage(player_or_platform_id, "XP medicine +10")
+            end
+        end
+    )
+end
+
 local database_service = resolve_database_service()
 
 GRInventory.Server.Repository = InventoryRepository.Create(database_service)
@@ -497,6 +549,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     player,
                     string.format("Objet utilise : %s", tostring(result.item_key))
                 )
+
+                grant_item_use_skill_xp(player, result.item_key)
             end)
 
             return false
