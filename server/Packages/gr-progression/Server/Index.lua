@@ -240,6 +240,38 @@ local function send_profile_messages(player, active_character, progression, fact
     end
 end
 
+local function record_profile_quest_objective_progress(player_or_platform_id)
+    local platform_id = resolve_platform_id(player_or_platform_id)
+
+    if type(GRQuestsBridge) ~= "table" or type(GRQuestsBridge.RecordObjectiveProgressForActiveCharacter) ~= "function" then
+        Console.Log(
+            "[gr_progression][server] Quest objective progress skipped source=profile reason=quests-bridge-unavailable."
+        )
+        return
+    end
+
+    GRQuestsBridge.RecordObjectiveProgressForActiveCharacter(
+        player_or_platform_id,
+        "command",
+        "profile",
+        1,
+        function(is_success, _, error)
+            if not is_success then
+                Console.Log(
+                    "[gr_progression][server] Quest objective progress skipped source=profile reason=%s.",
+                    tostring(error or "objective-progress-failed")
+                )
+                return
+            end
+
+            Console.Log(
+                "[gr_progression][server] Quest objective progress recorded source=profile platform_id=%s target_type=command target_key=profile.",
+                tostring(platform_id)
+            )
+        end
+    )
+end
+
 local function handle_profile_command(player)
     local active_character = nil
     local character_error = nil
@@ -282,6 +314,7 @@ local function handle_profile_command(player)
                 skill_rows = type(skill_rows) == "table" and skill_rows or {}
                 sort_profile_skills(skill_rows)
                 send_profile_messages(player, active_character, progression, faction_name, skill_rows)
+                record_profile_quest_objective_progress(player)
             end)
         end
 

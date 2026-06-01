@@ -243,6 +243,45 @@ local function is_usable_item(item_key)
     return item_key == "medkit_basic"
 end
 
+local function record_item_use_quest_objective_progress(player_or_platform_id, item_key)
+    local platform_id = resolve_platform_id(player_or_platform_id)
+
+    if item_key ~= "medkit_basic" then
+        return
+    end
+
+    if type(GRQuestsBridge) ~= "table" or type(GRQuestsBridge.RecordObjectiveProgressForActiveCharacter) ~= "function" then
+        Console.Log(
+            "[gr_inventory][server] Quest objective progress skipped source=useitem item_key=%s reason=quests-bridge-unavailable.",
+            tostring(item_key)
+        )
+        return
+    end
+
+    GRQuestsBridge.RecordObjectiveProgressForActiveCharacter(
+        player_or_platform_id,
+        "item_use",
+        item_key,
+        1,
+        function(is_success, _, error)
+            if not is_success then
+                Console.Log(
+                    "[gr_inventory][server] Quest objective progress skipped source=useitem item_key=%s reason=%s.",
+                    tostring(item_key),
+                    tostring(error or "objective-progress-failed")
+                )
+                return
+            end
+
+            Console.Log(
+                "[gr_inventory][server] Quest objective progress recorded source=useitem item_key=%s platform_id=%s.",
+                tostring(item_key),
+                tostring(platform_id)
+            )
+        end
+    )
+end
+
 local function grant_item_use_skill_xp(player_or_platform_id, item_key)
     local active_character = nil
 
@@ -550,6 +589,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     string.format("Objet utilise : %s", tostring(result.item_key))
                 )
 
+                record_item_use_quest_objective_progress(player, result.item_key)
                 grant_item_use_skill_xp(player, result.item_key)
             end)
 
