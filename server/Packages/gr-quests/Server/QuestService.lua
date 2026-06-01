@@ -275,7 +275,62 @@ function QuestService:CompleteQuestForActiveCharacter(player_or_platform_id, que
                         reward_xp_granted = 0,
                         reward_item_key = nil,
                         reward_item_quantity = 0,
+                        reward_skill_key = nil,
+                        reward_skill_xp = 0,
                     }
+
+                    local function grant_skill_reward()
+                        if quest_row.reward_skill_key == nil or quest_row.reward_skill_xp == nil or quest_row.reward_skill_xp < 1 then
+                            Console.Log(
+                                "[gr_quests][service] Quest has no skill reward quest_key=%s.",
+                                tostring(quest_row.key)
+                            )
+                            callback(true, result, nil)
+                            return
+                        end
+
+                        if type(GRSkillsBridge) ~= "table" or type(GRSkillsBridge.AddSkillXp) ~= "function" then
+                            Console.Log(
+                                "[gr_quests][service] Quest skill reward skipped reason=skills-bridge-unavailable quest_key=%s.",
+                                tostring(quest_row.key)
+                            )
+                            callback(true, result, nil)
+                            return
+                        end
+
+                        GRSkillsBridge.AddSkillXp(
+                            active_character_id,
+                            quest_row.reward_skill_key,
+                            quest_row.reward_skill_xp,
+                            string.format("quest:%s", tostring(quest_row.key)),
+                            function(is_skill_success, _, skill_error)
+                                if not is_skill_success then
+                                    Console.Log(
+                                        "[gr_quests][service] Quest skill reward failed character_id=%s quest_key=%s skill_key=%s reason=%s.",
+                                        tostring(active_character_id),
+                                        tostring(quest_row.key),
+                                        tostring(quest_row.reward_skill_key),
+                                        tostring(skill_error)
+                                    )
+                                    callback(true, result, nil)
+                                    return
+                                end
+
+                                result.reward_skill_key = quest_row.reward_skill_key
+                                result.reward_skill_xp = quest_row.reward_skill_xp
+
+                                Console.Log(
+                                    "[gr_quests][service] Quest skill reward granted character_id=%s quest_key=%s skill_key=%s amount=%s.",
+                                    tostring(active_character_id),
+                                    tostring(quest_row.key),
+                                    tostring(quest_row.reward_skill_key),
+                                    tostring(quest_row.reward_skill_xp)
+                                )
+
+                                callback(true, result, nil)
+                            end
+                        )
+                    end
 
                     local function grant_item_reward()
                         if quest_row.reward_item_key == nil or quest_row.reward_item_quantity == nil or quest_row.reward_item_quantity < 1 then
@@ -283,7 +338,7 @@ function QuestService:CompleteQuestForActiveCharacter(player_or_platform_id, que
                                 "[gr_quests][service] Quest has no item reward quest_key=%s.",
                                 tostring(quest_row.key)
                             )
-                            callback(true, result, nil)
+                            grant_skill_reward()
                             return
                         end
 
@@ -292,7 +347,7 @@ function QuestService:CompleteQuestForActiveCharacter(player_or_platform_id, que
                                 "[gr_quests][service] Quest item reward skipped reason=inventory-bridge-unavailable quest_key=%s.",
                                 tostring(quest_row.key)
                             )
-                            callback(true, result, nil)
+                            grant_skill_reward()
                             return
                         end
 
@@ -305,7 +360,7 @@ function QuestService:CompleteQuestForActiveCharacter(player_or_platform_id, que
                                     tostring(quest_row.reward_item_key),
                                     tostring(item_error)
                                 )
-                                callback(true, result, nil)
+                                grant_skill_reward()
                                 return
                             end
 
@@ -320,7 +375,7 @@ function QuestService:CompleteQuestForActiveCharacter(player_or_platform_id, que
                                 tostring(quest_row.reward_item_quantity)
                             )
 
-                            callback(true, result, nil)
+                            grant_skill_reward()
                         end)
                     end
 

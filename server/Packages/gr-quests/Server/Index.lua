@@ -532,6 +532,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 local reward_xp_granted = normalize_positive_integer(result and result.reward_xp_granted) or 0
                 local reward_item_quantity = normalize_positive_integer(result and result.reward_item_quantity) or 0
                 local reward_item_key = trim_string(result and result.reward_item_key)
+                local reward_skill_xp = normalize_positive_integer(result and result.reward_skill_xp) or 0
+                local reward_skill_key = trim_string(result and result.reward_skill_key)
                 local quest_key = tostring(result and result.quest and result.quest.key or payload)
 
                 if not is_success then
@@ -569,6 +571,13 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     Chat.SendMessage(
                         player,
                         string.format("Objet gagne : %s x%s", reward_item_key, tostring(reward_item_quantity))
+                    )
+                end
+
+                if reward_skill_key ~= nil and reward_skill_xp > 0 then
+                    Chat.SendMessage(
+                        player,
+                        string.format("XP competence gagnee : %s x%s", reward_skill_key, tostring(reward_skill_xp))
                     )
                 end
             end)
