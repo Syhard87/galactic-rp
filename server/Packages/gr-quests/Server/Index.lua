@@ -271,6 +271,13 @@ local GRQuestsBridge = {
 
         return GRQuests.Server.Service:StartQuestForActiveCharacter(player_or_platform_id, quest_key, callback)
     end,
+    AbandonQuestForActiveCharacter = function(player_or_platform_id, quest_key, callback)
+        if GRQuests.Server.Service == nil then
+            return callback_service_missing(callback)
+        end
+
+        return GRQuests.Server.Service:AbandonQuestForActiveCharacter(player_or_platform_id, quest_key, callback)
+    end,
     CompleteQuestForActiveCharacter = function(player_or_platform_id, quest_key, callback)
         if GRQuests.Server.Service == nil then
             return callback_service_missing(callback)
@@ -462,11 +469,54 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         return
                     end
 
+                    if error == "quest-already-completed" then
+                        Chat.SendMessage(player, "Quete deja terminee.")
+                        return
+                    end
+
                     Chat.SendMessage(player, "Impossible de demarrer la quete.")
                     return
                 end
 
                 Chat.SendMessage(player, string.format("Quete demarree : %s", tostring(character_quest_row.quest_key)))
+            end)
+
+            return false
+        end
+
+        if command_name == "abandonquest" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /abandonquest <quest_key>")
+                return false
+            end
+
+            GRQuests.Server.Service:AbandonQuestForActiveCharacter(player, payload, function(is_success, character_quest_row, error)
+                if not is_success then
+                    if error == "active-character-missing" then
+                        Chat.SendMessage(player, "Aucun personnage actif.")
+                        return
+                    end
+
+                    if error == "quest-not-found" or error == "quest-key-required" then
+                        Chat.SendMessage(player, "Quete inconnue.")
+                        return
+                    end
+
+                    if error == "quest-not-started" then
+                        Chat.SendMessage(player, "Quete non demarree.")
+                        return
+                    end
+
+                    if error == "quest-already-completed" then
+                        Chat.SendMessage(player, "Quete deja terminee.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Impossible d'abandonner la quete.")
+                    return
+                end
+
+                Chat.SendMessage(player, string.format("Quete abandonnee : %s", tostring(character_quest_row.quest_key)))
             end)
 
             return false

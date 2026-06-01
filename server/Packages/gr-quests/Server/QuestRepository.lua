@@ -85,6 +85,28 @@ local SELECT_STARTED_CHARACTER_QUEST_QUERY = [[
     LIMIT 1
 ]]
 
+local SELECT_CHARACTER_QUEST_HISTORY_BY_KEY_QUERY = [[
+    SELECT
+        cq.id,
+        cq.character_id,
+        cq.quest_key,
+        cq.status,
+        cq.started_at,
+        cq.completed_at,
+        cq.created_at,
+        cq.updated_at,
+        q.title,
+        q.reward_xp,
+        q.reward_item_key,
+        q.reward_item_quantity
+    FROM character_quests cq
+    INNER JOIN quests q
+        ON q.key = cq.quest_key
+    WHERE cq.character_id = :0
+        AND cq.quest_key = :1
+    ORDER BY cq.id DESC
+]]
+
 local SELECT_QUEST_OBJECTIVES_QUERY = [[
     SELECT
         quest_key,
@@ -218,6 +240,14 @@ local UPDATE_COMPLETE_CHARACTER_QUEST_QUERY = [[
     SET
         status = 'completed',
         completed_at = NOW(),
+        updated_at = NOW()
+    WHERE id = :0
+]]
+
+local UPDATE_ABANDON_CHARACTER_QUEST_QUERY = [[
+    UPDATE character_quests
+    SET
+        status = 'abandoned',
         updated_at = NOW()
     WHERE id = :0
 ]]
@@ -1041,18 +1071,33 @@ function QuestRepository:StartQuest(character_id, quest_key, callback)
                 return
             end
 
-            database_or_error:SelectAsync(SELECT_STARTED_CHARACTER_QUEST_QUERY, function(rows, select_error)
-                local existing_rows = nil
+            database_or_error:SelectAsync(SELECT_CHARACTER_QUEST_HISTORY_BY_KEY_QUERY, function(rows, select_error)
+                local history_rows = nil
+                local has_started_quest = false
+                local has_completed_quest = false
 
                 if select_error ~= nil then
                     callback(false, nil, select_error)
                     return
                 end
 
-                existing_rows = normalize_rows(rows, normalize_character_quest_row)
+                history_rows = normalize_rows(rows, normalize_character_quest_row)
 
-                if existing_rows[1] ~= nil then
+                for _, history_row in ipairs(history_rows) do
+                    if history_row.status == "started" then
+                        has_started_quest = true
+                    elseif history_row.status == "completed" then
+                        has_completed_quest = true
+                    end
+                end
+
+                if has_started_quest then
                     callback(false, nil, "quest-already-started")
+                    return
+                end
+
+                if quest_row.is_repeatable ~= true and has_completed_quest then
+                    callback(false, nil, "quest-already-completed")
                     return
                 end
 
@@ -1097,6 +1142,99 @@ function QuestRepository:StartQuest(character_id, quest_key, callback)
                 end, normalized_character_id, normalized_quest_key)
             end, normalized_character_id, normalized_quest_key)
         end, "quest-start")
+    end)
+end
+
+function QuestRepository:AbandonQuest(character_id, quest_key, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_quest_key = normalize_quest_key(quest_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if normalized_quest_key == nil then
+        callback(false, nil, "quest-key-required")
+        return true
+    end
+
+    return self:GetQuestByKey(normalized_quest_key, function(is_quest_success, quest_row, quest_error)
+        if not is_quest_success then
+            callback(false, nil, quest_error)
+            return
+        end
+
+        if quest_row == nil or quest_row.is_active ~= true then
+            callback(false, nil, "quest-not-found")
+            return
+        end
+
+        self:Connect(function(is_connected, database_or_error, error)
+            if not is_connected then
+                callback(false, nil, error)
+                return
+            end
+
+            database_or_error:SelectAsync(SELECT_CHARACTER_QUEST_HISTORY_BY_KEY_QUERY, function(rows, select_error)
+                local history_rows = nil
+                local started_row = nil
+                local has_completed_quest = false
+
+                if select_error ~= nil then
+                    callback(false, nil, select_error)
+                    return
+                end
+
+                history_rows = normalize_rows(rows, normalize_character_quest_row)
+
+                for _, history_row in ipairs(history_rows) do
+                    if started_row == nil and history_row.status == "started" then
+                        started_row = history_row
+                    end
+
+                    if history_row.status == "completed" then
+                        has_completed_quest = true
+                    end
+                end
+
+                if started_row == nil then
+                    if has_completed_quest then
+                        callback(false, nil, "quest-already-completed")
+                        return
+                    end
+
+                    callback(false, nil, "quest-not-started")
+                    return
+                end
+
+                database_or_error:ExecuteAsync(UPDATE_ABANDON_CHARACTER_QUEST_QUERY, function(rows_affected, execute_error)
+                    if execute_error ~= nil then
+                        callback(false, nil, execute_error)
+                        return
+                    end
+
+                    if rows_affected ~= 1 then
+                        callback(false, nil, "character-quest-abandon-unexpected-rows-affected")
+                        return
+                    end
+
+                    started_row.status = "abandoned"
+
+                    Console.Log(
+                        "[gr_quests][repository] Quest abandoned character_id=%s quest_key=%s.",
+                        tostring(normalized_character_id),
+                        tostring(normalized_quest_key)
+                    )
+
+                    callback(true, started_row, nil)
+                end, started_row.id)
+            end, normalized_character_id, normalized_quest_key)
+        end, "quest-abandon")
     end)
 end
 

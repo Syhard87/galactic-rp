@@ -9,6 +9,7 @@ local MAX_LOCAL_CHAT_MESSAGE_LENGTH = 180
 local LOCAL_CHAT_PREFIX = "[Local]"
 local LOCAL_COMMAND_DO_PREFIX = "[DO]"
 local EXTERNAL_CHAT_COMMANDS = {
+    abandonquest = true,
     classes = true,
     dropitem = true,
     explorereport = true,

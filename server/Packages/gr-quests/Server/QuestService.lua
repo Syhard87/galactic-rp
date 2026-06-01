@@ -126,6 +126,28 @@ function QuestService:StartQuestForActiveCharacter(player_or_platform_id, quest_
     return self.repository:StartQuest(active_character_id, quest_key, callback)
 end
 
+function QuestService:AbandonQuestForActiveCharacter(player_or_platform_id, quest_key, callback)
+    local active_character_id = nil
+    local resolve_error = nil
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    active_character_id, resolve_error = resolve_active_character_id(player_or_platform_id)
+
+    if active_character_id == nil then
+        callback(false, nil, resolve_error)
+        return true
+    end
+
+    return self.repository:AbandonQuest(active_character_id, quest_key, callback)
+end
+
 function QuestService:RecordObjectiveProgress(character_id, target_type, target_key, amount, callback)
     local normalized_character_id = normalize_positive_integer(character_id)
 
