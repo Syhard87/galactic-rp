@@ -101,7 +101,7 @@ function QuestService:ListActiveCharacterQuests(player_or_platform_id, callback)
         return true
     end
 
-    return self.repository:ListCharacterQuests(active_character_id, callback)
+    return self.repository:ListActiveCharacterQuestDetails(active_character_id, callback)
 end
 
 function QuestService:StartQuestForActiveCharacter(player_or_platform_id, quest_key, callback)
@@ -126,10 +126,61 @@ function QuestService:StartQuestForActiveCharacter(player_or_platform_id, quest_
     return self.repository:StartQuest(active_character_id, quest_key, callback)
 end
 
+function QuestService:RecordObjectiveProgress(character_id, target_type, target_key, amount, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    return self.repository:RecordObjectiveProgress(
+        normalized_character_id,
+        target_type,
+        target_key,
+        amount,
+        callback
+    )
+end
+
+function QuestService:RecordObjectiveProgressForActiveCharacter(player_or_platform_id, target_type, target_key, amount, callback)
+    local active_character_id = nil
+    local resolve_error = nil
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    active_character_id, resolve_error = resolve_active_character_id(player_or_platform_id)
+
+    if active_character_id == nil then
+        callback(false, nil, resolve_error)
+        return true
+    end
+
+    return self:RecordObjectiveProgress(active_character_id, target_type, target_key, amount, callback)
+end
+
 function QuestService:CompleteQuestForActiveCharacter(player_or_platform_id, quest_key, callback)
     local active_character_id = nil
     local resolve_error = nil
     local normalized_quest_key = trim_string(quest_key)
+
+    if normalized_quest_key ~= nil then
+        normalized_quest_key = string.lower(normalized_quest_key)
+    end
 
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -157,106 +208,139 @@ function QuestService:CompleteQuestForActiveCharacter(player_or_platform_id, que
             return
         end
 
-        self.repository:CompleteQuest(active_character_id, normalized_quest_key, function(is_complete_success, character_quest_row, complete_error)
-            local result = nil
+        self.repository:ListCharacterQuests(active_character_id, function(is_character_quests_success, character_quests, character_quests_error)
+            local started_character_quest_row = nil
 
-            if not is_complete_success then
-                callback(false, nil, complete_error)
+            if not is_character_quests_success then
+                callback(false, nil, character_quests_error)
                 return
             end
 
-            result = {
-                quest = quest_row,
-                character_quest = character_quest_row,
-                reward_xp_granted = 0,
-                reward_item_key = nil,
-                reward_item_quantity = 0,
-            }
+            for _, character_quest_row in ipairs(character_quests or {}) do
+                if character_quest_row.quest_key == normalized_quest_key and character_quest_row.status == "started" then
+                    started_character_quest_row = character_quest_row
+                    break
+                end
+            end
 
-            local function grant_item_reward()
-                if quest_row.reward_item_key == nil or quest_row.reward_item_quantity == nil or quest_row.reward_item_quantity < 1 then
-                    Console.Log(
-                        "[gr_quests][service] Quest has no item reward quest_key=%s.",
-                        tostring(quest_row.key)
-                    )
-                    callback(true, result, nil)
+            if started_character_quest_row == nil then
+                callback(false, nil, "quest-not-started")
+                return
+            end
+
+            self.repository:AreQuestObjectivesCompleted(started_character_quest_row.id, function(is_check_success, completion_state, completion_error)
+                if not is_check_success then
+                    callback(false, nil, completion_error)
                     return
                 end
 
-                if type(GRInventoryBridge) ~= "table" or type(GRInventoryBridge.AddItem) ~= "function" then
-                    Console.Log(
-                        "[gr_quests][service] Quest item reward skipped reason=inventory-bridge-unavailable quest_key=%s.",
-                        tostring(quest_row.key)
-                    )
-                    callback(true, result, nil)
+                if completion_state ~= nil and completion_state.has_objectives == true and completion_state.completed ~= true then
+                    callback(false, nil, "quest-objectives-incomplete")
                     return
                 end
 
-                GRInventoryBridge.AddItem(active_character_id, quest_row.reward_item_key, quest_row.reward_item_quantity, nil, function(is_item_success, _, item_error)
-                    if not is_item_success then
-                        Console.Log(
-                            "[gr_quests][service] Quest item reward failed character_id=%s quest_key=%s item_key=%s reason=%s.",
-                            tostring(active_character_id),
-                            tostring(quest_row.key),
-                            tostring(quest_row.reward_item_key),
-                            tostring(item_error)
-                        )
-                        callback(true, result, nil)
+                self.repository:CompleteQuest(active_character_id, normalized_quest_key, function(is_complete_success, character_quest_row, complete_error)
+                    local result = nil
+
+                    if not is_complete_success then
+                        callback(false, nil, complete_error)
                         return
                     end
 
-                    result.reward_item_key = quest_row.reward_item_key
-                    result.reward_item_quantity = quest_row.reward_item_quantity
+                    result = {
+                        quest = quest_row,
+                        character_quest = character_quest_row,
+                        reward_xp_granted = 0,
+                        reward_item_key = nil,
+                        reward_item_quantity = 0,
+                    }
 
-                    Console.Log(
-                        "[gr_quests][service] Quest item reward granted character_id=%s quest_key=%s item_key=%s quantity=%s.",
-                        tostring(active_character_id),
-                        tostring(quest_row.key),
-                        tostring(quest_row.reward_item_key),
-                        tostring(quest_row.reward_item_quantity)
-                    )
+                    local function grant_item_reward()
+                        if quest_row.reward_item_key == nil or quest_row.reward_item_quantity == nil or quest_row.reward_item_quantity < 1 then
+                            Console.Log(
+                                "[gr_quests][service] Quest has no item reward quest_key=%s.",
+                                tostring(quest_row.key)
+                            )
+                            callback(true, result, nil)
+                            return
+                        end
 
-                    callback(true, result, nil)
+                        if type(GRInventoryBridge) ~= "table" or type(GRInventoryBridge.AddItem) ~= "function" then
+                            Console.Log(
+                                "[gr_quests][service] Quest item reward skipped reason=inventory-bridge-unavailable quest_key=%s.",
+                                tostring(quest_row.key)
+                            )
+                            callback(true, result, nil)
+                            return
+                        end
+
+                        GRInventoryBridge.AddItem(active_character_id, quest_row.reward_item_key, quest_row.reward_item_quantity, nil, function(is_item_success, _, item_error)
+                            if not is_item_success then
+                                Console.Log(
+                                    "[gr_quests][service] Quest item reward failed character_id=%s quest_key=%s item_key=%s reason=%s.",
+                                    tostring(active_character_id),
+                                    tostring(quest_row.key),
+                                    tostring(quest_row.reward_item_key),
+                                    tostring(item_error)
+                                )
+                                callback(true, result, nil)
+                                return
+                            end
+
+                            result.reward_item_key = quest_row.reward_item_key
+                            result.reward_item_quantity = quest_row.reward_item_quantity
+
+                            Console.Log(
+                                "[gr_quests][service] Quest item reward granted character_id=%s quest_key=%s item_key=%s quantity=%s.",
+                                tostring(active_character_id),
+                                tostring(quest_row.key),
+                                tostring(quest_row.reward_item_key),
+                                tostring(quest_row.reward_item_quantity)
+                            )
+
+                            callback(true, result, nil)
+                        end)
+                    end
+
+                    if quest_row.reward_xp == nil or quest_row.reward_xp < 1 then
+                        grant_item_reward()
+                        return
+                    end
+
+                    if type(GRProgressionBridge) ~= "table" or type(GRProgressionBridge.AddXp) ~= "function" then
+                        Console.Log(
+                            "[gr_quests][service] Quest reward XP skipped quest_key=%s reason=%s.",
+                            tostring(quest_row.key),
+                            "progression-bridge-unavailable"
+                        )
+                        grant_item_reward()
+                        return
+                    end
+
+                    GRProgressionBridge.AddXp(active_character_id, quest_row.reward_xp, string.format("quest:%s", tostring(quest_row.key)), function(is_xp_success, _, xp_error)
+                        if not is_xp_success then
+                            Console.Log(
+                                "[gr_quests][service] Quest reward XP failed character_id=%s quest_key=%s reason=%s.",
+                                tostring(active_character_id),
+                                tostring(quest_row.key),
+                                tostring(xp_error)
+                            )
+                            grant_item_reward()
+                            return
+                        end
+
+                        result.reward_xp_granted = quest_row.reward_xp
+
+                        Console.Log(
+                            "[gr_quests][service] Quest reward XP granted character_id=%s quest_key=%s amount=%s.",
+                            tostring(active_character_id),
+                            tostring(quest_row.key),
+                            tostring(quest_row.reward_xp)
+                        )
+
+                        grant_item_reward()
+                    end)
                 end)
-            end
-
-            if quest_row.reward_xp == nil or quest_row.reward_xp < 1 then
-                grant_item_reward()
-                return
-            end
-
-            if type(GRProgressionBridge) ~= "table" or type(GRProgressionBridge.AddXp) ~= "function" then
-                Console.Log(
-                    "[gr_quests][service] Quest reward XP skipped quest_key=%s reason=%s.",
-                    tostring(quest_row.key),
-                    "progression-bridge-unavailable"
-                )
-                grant_item_reward()
-                return
-            end
-
-            GRProgressionBridge.AddXp(active_character_id, quest_row.reward_xp, string.format("quest:%s", tostring(quest_row.key)), function(is_xp_success, _, xp_error)
-                if not is_xp_success then
-                    Console.Log(
-                        "[gr_quests][service] Quest reward XP failed character_id=%s quest_key=%s reason=%s.",
-                        tostring(active_character_id),
-                        tostring(quest_row.key),
-                        tostring(xp_error)
-                    )
-                    grant_item_reward()
-                    return
-                end
-
-                result.reward_xp_granted = quest_row.reward_xp
-
-                Console.Log(
-                    "[gr_quests][service] Quest reward XP granted character_id=%s quest_key=%s amount=%s.",
-                    tostring(active_character_id),
-                    tostring(quest_row.key),
-                    tostring(quest_row.reward_xp)
-                )
-
-                grant_item_reward()
             end)
         end)
     end)

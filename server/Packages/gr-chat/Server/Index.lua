@@ -18,6 +18,7 @@ local EXTERNAL_CHAT_COMMANDS = {
     inv = true,
     completequest = true,
     profile = true,
+    questprogress = true,
     quests = true,
     setclass = true,
     skills = true,

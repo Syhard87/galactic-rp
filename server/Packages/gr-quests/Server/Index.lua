@@ -37,6 +37,46 @@ local function trim_string(value)
     return trimmed_value
 end
 
+local function normalize_boolean(value, fallback)
+    if type(value) == "boolean" then
+        return value
+    end
+
+    local string_value = trim_string(value)
+
+    if string_value ~= nil then
+        local lowered_value = string.lower(string_value)
+
+        if lowered_value == "true" then
+            return true
+        end
+
+        if lowered_value == "false" then
+            return false
+        end
+    end
+
+    return fallback
+end
+
+local function read_custom_settings()
+    if type(Server) ~= "table" and type(Server) ~= "userdata" then
+        return nil
+    end
+
+    if type(Server.GetCustomSettings) ~= "function" then
+        return nil
+    end
+
+    local is_read, custom_settings = pcall(Server.GetCustomSettings)
+
+    if not is_read or type(custom_settings) ~= "table" then
+        return nil
+    end
+
+    return custom_settings
+end
+
 local function get_platform_id(player)
     if type(player) ~= "table" and type(player) ~= "userdata" then
         return nil
@@ -47,6 +87,16 @@ local function get_platform_id(player)
     end
 
     return player:GetAccountID()
+end
+
+local function resolve_platform_id(player_or_platform_id)
+    local platform_id = get_platform_id(player_or_platform_id)
+
+    if platform_id ~= nil then
+        return platform_id
+    end
+
+    return trim_string(player_or_platform_id)
 end
 
 local function normalize_chat_submit_arguments(first_argument, second_argument)
@@ -79,6 +129,70 @@ local function normalize_positive_integer(value)
     end
 
     return nil
+end
+
+local function parse_platform_id_allowlist(value)
+    local allowlist = {}
+    local has_entries = false
+
+    local function add_entry(entry_value)
+        local normalized_entry = trim_string(entry_value)
+
+        if normalized_entry == nil then
+            return
+        end
+
+        allowlist[normalized_entry] = true
+        has_entries = true
+    end
+
+    if type(value) == "string" then
+        for raw_entry in string.gmatch(value, "([^,]+)") do
+            add_entry(raw_entry)
+        end
+    elseif type(value) == "table" then
+        for _, entry_value in ipairs(value) do
+            add_entry(entry_value)
+        end
+    end
+
+    return allowlist, has_entries
+end
+
+local function can_use_questprogress_command(player_or_platform_id)
+    local platform_id = resolve_platform_id(player_or_platform_id)
+    local custom_settings = nil
+    local debug_commands_enabled = false
+    local allowlist = nil
+    local has_allowlist_entries = false
+
+    if platform_id == nil then
+        return false, nil, "platform-id-missing"
+    end
+
+    custom_settings = read_custom_settings()
+
+    if type(custom_settings) ~= "table" then
+        return false, platform_id, "custom-settings-missing"
+    end
+
+    debug_commands_enabled = normalize_boolean(custom_settings.gr_quests_debug_commands_enabled, false)
+
+    if not debug_commands_enabled then
+        return false, platform_id, "debug-disabled"
+    end
+
+    allowlist, has_allowlist_entries = parse_platform_id_allowlist(custom_settings.gr_quests_debug_allowed_platform_ids)
+
+    if not has_allowlist_entries then
+        return false, platform_id, "allowlist-missing"
+    end
+
+    if allowlist[platform_id] ~= true then
+        return false, platform_id, "not-authorized"
+    end
+
+    return true, platform_id, nil
 end
 
 local function get_chat_command(message)
@@ -140,6 +254,26 @@ local GRQuestsBridge = {
 
         return GRQuests.Server.Service:CompleteQuestForActiveCharacter(player_or_platform_id, quest_key, callback)
     end,
+    RecordObjectiveProgress = function(character_id, target_type, target_key, amount, callback)
+        if GRQuests.Server.Service == nil then
+            return callback_service_missing(callback)
+        end
+
+        return GRQuests.Server.Service:RecordObjectiveProgress(character_id, target_type, target_key, amount, callback)
+    end,
+    RecordObjectiveProgressForActiveCharacter = function(player_or_platform_id, target_type, target_key, amount, callback)
+        if GRQuests.Server.Service == nil then
+            return callback_service_missing(callback)
+        end
+
+        return GRQuests.Server.Service:RecordObjectiveProgressForActiveCharacter(
+            player_or_platform_id,
+            target_type,
+            target_key,
+            amount,
+            callback
+        )
+    end,
 }
 
 Package.Export("GRQuestsBridge", GRQuestsBridge)
@@ -195,6 +329,21 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                             player,
                             string.format("- %s : %s", tostring(character_quest_row.quest_key), tostring(character_quest_row.status))
                         )
+
+                        if type(character_quest_row.objectives) == "table" then
+                            for _, objective_row in ipairs(character_quest_row.objectives) do
+                                Chat.SendMessage(
+                                    player,
+                                    string.format(
+                                        "  * %s %s/%s - %s",
+                                        tostring(objective_row.objective_key),
+                                        tostring(objective_row.current_count or 0),
+                                        tostring(objective_row.required_count or 0),
+                                        tostring(objective_row.description or objective_row.objective_key)
+                                    )
+                                )
+                            end
+                        end
                     end
                 end)
             end)
@@ -263,6 +412,11 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         return
                     end
 
+                    if error == "quest-objectives-incomplete" then
+                        Chat.SendMessage(player, "Objectifs de quete incomplets.")
+                        return
+                    end
+
                     Chat.SendMessage(player, "Impossible de terminer la quete.")
                     return
                 end
@@ -280,6 +434,73 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     )
                 end
             end)
+
+            return false
+        end
+
+        if command_name == "questprogress" then
+            local is_allowed = false
+            local platform_id = nil
+            local guard_error = nil
+            local target_type = nil
+            local target_key = nil
+            local amount_text = nil
+            local amount = nil
+
+            is_allowed, platform_id, guard_error = can_use_questprogress_command(player)
+
+            if not is_allowed then
+                Console.Log(
+                    "[gr_quests][server] Quest progress command denied platform_id=%s reason=%s.",
+                    tostring(platform_id),
+                    tostring(guard_error)
+                )
+                Chat.SendMessage(player, "Commande reservee au staff/dev.")
+                return false
+            end
+
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /questprogress <target_type> <target_key> <amount>")
+                return false
+            end
+
+            target_type, target_key, amount_text = payload:match("^(%S+)%s+(%S+)%s+(%S+)$")
+            amount = normalize_positive_integer(amount_text)
+
+            if trim_string(target_type) == nil or trim_string(target_key) == nil or amount == nil then
+                Chat.SendMessage(player, "Usage : /questprogress <target_type> <target_key> <amount>")
+                return false
+            end
+
+            GRQuests.Server.Service:RecordObjectiveProgressForActiveCharacter(
+                player,
+                target_type,
+                target_key,
+                amount,
+                function(is_success, _, error)
+                    if not is_success then
+                        if error == "active-character-missing" then
+                            Chat.SendMessage(player, "Aucun personnage actif.")
+                            return
+                        end
+
+                        if error == "quest-objective-not-found" then
+                            Chat.SendMessage(player, "Aucun objectif correspondant.")
+                            return
+                        end
+
+                        if error == "objective-progress-amount-required" or error == "target-type-required" then
+                            Chat.SendMessage(player, "Usage : /questprogress <target_type> <target_key> <amount>")
+                            return
+                        end
+
+                        Chat.SendMessage(player, "Impossible d'enregistrer la progression d'objectif.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Progression objectif enregistree.")
+                end
+            )
 
             return false
         end

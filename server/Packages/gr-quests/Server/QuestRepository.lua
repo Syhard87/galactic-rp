@@ -85,6 +85,100 @@ local SELECT_STARTED_CHARACTER_QUEST_QUERY = [[
     LIMIT 1
 ]]
 
+local SELECT_QUEST_OBJECTIVES_QUERY = [[
+    SELECT
+        quest_key,
+        objective_key,
+        description,
+        target_type,
+        target_key,
+        required_count,
+        order_index,
+        created_at,
+        updated_at
+    FROM quest_objectives
+    WHERE quest_key = :0
+    ORDER BY order_index ASC, objective_key ASC
+]]
+
+local SELECT_CHARACTER_QUEST_OBJECTIVES_QUERY = [[
+    SELECT
+        cqo.character_quest_id,
+        cqo.objective_key,
+        cqo.current_count,
+        cqo.required_count,
+        cqo.completed_at,
+        cqo.created_at,
+        cqo.updated_at,
+        qo.quest_key,
+        qo.description,
+        qo.target_type,
+        qo.target_key,
+        qo.order_index
+    FROM character_quest_objectives cqo
+    INNER JOIN character_quests cq
+        ON cq.id = cqo.character_quest_id
+    INNER JOIN quest_objectives qo
+        ON qo.quest_key = cq.quest_key
+        AND qo.objective_key = cqo.objective_key
+    WHERE cqo.character_quest_id = :0
+    ORDER BY qo.order_index ASC, cqo.objective_key ASC
+]]
+
+local SELECT_MATCHING_STARTED_OBJECTIVES_WITH_TARGET_KEY_QUERY = [[
+    SELECT
+        cqo.character_quest_id,
+        cqo.objective_key,
+        cqo.current_count,
+        cqo.required_count,
+        cqo.completed_at,
+        cqo.created_at,
+        cqo.updated_at,
+        qo.quest_key,
+        qo.description,
+        qo.target_type,
+        qo.target_key,
+        qo.order_index
+    FROM character_quest_objectives cqo
+    INNER JOIN character_quests cq
+        ON cq.id = cqo.character_quest_id
+    INNER JOIN quest_objectives qo
+        ON qo.quest_key = cq.quest_key
+        AND qo.objective_key = cqo.objective_key
+    WHERE cq.character_id = :0
+        AND cq.status = 'started'
+        AND qo.target_type = :1
+        AND qo.target_key = :2
+    ORDER BY cqo.character_quest_id ASC, qo.order_index ASC, cqo.objective_key ASC
+]]
+
+local SELECT_MATCHING_STARTED_OBJECTIVES_WITHOUT_TARGET_KEY_QUERY = [[
+    SELECT
+        cqo.character_quest_id,
+        cqo.objective_key,
+        cqo.current_count,
+        cqo.required_count,
+        cqo.completed_at,
+        cqo.created_at,
+        cqo.updated_at,
+        qo.quest_key,
+        qo.description,
+        qo.target_type,
+        qo.target_key,
+        qo.order_index
+    FROM character_quest_objectives cqo
+    INNER JOIN character_quests cq
+        ON cq.id = cqo.character_quest_id
+    INNER JOIN quest_objectives qo
+        ON qo.quest_key = cq.quest_key
+        AND qo.objective_key = cqo.objective_key
+    WHERE cq.character_id = :0
+        AND cq.status = 'started'
+        AND qo.target_type = :1
+        AND qo.target_key IS NULL
+    ORDER BY cqo.character_quest_id ASC, qo.order_index ASC, cqo.objective_key ASC
+]]
+
 local INSERT_CHARACTER_QUEST_QUERY = [[
     INSERT INTO character_quests (
         character_id,
@@ -94,6 +188,29 @@ local INSERT_CHARACTER_QUEST_QUERY = [[
         :0,
         :1
     )
+    RETURNING
+        id,
+        character_id,
+        quest_key,
+        status,
+        started_at,
+        completed_at,
+        created_at,
+        updated_at
+]]
+
+local INSERT_CHARACTER_QUEST_OBJECTIVE_QUERY = [[
+    INSERT INTO character_quest_objectives (
+        character_quest_id,
+        objective_key,
+        required_count
+    )
+    VALUES (
+        :0,
+        :1,
+        :2
+    )
+    ON CONFLICT (character_quest_id, objective_key) DO NOTHING
 ]]
 
 local UPDATE_COMPLETE_CHARACTER_QUEST_QUERY = [[
@@ -103,6 +220,38 @@ local UPDATE_COMPLETE_CHARACTER_QUEST_QUERY = [[
         completed_at = NOW(),
         updated_at = NOW()
     WHERE id = :0
+]]
+
+local UPDATE_CHARACTER_QUEST_OBJECTIVE_PROGRESS_QUERY = [[
+    UPDATE character_quest_objectives
+    SET
+        current_count = :0,
+        updated_at = NOW()
+    WHERE character_quest_id = :1
+        AND objective_key = :2
+]]
+
+local UPDATE_CHARACTER_QUEST_OBJECTIVE_PROGRESS_COMPLETE_QUERY = [[
+    UPDATE character_quest_objectives
+    SET
+        current_count = :0,
+        completed_at = COALESCE(completed_at, NOW()),
+        updated_at = NOW()
+    WHERE character_quest_id = :1
+        AND objective_key = :2
+]]
+
+local SELECT_CHARACTER_QUEST_OBJECTIVES_COMPLETION_QUERY = [[
+    SELECT
+        COUNT(*) AS total_count,
+        SUM(
+            CASE
+                WHEN completed_at IS NOT NULL OR current_count >= required_count THEN 1
+                ELSE 0
+            END
+        ) AS completed_count
+    FROM character_quest_objectives
+    WHERE character_quest_id = :0
 ]]
 
 local function trim_string(value)
@@ -185,6 +334,36 @@ local function normalize_quest_status(status)
     return normalized_status
 end
 
+local function normalize_objective_key(objective_key)
+    local normalized_objective_key = trim_string(objective_key)
+
+    if normalized_objective_key == nil then
+        return nil
+    end
+
+    return string.lower(normalized_objective_key)
+end
+
+local function normalize_target_type(target_type)
+    local normalized_target_type = trim_string(target_type)
+
+    if normalized_target_type == nil then
+        return nil
+    end
+
+    return string.lower(normalized_target_type)
+end
+
+local function normalize_target_key(target_key)
+    local normalized_target_key = trim_string(target_key)
+
+    if normalized_target_key == nil then
+        return nil
+    end
+
+    return string.lower(normalized_target_key)
+end
+
 local function normalize_quest_row(row)
     local quest_key = nil
 
@@ -244,6 +423,41 @@ local function normalize_character_quest_row(row)
         reward_xp = normalize_non_negative_integer(row.reward_xp, 0),
         reward_item_key = normalize_quest_key(row.reward_item_key),
         reward_item_quantity = normalize_non_negative_integer(row.reward_item_quantity, 0),
+    }
+end
+
+local function normalize_quest_objective_row(row)
+    local quest_key = nil
+    local objective_key = nil
+    local target_type = nil
+    local required_count = nil
+
+    if type(row) ~= "table" then
+        return nil
+    end
+
+    quest_key = normalize_quest_key(row.quest_key)
+    objective_key = normalize_objective_key(row.objective_key)
+    target_type = normalize_target_type(row.target_type)
+    required_count = normalize_positive_integer(row.required_count)
+
+    if quest_key == nil or objective_key == nil or target_type == nil or required_count == nil then
+        return nil
+    end
+
+    return {
+        character_quest_id = normalize_positive_integer(row.character_quest_id),
+        quest_key = quest_key,
+        objective_key = objective_key,
+        description = trim_string(row.description) or objective_key,
+        target_type = target_type,
+        target_key = normalize_target_key(row.target_key),
+        required_count = required_count,
+        order_index = normalize_non_negative_integer(row.order_index, 0),
+        current_count = normalize_non_negative_integer(row.current_count, 0),
+        completed_at = row.completed_at,
+        created_at = row.created_at,
+        updated_at = row.updated_at,
     }
 end
 
@@ -407,6 +621,391 @@ function QuestRepository:ListCharacterQuests(character_id, callback)
     end, "quest-list-character")
 end
 
+function QuestRepository:ListQuestObjectives(quest_key, callback)
+    local normalized_quest_key = normalize_quest_key(quest_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_quest_key == nil then
+        callback(false, nil, "quest-key-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_QUEST_OBJECTIVES_QUERY, function(rows, select_error)
+            local objective_rows = nil
+
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            objective_rows = normalize_rows(rows, normalize_quest_objective_row)
+
+            Console.Log(
+                "[gr_quests][repository] Quest objectives loaded quest_key=%s count=%s.",
+                tostring(normalized_quest_key),
+                tostring(#objective_rows)
+            )
+
+            callback(true, objective_rows, nil)
+        end, normalized_quest_key)
+    end, "quest-list-objectives")
+end
+
+function QuestRepository:ListCharacterQuestObjectives(character_quest_id, callback)
+    local normalized_character_quest_id = normalize_positive_integer(character_quest_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_quest_id == nil then
+        callback(false, nil, "character-quest-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_CHARACTER_QUEST_OBJECTIVES_QUERY, function(rows, select_error)
+            local objective_rows = nil
+
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            objective_rows = normalize_rows(rows, normalize_quest_objective_row)
+            callback(true, objective_rows, nil)
+        end, normalized_character_quest_id)
+    end, "quest-list-character-objectives")
+end
+
+function QuestRepository:InitializeQuestObjectives(character_quest_id, quest_key, callback)
+    local normalized_character_quest_id = normalize_positive_integer(character_quest_id)
+    local normalized_quest_key = normalize_quest_key(quest_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_quest_id == nil then
+        callback(false, nil, "character-quest-id-required")
+        return true
+    end
+
+    if normalized_quest_key == nil then
+        callback(false, nil, "quest-key-required")
+        return true
+    end
+
+    return self:ListQuestObjectives(normalized_quest_key, function(is_objectives_success, objective_rows, objectives_error)
+        if not is_objectives_success then
+            callback(false, nil, objectives_error)
+            return
+        end
+
+        if type(objective_rows) ~= "table" or #objective_rows == 0 then
+            Console.Log(
+                "[gr_quests][repository] Quest objectives initialized character_quest_id=%s quest_key=%s count=%s.",
+                tostring(normalized_character_quest_id),
+                tostring(normalized_quest_key),
+                "0"
+            )
+            callback(true, {}, nil)
+            return
+        end
+
+        self:Connect(function(is_connected, database_or_error, error)
+            local objective_index = 1
+
+            if not is_connected then
+                callback(false, nil, error)
+                return
+            end
+
+            local function insert_next_objective()
+                local objective_row = objective_rows[objective_index]
+
+                if objective_row == nil then
+                    self:ListCharacterQuestObjectives(normalized_character_quest_id, function(is_list_success, initialized_rows, list_error)
+                        if not is_list_success then
+                            callback(false, nil, list_error)
+                            return
+                        end
+
+                        Console.Log(
+                            "[gr_quests][repository] Quest objectives initialized character_quest_id=%s quest_key=%s count=%s.",
+                            tostring(normalized_character_quest_id),
+                            tostring(normalized_quest_key),
+                            tostring(#initialized_rows)
+                        )
+
+                        callback(true, initialized_rows, nil)
+                    end)
+                    return
+                end
+
+                database_or_error:ExecuteAsync(
+                    INSERT_CHARACTER_QUEST_OBJECTIVE_QUERY,
+                    function(_, insert_error)
+                        if insert_error ~= nil then
+                            callback(false, nil, insert_error)
+                            return
+                        end
+
+                        objective_index = objective_index + 1
+                        insert_next_objective()
+                    end,
+                    normalized_character_quest_id,
+                    objective_row.objective_key,
+                    objective_row.required_count
+                )
+            end
+
+            insert_next_objective()
+        end, "quest-initialize-objectives")
+    end)
+end
+
+function QuestRepository:ListActiveCharacterQuestDetails(character_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    return self:ListCharacterQuests(normalized_character_id, function(is_quests_success, character_quests, quests_error)
+        local quest_index = 1
+
+        if not is_quests_success then
+            callback(false, nil, quests_error)
+            return
+        end
+
+        character_quests = character_quests or {}
+
+        local function populate_next_quest()
+            local character_quest_row = character_quests[quest_index]
+
+            if character_quest_row == nil then
+                callback(true, character_quests, nil)
+                return
+            end
+
+            self:ListCharacterQuestObjectives(character_quest_row.id, function(is_objectives_success, objective_rows, objectives_error)
+                if not is_objectives_success then
+                    callback(false, nil, objectives_error)
+                    return
+                end
+
+                character_quest_row.objectives = objective_rows or {}
+                quest_index = quest_index + 1
+                populate_next_quest()
+            end)
+        end
+
+        populate_next_quest()
+    end)
+end
+
+function QuestRepository:RecordObjectiveProgress(character_id, target_type, target_key, amount, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_target_type = normalize_target_type(target_type)
+    local normalized_target_key = normalize_target_key(target_key)
+    local normalized_amount = normalize_positive_integer(amount)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if normalized_target_type == nil then
+        callback(false, nil, "target-type-required")
+        return true
+    end
+
+    if normalized_amount == nil then
+        callback(false, nil, "objective-progress-amount-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        local select_query = nil
+
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        if normalized_target_key == nil then
+            select_query = SELECT_MATCHING_STARTED_OBJECTIVES_WITHOUT_TARGET_KEY_QUERY
+        else
+            select_query = SELECT_MATCHING_STARTED_OBJECTIVES_WITH_TARGET_KEY_QUERY
+        end
+
+        local function handle_matching_rows(rows, select_error)
+            local objective_rows = nil
+            local objective_index = 1
+            local updated_rows = {}
+
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            objective_rows = normalize_rows(rows, normalize_quest_objective_row)
+
+            if objective_rows[1] == nil then
+                callback(false, nil, "quest-objective-not-found")
+                return
+            end
+
+            local function update_next_objective()
+                local objective_row = objective_rows[objective_index]
+
+                if objective_row == nil then
+                    Console.Log(
+                        "[gr_quests][repository] Objective progress recorded character_id=%s target_type=%s target_key=%s updated_count=%s.",
+                        tostring(normalized_character_id),
+                        tostring(normalized_target_type),
+                        tostring(normalized_target_key),
+                        tostring(#updated_rows)
+                    )
+                    callback(true, updated_rows, nil)
+                    return
+                end
+
+                local new_count = math.min(
+                    objective_row.required_count,
+                    objective_row.current_count + normalized_amount
+                )
+
+                local is_completed = new_count >= objective_row.required_count
+                local update_query = UPDATE_CHARACTER_QUEST_OBJECTIVE_PROGRESS_QUERY
+
+                if is_completed then
+                    update_query = UPDATE_CHARACTER_QUEST_OBJECTIVE_PROGRESS_COMPLETE_QUERY
+                end
+
+                database_or_error:ExecuteAsync(
+                    update_query,
+                    function(rows_affected, update_error)
+                        if update_error ~= nil then
+                            callback(false, nil, update_error)
+                            return
+                        end
+
+                        if rows_affected ~= 1 then
+                            callback(false, nil, "character-quest-objective-update-unexpected-rows-affected")
+                            return
+                        end
+
+                        objective_row.current_count = new_count
+
+                        if is_completed and objective_row.completed_at == nil then
+                            objective_row.completed_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                        end
+
+                        updated_rows[#updated_rows + 1] = objective_row
+                        objective_index = objective_index + 1
+                        update_next_objective()
+                    end,
+                    new_count,
+                    objective_row.character_quest_id,
+                    objective_row.objective_key
+                )
+            end
+
+            update_next_objective()
+        end
+
+        if normalized_target_key == nil then
+            database_or_error:SelectAsync(
+                select_query,
+                handle_matching_rows,
+                normalized_character_id,
+                normalized_target_type
+            )
+            return
+        end
+
+        database_or_error:SelectAsync(
+            select_query,
+            handle_matching_rows,
+            normalized_character_id,
+            normalized_target_type,
+            normalized_target_key
+        )
+    end, "quest-record-objective-progress")
+end
+
+function QuestRepository:AreQuestObjectivesCompleted(character_quest_id, callback)
+    local normalized_character_quest_id = normalize_positive_integer(character_quest_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_quest_id == nil then
+        callback(false, nil, "character-quest-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_CHARACTER_QUEST_OBJECTIVES_COMPLETION_QUERY, function(rows, select_error)
+            local summary_row = rows and rows[1] or nil
+            local total_count = normalize_non_negative_integer(summary_row and summary_row.total_count, 0)
+            local completed_count = normalize_non_negative_integer(summary_row and summary_row.completed_count, 0)
+            local has_objectives = total_count > 0
+            local is_completed = (not has_objectives) or (completed_count >= total_count)
+
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            Console.Log(
+                "[gr_quests][repository] Quest objectives completion checked character_quest_id=%s completed=%s.",
+                tostring(normalized_character_quest_id),
+                tostring(is_completed)
+            )
+
+            callback(true, {
+                has_objectives = has_objectives,
+                completed = is_completed,
+                total_count = total_count,
+                completed_count = completed_count,
+            }, nil)
+        end, normalized_character_quest_id)
+    end, "quest-check-objectives-completed")
+end
+
 function QuestRepository:StartQuest(character_id, quest_key, callback)
     local normalized_character_id = normalize_positive_integer(character_id)
     local normalized_quest_key = normalize_quest_key(quest_key)
@@ -457,32 +1056,44 @@ function QuestRepository:StartQuest(character_id, quest_key, callback)
                     return
                 end
 
-                database_or_error:ExecuteAsync(INSERT_CHARACTER_QUEST_QUERY, function(_, execute_error)
+                database_or_error:SelectAsync(INSERT_CHARACTER_QUEST_QUERY, function(insert_rows, insert_error)
+                    local normalized_insert_rows = nil
                     local started_row = nil
 
-                    if execute_error ~= nil then
-                        callback(false, nil, execute_error)
+                    if insert_error ~= nil then
+                        callback(false, nil, insert_error)
                         return
                     end
 
-                    started_row = {
-                        id = nil,
-                        character_id = normalized_character_id,
-                        quest_key = normalized_quest_key,
-                        status = "started",
-                        title = quest_row.title,
-                        reward_xp = quest_row.reward_xp,
-                        reward_item_key = quest_row.reward_item_key,
-                        reward_item_quantity = quest_row.reward_item_quantity,
-                    }
+                    normalized_insert_rows = normalize_rows(insert_rows, normalize_character_quest_row)
+                    started_row = normalized_insert_rows[1]
 
-                    Console.Log(
-                        "[gr_quests][repository] Quest started character_id=%s quest_key=%s.",
-                        tostring(normalized_character_id),
-                        tostring(normalized_quest_key)
-                    )
+                    if started_row == nil then
+                        callback(false, nil, "character-quest-create-returning-missing")
+                        return
+                    end
 
-                    callback(true, started_row, nil)
+                    started_row.title = quest_row.title
+                    started_row.reward_xp = quest_row.reward_xp
+                    started_row.reward_item_key = quest_row.reward_item_key
+                    started_row.reward_item_quantity = quest_row.reward_item_quantity
+
+                    self:InitializeQuestObjectives(started_row.id, normalized_quest_key, function(is_init_success, objective_rows, init_error)
+                        if not is_init_success then
+                            callback(false, nil, init_error)
+                            return
+                        end
+
+                        started_row.objectives = objective_rows or {}
+
+                        Console.Log(
+                            "[gr_quests][repository] Quest started character_id=%s quest_key=%s.",
+                            tostring(normalized_character_id),
+                            tostring(normalized_quest_key)
+                        )
+
+                        callback(true, started_row, nil)
+                    end)
                 end, normalized_character_id, normalized_quest_key)
             end, normalized_character_id, normalized_quest_key)
         end, "quest-start")
@@ -530,9 +1141,14 @@ function QuestRepository:CompleteQuest(character_id, quest_key, callback)
                 return
             end
 
-            database_or_error:ExecuteAsync(UPDATE_COMPLETE_CHARACTER_QUEST_QUERY, function(_, execute_error)
+            database_or_error:ExecuteAsync(UPDATE_COMPLETE_CHARACTER_QUEST_QUERY, function(rows_affected, execute_error)
                 if execute_error ~= nil then
                     callback(false, nil, execute_error)
+                    return
+                end
+
+                if rows_affected ~= 1 then
+                    callback(false, nil, "character-quest-complete-unexpected-rows-affected")
                     return
                 end
 
