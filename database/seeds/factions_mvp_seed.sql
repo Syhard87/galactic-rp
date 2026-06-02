@@ -1,5 +1,67 @@
 BEGIN;
 
+WITH ranked_factions AS (
+    SELECT
+        id,
+        type,
+        ROW_NUMBER() OVER (
+            PARTITION BY type
+            ORDER BY
+                CASE name
+                    WHEN 'Civil' THEN 0
+                    WHEN 'Autorité Galactique' THEN 0
+                    WHEN 'Corps Militaire' THEN 0
+                    WHEN 'Guilde Marchande' THEN 0
+                    WHEN 'Syndicat Criminel' THEN 0
+                    ELSE 1
+                END,
+                id
+        ) AS row_rank
+    FROM factions
+    WHERE type IN ('civil', 'government', 'military', 'merchant', 'criminal')
+)
+DELETE FROM factions AS f
+USING ranked_factions AS rf
+WHERE f.id = rf.id
+  AND rf.row_rank > 1;
+
+UPDATE factions
+SET
+    name = CASE type
+        WHEN 'government' THEN 'Autorité Galactique'
+        WHEN 'military' THEN 'Corps Militaire'
+        WHEN 'merchant' THEN 'Guilde Marchande'
+        WHEN 'criminal' THEN 'Syndicat Criminel'
+        WHEN 'civil' THEN 'Civil'
+        ELSE name
+    END,
+    updated_at = NOW()
+WHERE type IN ('civil', 'government', 'military', 'merchant', 'criminal');
+
+UPDATE faction_ranks AS fr
+SET
+    name = CASE
+        WHEN f.type = 'civil' AND fr.level = 1 THEN 'Citoyen'
+        WHEN f.type = 'government' AND fr.level = 1 THEN 'Agent'
+        WHEN f.type = 'government' AND fr.level = 2 THEN 'Officier'
+        WHEN f.type = 'government' AND fr.level = 3 THEN 'Gouverneur'
+        WHEN f.type = 'military' AND fr.level = 1 THEN 'Recrue'
+        WHEN f.type = 'military' AND fr.level = 2 THEN 'Soldat'
+        WHEN f.type = 'military' AND fr.level = 3 THEN 'Sergent'
+        WHEN f.type = 'military' AND fr.level = 4 THEN 'Commandant'
+        WHEN f.type = 'merchant' AND fr.level = 1 THEN 'Transporteur'
+        WHEN f.type = 'merchant' AND fr.level = 2 THEN 'Négociant'
+        WHEN f.type = 'merchant' AND fr.level = 3 THEN 'Maître de Guilde'
+        WHEN f.type = 'criminal' AND fr.level = 1 THEN 'Contact'
+        WHEN f.type = 'criminal' AND fr.level = 2 THEN 'Contrebandier'
+        WHEN f.type = 'criminal' AND fr.level = 3 THEN 'Lieutenant'
+        ELSE fr.name
+    END,
+    updated_at = NOW()
+FROM factions AS f
+WHERE fr.faction_id = f.id
+  AND f.type IN ('civil', 'government', 'military', 'merchant', 'criminal');
+
 WITH seeded_factions (name, type, description, is_whitelisted) AS (
     VALUES
         ('Civil', 'civil', 'Default civilian affiliation for characters without organizational duties.', FALSE),
