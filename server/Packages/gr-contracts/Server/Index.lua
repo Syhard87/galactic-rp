@@ -227,6 +227,20 @@ local function resolve_active_character_id(player_or_platform_id)
 end
 
 local function build_contract_line(contract_row)
+    local payment_status = trim_string(contract_row and contract_row.payment_status)
+
+    if payment_status ~= nil then
+        return string.format(
+            "- #%s %s reward=%s status=%s payment=%s desc=%s",
+            tostring(contract_row.id),
+            tostring(contract_row.type),
+            tostring(contract_row.reward_money),
+            tostring(contract_row.status),
+            tostring(payment_status),
+            tostring(contract_row.description)
+        )
+    end
+
     return string.format(
         "- #%s %s reward=%s status=%s desc=%s",
         tostring(contract_row.id),
@@ -238,6 +252,20 @@ local function build_contract_line(contract_row)
 end
 
 local function build_my_contract_line(contract_row)
+    local payment_status = trim_string(contract_row and contract_row.payment_status)
+
+    if payment_status ~= nil then
+        return string.format(
+            "- #%s %s reward=%s status=%s payment=%s role=%s",
+            tostring(contract_row.id),
+            tostring(contract_row.type),
+            tostring(contract_row.reward_money),
+            tostring(contract_row.status),
+            tostring(payment_status),
+            tostring(contract_row.role or "unknown")
+        )
+    end
+
     return string.format(
         "- #%s %s reward=%s status=%s role=%s",
         tostring(contract_row.id),
@@ -502,6 +530,11 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         return
                     end
 
+                    if error == "contract-already-completed" then
+                        Chat.SendMessage(player, "Contrat deja termine.")
+                        return
+                    end
+
                     if error == "contract-complete-forbidden" then
                         Chat.SendMessage(player, "Vous ne pouvez pas terminer ce contrat.")
                         return
@@ -511,7 +544,26 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     return
                 end
 
-                Chat.SendMessage(player, string.format("Contrat termine : #%s", tostring(contract_row.id)))
+                local payment_status = tostring(contract_row.payment_status or "unavailable")
+                local payment_message = "non-disponible"
+
+                if payment_status == "paid" then
+                    payment_message = "effectue"
+                elseif payment_status == "failed" then
+                    payment_message = "echoue"
+                elseif payment_status == "pending" then
+                    payment_message = "non-disponible"
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Contrat termine : #%s reward=%s paiement=%s",
+                        tostring(contract_row.id),
+                        tostring(contract_row.reward_money),
+                        tostring(payment_message)
+                    )
+                )
             end)
 
             return false

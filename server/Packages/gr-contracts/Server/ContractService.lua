@@ -110,6 +110,26 @@ local function normalize_description(description)
     return normalized_description
 end
 
+local function normalize_payment_status(payment_status)
+    local normalized_payment_status = trim_string(payment_status)
+
+    if normalized_payment_status == nil then
+        return "pending"
+    end
+
+    normalized_payment_status = string.lower(normalized_payment_status)
+
+    if normalized_payment_status ~= "pending"
+        and normalized_payment_status ~= "paid"
+        and normalized_payment_status ~= "unavailable"
+        and normalized_payment_status ~= "failed"
+    then
+        return "pending"
+    end
+
+    return normalized_payment_status
+end
+
 local function build_contract_title(contract_type)
     return CONTRACT_TYPE_TITLES[contract_type] or contract_type
 end
@@ -360,6 +380,18 @@ function ContractService:CompleteContract(character_id, contract_id, callback)
             return
         end
 
+        if contract_row.status == "completed" then
+            if normalize_payment_status(contract_row.payment_status) == "paid" then
+                Console.Log(
+                    "[gr_contracts][service] Contract payment skipped reason=already-paid contract_id=%s.",
+                    tostring(normalized_contract_id)
+                )
+            end
+
+            callback(false, nil, "contract-already-completed")
+            return
+        end
+
         if contract_row.status ~= "accepted"
             or normalize_positive_integer(contract_row.assignee_character_id) ~= normalized_character_id
         then
@@ -378,13 +410,91 @@ function ContractService:CompleteContract(character_id, contract_id, callback)
                 return
             end
 
-            Console.Log(
-                "[gr_contracts][service] Contract completed id=%s assignee_character_id=%s.",
-                tostring(completed_row.id),
-                tostring(normalized_character_id)
-            )
+            local reward_money = normalize_reward_money(completed_row.reward_money) or 0
 
-            callback(true, completed_row, nil)
+            local function finish_success(payment_status, money_result)
+                local enriched_row = {}
+
+                for key, value in pairs(completed_row) do
+                    enriched_row[key] = value
+                end
+
+                enriched_row.payment_status = payment_status
+                enriched_row.money_result = money_result
+
+                Console.Log(
+                    "[gr_contracts][service] Contract completed id=%s assignee_character_id=%s.",
+                    tostring(enriched_row.id),
+                    tostring(normalized_character_id)
+                )
+
+                callback(true, enriched_row, nil)
+            end
+
+            local function mark_payment_and_finish(payment_status, money_result)
+                self.repository:MarkContractPayment(normalized_contract_id, payment_status, function(is_mark_success, marked_row, mark_error)
+                    if not is_mark_success then
+                        Console.Log(
+                            "[gr_contracts][service] Contract payment tracking failed contract_id=%s payment_status=%s reason=%s.",
+                            tostring(normalized_contract_id),
+                            tostring(payment_status),
+                            tostring(mark_error)
+                        )
+                        finish_success(payment_status, money_result)
+                        return
+                    end
+
+                    if marked_row ~= nil then
+                        completed_row = marked_row
+                    end
+
+                    finish_success(payment_status, money_result)
+                end)
+            end
+
+            if reward_money <= 0 then
+                mark_payment_and_finish("paid", {
+                    money_bank = nil,
+                    amount = reward_money,
+                })
+                return
+            end
+
+            if type(self.repository.CreditCharacterBankMoney) ~= "function" then
+                Console.Log(
+                    "[gr_contracts][service] Contract payment unavailable contract_id=%s reason=%s.",
+                    tostring(normalized_contract_id),
+                    "bank-credit-unavailable"
+                )
+                mark_payment_and_finish("unavailable", nil)
+                return
+            end
+
+            self.repository:CreditCharacterBankMoney(normalized_character_id, reward_money, function(is_credit_success, money_result, credit_error)
+                if not is_credit_success or money_result == nil then
+                    Console.Log(
+                        "[gr_contracts][service] Contract payment failed contract_id=%s assignee_character_id=%s amount=%s reason=%s.",
+                        tostring(normalized_contract_id),
+                        tostring(normalized_character_id),
+                        tostring(reward_money),
+                        tostring(credit_error or "bank-credit-failed")
+                    )
+                    mark_payment_and_finish("failed", nil)
+                    return
+                end
+
+                Console.Log(
+                    "[gr_contracts][service] Contract payment completed contract_id=%s assignee_character_id=%s amount=%s.",
+                    tostring(normalized_contract_id),
+                    tostring(normalized_character_id),
+                    tostring(reward_money)
+                )
+
+                mark_payment_and_finish("paid", {
+                    money_bank = money_result.money_bank,
+                    amount = reward_money,
+                })
+            end)
         end)
     end)
 end

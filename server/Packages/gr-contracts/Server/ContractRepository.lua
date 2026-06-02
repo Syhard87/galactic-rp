@@ -32,10 +32,12 @@ local INSERT_CONTRACT_QUERY = [[
         description,
         reward_money,
         status,
+        payment_status,
         created_at,
         accepted_at,
         completed_at,
         cancelled_at,
+        paid_at,
         deadline_at
 ]]
 
@@ -49,10 +51,12 @@ local SELECT_OPEN_CONTRACTS_QUERY = [[
         description,
         reward_money,
         status,
+        payment_status,
         created_at,
         accepted_at,
         completed_at,
         cancelled_at,
+        paid_at,
         deadline_at
     FROM contracts
     WHERE status = 'open'
@@ -69,10 +73,12 @@ local SELECT_CONTRACTS_FOR_CHARACTER_QUERY = [[
         description,
         reward_money,
         status,
+        payment_status,
         created_at,
         accepted_at,
         completed_at,
         cancelled_at,
+        paid_at,
         deadline_at
     FROM contracts
     WHERE creator_character_id = :0 OR assignee_character_id = :0
@@ -89,10 +95,12 @@ local SELECT_CONTRACT_BY_ID_QUERY = [[
         description,
         reward_money,
         status,
+        payment_status,
         created_at,
         accepted_at,
         completed_at,
         cancelled_at,
+        paid_at,
         deadline_at
     FROM contracts
     WHERE id = :0
@@ -115,10 +123,12 @@ local ACCEPT_CONTRACT_QUERY = [[
         description,
         reward_money,
         status,
+        payment_status,
         created_at,
         accepted_at,
         completed_at,
         cancelled_at,
+        paid_at,
         deadline_at
 ]]
 
@@ -137,10 +147,12 @@ local COMPLETE_CONTRACT_QUERY = [[
         description,
         reward_money,
         status,
+        payment_status,
         created_at,
         accepted_at,
         completed_at,
         cancelled_at,
+        paid_at,
         deadline_at
 ]]
 
@@ -159,11 +171,52 @@ local CANCEL_CONTRACT_QUERY = [[
         description,
         reward_money,
         status,
+        payment_status,
         created_at,
         accepted_at,
         completed_at,
         cancelled_at,
+        paid_at,
         deadline_at
+]]
+
+local UPDATE_CONTRACT_PAYMENT_STATUS_QUERY = [[
+    UPDATE contracts
+    SET
+        payment_status = :1,
+        paid_at = CASE
+            WHEN :1 = 'paid' THEN NOW()
+            ELSE paid_at
+        END
+    WHERE id = :0
+    RETURNING
+        id,
+        creator_character_id,
+        assignee_character_id,
+        type,
+        title,
+        description,
+        reward_money,
+        status,
+        payment_status,
+        created_at,
+        accepted_at,
+        completed_at,
+        cancelled_at,
+        paid_at,
+        deadline_at
+]]
+
+local CREDIT_CHARACTER_BANK_MONEY_QUERY = [[
+    UPDATE characters
+    SET
+        money_bank = money_bank + :1,
+        updated_at = NOW()
+    WHERE id = :0
+    RETURNING
+        id,
+        money_cash,
+        money_bank
 ]]
 
 local function trim_string(value)
@@ -256,6 +309,26 @@ local function normalize_contract_status(status)
     return normalized_status
 end
 
+local function normalize_payment_status(payment_status)
+    local normalized_payment_status = trim_string(payment_status)
+
+    if normalized_payment_status == nil then
+        return "pending"
+    end
+
+    normalized_payment_status = string.lower(normalized_payment_status)
+
+    if normalized_payment_status ~= "pending"
+        and normalized_payment_status ~= "paid"
+        and normalized_payment_status ~= "unavailable"
+        and normalized_payment_status ~= "failed"
+    then
+        return "pending"
+    end
+
+    return normalized_payment_status
+end
+
 local function normalize_contract_row(row)
     local contract_id = nil
     local creator_character_id = nil
@@ -282,10 +355,12 @@ local function normalize_contract_row(row)
         description = trim_string(row.description) or "",
         reward_money = normalize_non_negative_integer(row.reward_money, 0),
         status = normalize_contract_status(row.status),
+        payment_status = normalize_payment_status(row.payment_status),
         created_at = row.created_at,
         accepted_at = row.accepted_at,
         completed_at = row.completed_at,
         cancelled_at = row.cancelled_at,
+        paid_at = row.paid_at,
         deadline_at = row.deadline_at,
     }
 end
@@ -606,6 +681,84 @@ function ContractRepository:CancelContract(contract_id, character_id, callback)
             callback(true, contract_rows[1], nil)
         end, normalized_contract_id, normalized_character_id)
     end, "contracts-cancel")
+end
+
+function ContractRepository:MarkContractPayment(contract_id, payment_status, callback)
+    local normalized_contract_id = normalize_positive_integer(contract_id)
+    local normalized_payment_status = normalize_payment_status(payment_status)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(UPDATE_CONTRACT_PAYMENT_STATUS_QUERY, function(rows, update_error)
+            local contract_rows = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            contract_rows = normalize_rows(rows)
+            callback(true, contract_rows[1], nil)
+        end, normalized_contract_id, normalized_payment_status)
+    end, "contracts-mark-payment")
+end
+
+function ContractRepository:CreditCharacterBankMoney(character_id, amount, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_amount = normalize_non_negative_integer(amount, nil)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if normalized_amount == nil then
+        callback(false, nil, "reward-money-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(CREDIT_CHARACTER_BANK_MONEY_QUERY, function(rows, update_error)
+            local credited_row = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            if type(rows) == "table" and rows[1] ~= nil then
+                credited_row = {
+                    id = normalize_positive_integer(rows[1].id),
+                    money_cash = normalize_non_negative_integer(rows[1].money_cash, 0),
+                    money_bank = normalize_non_negative_integer(rows[1].money_bank, 0),
+                }
+            end
+
+            callback(true, credited_row, nil)
+        end, normalized_character_id, normalized_amount)
+    end, "contracts-credit-bank")
 end
 
 GRContracts.Server.ContractRepositoryClass = ContractRepository
