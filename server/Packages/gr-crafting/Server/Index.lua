@@ -138,7 +138,7 @@ local function parse_platform_id_allowlist(value)
     return allowlist, has_entries
 end
 
-local function can_use_craft_command(player_or_platform_id)
+local function can_use_crafting_debug_commands(player_or_platform_id)
     local platform_id = resolve_platform_id(player_or_platform_id)
     local custom_settings = nil
     local debug_commands_enabled = false
@@ -212,6 +212,13 @@ local GRCraftingBridge = {
 
         return GRCrafting.Server.Service:ListActiveRecipes(callback)
     end,
+    ListActiveStations = function(callback)
+        if GRCrafting.Server.Service == nil then
+            return callback_service_missing(callback)
+        end
+
+        return GRCrafting.Server.Service:ListActiveStations(callback)
+    end,
     CraftItem = function(character_id, recipe_key, callback)
         if GRCrafting.Server.Service == nil then
             return callback_service_missing(callback)
@@ -242,7 +249,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
         command_name, payload = get_chat_command(message)
 
-        if command_name ~= "craft" then
+        if command_name ~= "craft" and command_name ~= "craftstations" then
             return
         end
 
@@ -250,15 +257,48 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         local platform_id = nil
         local guard_error = nil
 
-        is_allowed, platform_id, guard_error = can_use_craft_command(player)
+        is_allowed, platform_id, guard_error = can_use_crafting_debug_commands(player)
 
         if not is_allowed then
             Console.Log(
-                "[gr_crafting][server] Craft command denied platform_id=%s reason=%s.",
+                "[gr_crafting][server] Craft debug command denied platform_id=%s reason=%s.",
                 tostring(platform_id),
                 tostring(guard_error)
             )
             Chat.SendMessage(player, "Commande reservee au staff/dev.")
+            return false
+        end
+
+        if command_name == "craftstations" then
+            GRCrafting.Server.Service:ListActiveStations(function(is_success, station_rows, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Stations de craft indisponibles.")
+                    return
+                end
+
+                if type(station_rows) ~= "table" or #station_rows == 0 then
+                    Chat.SendMessage(player, "Aucune station de craft active.")
+                    return
+                end
+
+                Chat.SendMessage(player, "Stations de craft :")
+
+                for _, station_row in ipairs(station_rows) do
+                    Chat.SendMessage(
+                        player,
+                        string.format(
+                            "- %s | type=%s | pos=%s,%s,%s | radius=%s",
+                            tostring(station_row.key),
+                            tostring(station_row.station_type),
+                            tostring(station_row.position_x),
+                            tostring(station_row.position_y),
+                            tostring(station_row.position_z),
+                            tostring(station_row.radius)
+                        )
+                    )
+                end
+            end)
+
             return false
         end
 
@@ -286,6 +326,21 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 if error == "required-skill-level-insufficient" then
                     Chat.SendMessage(player, "Craft impossible : niveau de competence insuffisant")
+                    return
+                end
+
+                if error == "required-station-not-found" then
+                    Chat.SendMessage(player, "Craft impossible : station requise introuvable")
+                    return
+                end
+
+                if error == "required-station-inactive" then
+                    Chat.SendMessage(player, "Craft impossible : station inactive")
+                    return
+                end
+
+                if error == "required-station-too-far" then
+                    Chat.SendMessage(player, "Craft impossible : vous etes trop loin de la station")
                     return
                 end
 

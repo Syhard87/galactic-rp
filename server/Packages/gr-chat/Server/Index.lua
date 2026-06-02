@@ -13,6 +13,7 @@ local EXTERNAL_CHAT_COMMANDS = {
     classes = true,
     dropitem = true,
     craft = true,
+    craftstations = true,
     explorereport = true,
     f = true,
     giveitem = true,

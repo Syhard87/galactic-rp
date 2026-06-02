@@ -14,6 +14,7 @@ local SELECT_ACTIVE_RECIPES_QUERY = [[
         required_skill_level,
         craft_xp_skill_key,
         craft_xp_amount,
+        station_key,
         duration_seconds,
         is_active,
         created_at,
@@ -33,6 +34,7 @@ local SELECT_RECIPE_BY_KEY_QUERY = [[
         required_skill_level,
         craft_xp_skill_key,
         craft_xp_amount,
+        station_key,
         duration_seconds,
         is_active,
         created_at,
@@ -52,6 +54,40 @@ local SELECT_INGREDIENTS_BY_RECIPE_KEY_QUERY = [[
     FROM crafting_recipe_ingredients
     WHERE recipe_key = :0
     ORDER BY item_key ASC, id ASC
+]]
+
+local SELECT_STATION_BY_KEY_QUERY = [[
+    SELECT
+        key,
+        name,
+        station_type,
+        position_x,
+        position_y,
+        position_z,
+        radius,
+        is_active,
+        created_at,
+        updated_at
+    FROM crafting_stations
+    WHERE key = :0
+    LIMIT 1
+]]
+
+local SELECT_ACTIVE_STATIONS_QUERY = [[
+    SELECT
+        key,
+        name,
+        station_type,
+        position_x,
+        position_y,
+        position_z,
+        radius,
+        is_active,
+        created_at,
+        updated_at
+    FROM crafting_stations
+    WHERE is_active = TRUE
+    ORDER BY key ASC
 ]]
 
 local function trim_string(value)
@@ -138,6 +174,42 @@ local function normalize_item_key(item_key)
     return string.lower(normalized_item_key)
 end
 
+local function normalize_station_key(station_key)
+    local normalized_station_key = trim_string(station_key)
+
+    if normalized_station_key == nil then
+        return nil
+    end
+
+    return string.lower(normalized_station_key)
+end
+
+local function normalize_coordinate(value)
+    if type(value) == "number" then
+        return value
+    end
+
+    if type(value) == "string" then
+        local parsed_value = tonumber(value)
+
+        if parsed_value ~= nil then
+            return parsed_value
+        end
+    end
+
+    return nil
+end
+
+local function normalize_positive_coordinate(value)
+    local normalized_value = normalize_coordinate(value)
+
+    if normalized_value == nil or normalized_value <= 0 then
+        return nil
+    end
+
+    return normalized_value
+end
+
 local function normalize_recipe_row(row)
     local recipe_key = nil
     local result_item_key = nil
@@ -162,6 +234,7 @@ local function normalize_recipe_row(row)
         required_skill_level = normalize_non_negative_integer(row.required_skill_level, 0),
         craft_xp_skill_key = normalize_skill_key(row.craft_xp_skill_key),
         craft_xp_amount = normalize_non_negative_integer(row.craft_xp_amount, 0),
+        station_key = normalize_station_key(row.station_key),
         duration_seconds = normalize_non_negative_integer(row.duration_seconds, 0),
         is_active = row.is_active == true,
         created_at = row.created_at,
@@ -194,6 +267,43 @@ local function normalize_ingredient_row(row)
         item_key = item_key,
         quantity = quantity,
         created_at = row.created_at,
+    }
+end
+
+local function normalize_station_row(row)
+    local station_key = nil
+    local station_type = nil
+    local position_x = nil
+    local position_y = nil
+    local position_z = nil
+    local radius = nil
+
+    if type(row) ~= "table" then
+        return nil
+    end
+
+    station_key = normalize_station_key(row.key)
+    station_type = normalize_station_key(row.station_type)
+    position_x = normalize_coordinate(row.position_x)
+    position_y = normalize_coordinate(row.position_y)
+    position_z = normalize_coordinate(row.position_z)
+    radius = normalize_positive_coordinate(row.radius)
+
+    if station_key == nil or station_type == nil or position_x == nil or position_y == nil or position_z == nil or radius == nil then
+        return nil
+    end
+
+    return {
+        key = station_key,
+        name = trim_string(row.name) or station_key,
+        station_type = station_type,
+        position_x = position_x,
+        position_y = position_y,
+        position_z = position_z,
+        radius = radius,
+        is_active = row.is_active == true,
+        created_at = row.created_at,
+        updated_at = row.updated_at,
     }
 end
 
@@ -361,6 +471,78 @@ function CraftingRepository:ListIngredientsByRecipeKey(recipe_key, callback)
             callback(true, ingredient_rows, nil)
         end, normalized_recipe_key)
     end, "crafting-list-ingredients")
+end
+
+function CraftingRepository:GetStationByKey(station_key, callback)
+    local normalized_station_key = normalize_station_key(station_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_station_key == nil then
+        callback(false, nil, "station-key-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_STATION_BY_KEY_QUERY, function(rows, select_error)
+            local station_rows = nil
+            local station_row = nil
+
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            station_rows = normalize_rows(rows, normalize_station_row)
+            station_row = station_rows[1]
+
+            Console.Log(
+                "[gr_crafting][repository] Station loaded key=%s active=%s.",
+                tostring(normalized_station_key),
+                tostring(station_row ~= nil and station_row.is_active == true)
+            )
+
+            callback(true, station_row, nil)
+        end, normalized_station_key)
+    end, "crafting-get-station")
+end
+
+function CraftingRepository:ListActiveStations(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_ACTIVE_STATIONS_QUERY, function(rows, select_error)
+            local station_rows = nil
+
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            station_rows = normalize_rows(rows, normalize_station_row)
+
+            Console.Log(
+                "[gr_crafting][repository] Active stations loaded count=%s.",
+                tostring(#station_rows)
+            )
+
+            callback(true, station_rows, nil)
+        end)
+    end, "crafting-list-active-stations")
 end
 
 GRCrafting.Server.CraftingRepositoryClass = CraftingRepository

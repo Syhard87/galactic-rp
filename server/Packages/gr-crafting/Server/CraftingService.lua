@@ -78,6 +78,105 @@ local function normalize_skill_key(skill_key)
     return string.lower(normalized_skill_key)
 end
 
+local function normalize_station_key(station_key)
+    local normalized_station_key = trim_string(station_key)
+
+    if normalized_station_key == nil then
+        return nil
+    end
+
+    return string.lower(normalized_station_key)
+end
+
+local function get_platform_id(player)
+    if type(player) ~= "table" and type(player) ~= "userdata" then
+        return nil
+    end
+
+    if type(player.GetAccountID) ~= "function" then
+        return nil
+    end
+
+    return player:GetAccountID()
+end
+
+local function get_controlled_character(player)
+    if type(player) ~= "table" and type(player) ~= "userdata" then
+        return nil
+    end
+
+    if type(player.GetControlledCharacter) ~= "function" then
+        return nil
+    end
+
+    return player:GetControlledCharacter()
+end
+
+local function get_entity_location(entity)
+    if entity == nil or type(entity.GetLocation) ~= "function" then
+        return nil
+    end
+
+    local location = entity:GetLocation()
+
+    if location == nil then
+        return nil
+    end
+
+    if type(location.X) ~= "number" or type(location.Y) ~= "number" or type(location.Z) ~= "number" then
+        return nil
+    end
+
+    return location
+end
+
+local function get_player_location(player)
+    return get_entity_location(get_controlled_character(player))
+end
+
+local function get_distance_squared(first_location, second_location)
+    if first_location == nil or second_location == nil then
+        return nil
+    end
+
+    local delta_x = first_location.X - second_location.X
+    local delta_y = first_location.Y - second_location.Y
+    local delta_z = first_location.Z - second_location.Z
+
+    return (delta_x * delta_x) + (delta_y * delta_y) + (delta_z * delta_z)
+end
+
+local function find_player_by_active_character_id(character_id)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if normalized_character_id == nil then
+        return nil
+    end
+
+    if type(Player) ~= "table" or type(Player.GetAll) ~= "function" then
+        return nil
+    end
+
+    if type(GRCharactersBridge) ~= "table" or type(GRCharactersBridge.GetActiveCharacter) ~= "function" then
+        return nil
+    end
+
+    for _, candidate_player in pairs(Player.GetAll()) do
+        local platform_id = get_platform_id(candidate_player)
+        local active_character = nil
+
+        if platform_id ~= nil then
+            active_character = GRCharactersBridge.GetActiveCharacter(platform_id)
+        end
+
+        if type(active_character) == "table" and normalize_positive_integer(active_character.id) == normalized_character_id then
+            return candidate_player
+        end
+    end
+
+    return nil
+end
+
 local function resolve_active_character_id(player_or_platform_id)
     local active_character = nil
 
@@ -125,6 +224,18 @@ function CraftingService.Create(repository)
     return self
 end
 
+function CraftingService:ListActiveStations(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self.repository:ListActiveStations(callback)
+end
+
 function CraftingService:CraftItemForActiveCharacter(player_or_platform_id, recipe_key, callback)
     local active_character_id = nil
     local resolve_error = nil
@@ -144,7 +255,7 @@ function CraftingService:CraftItemForActiveCharacter(player_or_platform_id, reci
         return true
     end
 
-    return self:CraftItem(active_character_id, recipe_key, callback)
+    return self:CraftItem(active_character_id, recipe_key, callback, player_or_platform_id)
 end
 
 function CraftingService:ListActiveRecipes(callback)
@@ -159,7 +270,7 @@ function CraftingService:ListActiveRecipes(callback)
     return self.repository:ListActiveRecipes(callback)
 end
 
-function CraftingService:CraftItem(character_id, recipe_key, callback)
+function CraftingService:CraftItem(character_id, recipe_key, callback, player_or_platform_id)
     local normalized_character_id = normalize_positive_integer(character_id)
     local normalized_recipe_key = normalize_recipe_key(recipe_key)
 
@@ -190,6 +301,77 @@ function CraftingService:CraftItem(character_id, recipe_key, callback)
         if recipe_row == nil or recipe_row.is_active ~= true then
             callback(false, nil, "recipe-not-found")
             return
+        end
+
+        local function check_required_station_then_continue(on_success)
+            local required_station_key = normalize_station_key(recipe_row.station_key)
+
+            if required_station_key == nil then
+                on_success()
+                return
+            end
+
+            self.repository:GetStationByKey(required_station_key, function(is_station_success, station_row, station_error)
+                local player = nil
+                local player_location = nil
+                local station_location = nil
+                local distance_squared = nil
+                local station_radius_squared = nil
+
+                if not is_station_success then
+                    callback(false, nil, station_error)
+                    return
+                end
+
+                if station_row == nil then
+                    callback(false, nil, "required-station-not-found")
+                    return
+                end
+
+                if station_row.is_active ~= true then
+                    callback(false, nil, "required-station-inactive")
+                    return
+                end
+
+                if player_or_platform_id ~= nil and get_platform_id(player_or_platform_id) ~= nil then
+                    player = player_or_platform_id
+                else
+                    player = find_player_by_active_character_id(normalized_character_id)
+                end
+
+                if player == nil then
+                    callback(false, nil, "station-player-location-unavailable")
+                    return
+                end
+
+                player_location = get_player_location(player)
+
+                if player_location == nil then
+                    callback(false, nil, "station-player-location-unavailable")
+                    return
+                end
+
+                station_location = {
+                    X = station_row.position_x,
+                    Y = station_row.position_y,
+                    Z = station_row.position_z,
+                }
+
+                distance_squared = get_distance_squared(player_location, station_location)
+                station_radius_squared = station_row.radius * station_row.radius
+
+                if distance_squared == nil then
+                    callback(false, nil, "station-distance-unavailable")
+                    return
+                end
+
+                if distance_squared > station_radius_squared then
+                    callback(false, nil, "required-station-too-far")
+                    return
+                end
+
+                on_success()
+            end)
         end
 
         self.repository:ListIngredientsByRecipeKey(normalized_recipe_key, function(is_ingredients_success, ingredient_rows, ingredients_error)
@@ -299,176 +481,178 @@ function CraftingService:CraftItem(character_id, recipe_key, callback)
                 return
             end
 
-            check_required_skill_then_continue(function()
-                local removed_ingredients = {}
-                local inventory_totals = nil
+            check_required_station_then_continue(function()
+                check_required_skill_then_continue(function()
+                    local removed_ingredients = {}
+                    local inventory_totals = nil
 
-                if type(GRInventoryBridge) ~= "table"
-                    or type(GRInventoryBridge.ListInventory) ~= "function"
-                    or type(GRInventoryBridge.RemoveItem) ~= "function"
-                    or type(GRInventoryBridge.AddItem) ~= "function"
-                then
-                    callback(false, nil, "inventory-bridge-unavailable")
-                    return
-                end
-
-                local function restore_removed_ingredients(reason, done_callback)
-                    local restore_index = 1
-
-                    if removed_ingredients[1] == nil then
-                        done_callback()
+                    if type(GRInventoryBridge) ~= "table"
+                        or type(GRInventoryBridge.ListInventory) ~= "function"
+                        or type(GRInventoryBridge.RemoveItem) ~= "function"
+                        or type(GRInventoryBridge.AddItem) ~= "function"
+                    then
+                        callback(false, nil, "inventory-bridge-unavailable")
                         return
                     end
 
-                    Console.Log(
-                        "[gr_crafting][service] Craft rollback started character_id=%s recipe_key=%s reason=%s count=%s.",
-                        tostring(normalized_character_id),
-                        tostring(recipe_row.key),
-                        tostring(reason),
-                        tostring(#removed_ingredients)
-                    )
+                    local function restore_removed_ingredients(reason, done_callback)
+                        local restore_index = 1
 
-                    local function restore_next()
-                        local removed_ingredient = removed_ingredients[restore_index]
-
-                        if removed_ingredient == nil then
-                            Console.Log(
-                                "[gr_crafting][service] Craft rollback completed character_id=%s recipe_key=%s.",
-                                tostring(normalized_character_id),
-                                tostring(recipe_row.key)
-                            )
+                        if removed_ingredients[1] == nil then
                             done_callback()
                             return
                         end
 
+                        Console.Log(
+                            "[gr_crafting][service] Craft rollback started character_id=%s recipe_key=%s reason=%s count=%s.",
+                            tostring(normalized_character_id),
+                            tostring(recipe_row.key),
+                            tostring(reason),
+                            tostring(#removed_ingredients)
+                        )
+
+                        local function restore_next()
+                            local removed_ingredient = removed_ingredients[restore_index]
+
+                            if removed_ingredient == nil then
+                                Console.Log(
+                                    "[gr_crafting][service] Craft rollback completed character_id=%s recipe_key=%s.",
+                                    tostring(normalized_character_id),
+                                    tostring(recipe_row.key)
+                                )
+                                done_callback()
+                                return
+                            end
+
+                            GRInventoryBridge.AddItem(
+                                normalized_character_id,
+                                removed_ingredient.item_key,
+                                removed_ingredient.quantity,
+                                nil,
+                                function(is_restore_success, _, restore_error)
+                                    if not is_restore_success then
+                                        Console.Log(
+                                            "[gr_crafting][service] Craft rollback failed character_id=%s recipe_key=%s item_key=%s quantity=%s reason=%s.",
+                                            tostring(normalized_character_id),
+                                            tostring(recipe_row.key),
+                                            tostring(removed_ingredient.item_key),
+                                            tostring(removed_ingredient.quantity),
+                                            tostring(restore_error)
+                                        )
+                                        done_callback()
+                                        return
+                                    end
+
+                                    restore_index = restore_index + 1
+                                    restore_next()
+                                end
+                            )
+                        end
+
+                        restore_next()
+                    end
+
+                    local function add_crafted_item()
+                        local result = {
+                            recipe_key = recipe_row.key,
+                            result_item_key = recipe_row.result_item_key,
+                            result_quantity = recipe_row.result_quantity,
+                            removed_ingredients = removed_ingredients,
+                            reward_skill_key = nil,
+                            reward_skill_xp = 0,
+                        }
+
                         GRInventoryBridge.AddItem(
                             normalized_character_id,
-                            removed_ingredient.item_key,
-                            removed_ingredient.quantity,
+                            recipe_row.result_item_key,
+                            recipe_row.result_quantity,
                             nil,
-                            function(is_restore_success, _, restore_error)
-                                if not is_restore_success then
+                            function(is_add_success, _, add_error)
+                                if not is_add_success then
                                     Console.Log(
-                                        "[gr_crafting][service] Craft rollback failed character_id=%s recipe_key=%s item_key=%s quantity=%s reason=%s.",
+                                        "[gr_crafting][service] Craft result add failed character_id=%s recipe_key=%s item_key=%s quantity=%s reason=%s.",
                                         tostring(normalized_character_id),
                                         tostring(recipe_row.key),
-                                        tostring(removed_ingredient.item_key),
-                                        tostring(removed_ingredient.quantity),
-                                        tostring(restore_error)
+                                        tostring(recipe_row.result_item_key),
+                                        tostring(recipe_row.result_quantity),
+                                        tostring(add_error)
                                     )
-                                    done_callback()
+
+                                    restore_removed_ingredients("result-add-failed", function()
+                                        callback(false, nil, "craft-result-add-failed")
+                                    end)
                                     return
                                 end
 
-                                restore_index = restore_index + 1
-                                restore_next()
+                                Console.Log(
+                                    "[gr_crafting][service] Craft result added character_id=%s recipe_key=%s item_key=%s quantity=%s.",
+                                    tostring(normalized_character_id),
+                                    tostring(recipe_row.key),
+                                    tostring(recipe_row.result_item_key),
+                                    tostring(recipe_row.result_quantity)
+                                )
+
+                                finish_with_skill_reward(result)
                             end
                         )
                     end
 
-                    restore_next()
-                end
+                    local function remove_next_ingredient(index)
+                        local ingredient_row = ingredient_rows[index]
 
-                local function add_crafted_item()
-                    local result = {
-                        recipe_key = recipe_row.key,
-                        result_item_key = recipe_row.result_item_key,
-                        result_quantity = recipe_row.result_quantity,
-                        removed_ingredients = removed_ingredients,
-                        reward_skill_key = nil,
-                        reward_skill_xp = 0,
-                    }
-
-                    GRInventoryBridge.AddItem(
-                        normalized_character_id,
-                        recipe_row.result_item_key,
-                        recipe_row.result_quantity,
-                        nil,
-                        function(is_add_success, _, add_error)
-                            if not is_add_success then
-                                Console.Log(
-                                    "[gr_crafting][service] Craft result add failed character_id=%s recipe_key=%s item_key=%s quantity=%s reason=%s.",
-                                    tostring(normalized_character_id),
-                                    tostring(recipe_row.key),
-                                    tostring(recipe_row.result_item_key),
-                                    tostring(recipe_row.result_quantity),
-                                    tostring(add_error)
-                                )
-
-                                restore_removed_ingredients("result-add-failed", function()
-                                    callback(false, nil, "craft-result-add-failed")
-                                end)
-                                return
-                            end
-
-                            Console.Log(
-                                "[gr_crafting][service] Craft result added character_id=%s recipe_key=%s item_key=%s quantity=%s.",
-                                tostring(normalized_character_id),
-                                tostring(recipe_row.key),
-                                tostring(recipe_row.result_item_key),
-                                tostring(recipe_row.result_quantity)
-                            )
-
-                            finish_with_skill_reward(result)
-                        end
-                    )
-                end
-
-                local function remove_next_ingredient(index)
-                    local ingredient_row = ingredient_rows[index]
-
-                    if ingredient_row == nil then
-                        add_crafted_item()
-                        return
-                    end
-
-                    GRInventoryBridge.RemoveItem(
-                        normalized_character_id,
-                        ingredient_row.item_key,
-                        ingredient_row.quantity,
-                        function(is_remove_success, _, remove_error)
-                            if not is_remove_success then
-                                Console.Log(
-                                    "[gr_crafting][service] Craft ingredient removal failed character_id=%s recipe_key=%s item_key=%s quantity=%s reason=%s.",
-                                    tostring(normalized_character_id),
-                                    tostring(recipe_row.key),
-                                    tostring(ingredient_row.item_key),
-                                    tostring(ingredient_row.quantity),
-                                    tostring(remove_error)
-                                )
-
-                                restore_removed_ingredients("ingredient-remove-failed", function()
-                                    callback(false, nil, remove_error or "ingredient-remove-failed")
-                                end)
-                                return
-                            end
-
-                            removed_ingredients[#removed_ingredients + 1] = {
-                                item_key = ingredient_row.item_key,
-                                quantity = ingredient_row.quantity,
-                            }
-
-                            remove_next_ingredient(index + 1)
-                        end
-                    )
-                end
-
-                GRInventoryBridge.ListInventory(normalized_character_id, function(is_inventory_success, inventory_rows, inventory_error)
-                    if not is_inventory_success then
-                        callback(false, nil, inventory_error)
-                        return
-                    end
-
-                    inventory_totals = aggregate_inventory_by_item_key(inventory_rows)
-
-                    for _, ingredient_row in ipairs(ingredient_rows) do
-                        if (inventory_totals[ingredient_row.item_key] or 0) < ingredient_row.quantity then
-                            callback(false, nil, "ingredients-insufficient")
+                        if ingredient_row == nil then
+                            add_crafted_item()
                             return
                         end
+
+                        GRInventoryBridge.RemoveItem(
+                            normalized_character_id,
+                            ingredient_row.item_key,
+                            ingredient_row.quantity,
+                            function(is_remove_success, _, remove_error)
+                                if not is_remove_success then
+                                    Console.Log(
+                                        "[gr_crafting][service] Craft ingredient removal failed character_id=%s recipe_key=%s item_key=%s quantity=%s reason=%s.",
+                                        tostring(normalized_character_id),
+                                        tostring(recipe_row.key),
+                                        tostring(ingredient_row.item_key),
+                                        tostring(ingredient_row.quantity),
+                                        tostring(remove_error)
+                                    )
+
+                                    restore_removed_ingredients("ingredient-remove-failed", function()
+                                        callback(false, nil, remove_error or "ingredient-remove-failed")
+                                    end)
+                                    return
+                                end
+
+                                removed_ingredients[#removed_ingredients + 1] = {
+                                    item_key = ingredient_row.item_key,
+                                    quantity = ingredient_row.quantity,
+                                }
+
+                                remove_next_ingredient(index + 1)
+                            end
+                        )
                     end
 
-                    remove_next_ingredient(1)
+                    GRInventoryBridge.ListInventory(normalized_character_id, function(is_inventory_success, inventory_rows, inventory_error)
+                        if not is_inventory_success then
+                            callback(false, nil, inventory_error)
+                            return
+                        end
+
+                        inventory_totals = aggregate_inventory_by_item_key(inventory_rows)
+
+                        for _, ingredient_row in ipairs(ingredient_rows) do
+                            if (inventory_totals[ingredient_row.item_key] or 0) < ingredient_row.quantity then
+                                callback(false, nil, "ingredients-insufficient")
+                                return
+                            end
+                        end
+
+                        remove_next_ingredient(1)
+                    end)
                 end)
             end)
         end)
