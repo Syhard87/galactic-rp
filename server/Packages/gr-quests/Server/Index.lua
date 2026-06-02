@@ -454,6 +454,10 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
             GRQuests.Server.Service:StartQuestForActiveCharacter(player, payload, function(is_success, character_quest_row, error)
                 if not is_success then
+                    local required_reputation_key = trim_string(character_quest_row and character_quest_row.required_reputation_key)
+                    local required_reputation_min_value = tonumber(character_quest_row and character_quest_row.required_reputation_min_value) ~= nil and math.floor(tonumber(character_quest_row.required_reputation_min_value)) or 0
+                    local actual_reputation_value = tonumber(character_quest_row and character_quest_row.actual_reputation_value) ~= nil and math.floor(tonumber(character_quest_row.actual_reputation_value)) or 0
+
                     if error == "active-character-missing" then
                         Chat.SendMessage(player, "Aucun personnage actif.")
                         return
@@ -471,6 +475,24 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                     if error == "quest-already-completed" then
                         Chat.SendMessage(player, "Quete deja terminee.")
+                        return
+                    end
+
+                    if error == "quest-reputation-insufficient" and required_reputation_key ~= nil then
+                        Chat.SendMessage(
+                            player,
+                            string.format(
+                                "Quete indisponible : reputation %s insuffisante. Requis=%s actuel=%s.",
+                                required_reputation_key,
+                                tostring(required_reputation_min_value),
+                                tostring(actual_reputation_value)
+                            )
+                        )
+                        return
+                    end
+
+                    if error == "quest-reputation-check-unavailable" then
+                        Chat.SendMessage(player, "Quete indisponible : verification de reputation impossible.")
                         return
                     end
 
@@ -534,6 +556,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 local reward_item_key = trim_string(result and result.reward_item_key)
                 local reward_skill_xp = normalize_positive_integer(result and result.reward_skill_xp) or 0
                 local reward_skill_key = trim_string(result and result.reward_skill_key)
+                local reward_reputation_key = trim_string(result and result.reward_reputation_key)
+                local reward_reputation_amount = tonumber(result and result.reward_reputation_amount) ~= nil and math.floor(tonumber(result and result.reward_reputation_amount)) or 0
                 local quest_key = tostring(result and result.quest and result.quest.key or payload)
 
                 if not is_success then
@@ -578,6 +602,17 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     Chat.SendMessage(
                         player,
                         string.format("XP competence gagnee : %s x%s", reward_skill_key, tostring(reward_skill_xp))
+                    )
+                end
+
+                if reward_reputation_key ~= nil and reward_reputation_amount ~= 0 then
+                    Chat.SendMessage(
+                        player,
+                        string.format(
+                            "Reputation gagnee : %s %s",
+                            reward_reputation_key,
+                            reward_reputation_amount > 0 and ("+" .. tostring(reward_reputation_amount)) or tostring(reward_reputation_amount)
+                        )
                     )
                 end
             end)

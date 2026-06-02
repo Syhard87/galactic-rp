@@ -18,6 +18,8 @@ local SELECT_AVAILABLE_QUESTS_QUERY = [[
         reward_skill_xp,
         reward_reputation_key,
         reward_reputation_amount,
+        required_reputation_key,
+        required_reputation_min_value,
         is_repeatable,
         is_active,
         created_at,
@@ -39,6 +41,8 @@ local SELECT_QUEST_BY_KEY_QUERY = [[
         reward_skill_xp,
         reward_reputation_key,
         reward_reputation_amount,
+        required_reputation_key,
+        required_reputation_min_value,
         is_repeatable,
         is_active,
         created_at,
@@ -65,7 +69,9 @@ local SELECT_CHARACTER_QUESTS_QUERY = [[
         q.reward_skill_key,
         q.reward_skill_xp,
         q.reward_reputation_key,
-        q.reward_reputation_amount
+        q.reward_reputation_amount,
+        q.required_reputation_key,
+        q.required_reputation_min_value
     FROM character_quests cq
     INNER JOIN quests q
         ON q.key = cq.quest_key
@@ -90,7 +96,9 @@ local SELECT_STARTED_CHARACTER_QUEST_QUERY = [[
         q.reward_skill_key,
         q.reward_skill_xp,
         q.reward_reputation_key,
-        q.reward_reputation_amount
+        q.reward_reputation_amount,
+        q.required_reputation_key,
+        q.required_reputation_min_value
     FROM character_quests cq
     INNER JOIN quests q
         ON q.key = cq.quest_key
@@ -118,7 +126,9 @@ local SELECT_CHARACTER_QUEST_HISTORY_BY_KEY_QUERY = [[
         q.reward_skill_key,
         q.reward_skill_xp,
         q.reward_reputation_key,
-        q.reward_reputation_amount
+        q.reward_reputation_amount,
+        q.required_reputation_key,
+        q.required_reputation_min_value
     FROM character_quests cq
     INNER JOIN quests q
         ON q.key = cq.quest_key
@@ -437,7 +447,9 @@ local function normalize_quest_row(row)
         reward_skill_key = trim_string(row.reward_skill_key),
         reward_skill_xp = normalize_non_negative_integer(row.reward_skill_xp, 0),
         reward_reputation_key = trim_string(row.reward_reputation_key),
-        reward_reputation_amount = tonumber(row.reward_reputation_amount) ~= nil and math.floor(tonumber(row.reward_reputation_amount)) or 0,
+        reward_reputation_amount = normalize_integer(row.reward_reputation_amount, 0),
+        required_reputation_key = trim_string(row.required_reputation_key),
+        required_reputation_min_value = normalize_integer(row.required_reputation_min_value, 0),
         is_repeatable = row.is_repeatable == true,
         is_active = row.is_active ~= false,
         created_at = row.created_at,
@@ -480,8 +492,30 @@ local function normalize_character_quest_row(row)
         reward_skill_key = trim_string(row.reward_skill_key),
         reward_skill_xp = normalize_non_negative_integer(row.reward_skill_xp, 0),
         reward_reputation_key = trim_string(row.reward_reputation_key),
-        reward_reputation_amount = tonumber(row.reward_reputation_amount) ~= nil and math.floor(tonumber(row.reward_reputation_amount)) or 0,
+        reward_reputation_amount = normalize_integer(row.reward_reputation_amount, 0),
+        required_reputation_key = trim_string(row.required_reputation_key),
+        required_reputation_min_value = normalize_integer(row.required_reputation_min_value, 0),
     }
+end
+
+local function normalize_integer(value, fallback)
+    if type(value) == "number" then
+        if value % 1 ~= 0 then
+            return fallback
+        end
+
+        return math.floor(value)
+    end
+
+    if type(value) == "string" and value:match("^[+-]?%d+$") ~= nil then
+        local parsed_value = tonumber(value)
+
+        if parsed_value ~= nil then
+            return math.floor(parsed_value)
+        end
+    end
+
+    return fallback
 end
 
 local function normalize_quest_objective_row(row)
@@ -1154,6 +1188,8 @@ function QuestRepository:StartQuest(character_id, quest_key, callback)
                     started_row.reward_skill_xp = quest_row.reward_skill_xp
                     started_row.reward_reputation_key = quest_row.reward_reputation_key
                     started_row.reward_reputation_amount = quest_row.reward_reputation_amount
+                    started_row.required_reputation_key = quest_row.required_reputation_key
+                    started_row.required_reputation_min_value = quest_row.required_reputation_min_value
 
                     self:InitializeQuestObjectives(started_row.id, normalized_quest_key, function(is_init_success, objective_rows, init_error)
                         if not is_init_success then

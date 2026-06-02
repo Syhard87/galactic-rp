@@ -127,6 +127,11 @@ end
 function QuestService:StartQuestForActiveCharacter(player_or_platform_id, quest_key, callback)
     local active_character_id = nil
     local resolve_error = nil
+    local normalized_quest_key = trim_string(quest_key)
+
+    if normalized_quest_key ~= nil then
+        normalized_quest_key = string.lower(normalized_quest_key)
+    end
 
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -143,7 +148,100 @@ function QuestService:StartQuestForActiveCharacter(player_or_platform_id, quest_
         return true
     end
 
-    return self.repository:StartQuest(active_character_id, quest_key, callback)
+    return self.repository:GetQuestByKey(normalized_quest_key, function(is_quest_success, quest_row, quest_error)
+        local required_reputation_key = nil
+        local required_reputation_min_value = 0
+
+        if not is_quest_success then
+            callback(false, nil, quest_error)
+            return
+        end
+
+        if quest_row == nil or quest_row.is_active ~= true then
+            callback(false, nil, "quest-not-found")
+            return
+        end
+
+        required_reputation_key = trim_string(quest_row.required_reputation_key)
+        required_reputation_min_value = normalize_integer(quest_row.required_reputation_min_value, 0)
+
+        if required_reputation_key == nil then
+            Console.Log(
+                "[gr_quests][service] Quest has no reputation requirement quest_key=%s.",
+                tostring(quest_row.key)
+            )
+            return self.repository:StartQuest(active_character_id, normalized_quest_key, callback)
+        end
+
+        if type(GRReputationBridge) ~= "table" or type(GRReputationBridge.ListCharacterReputations) ~= "function" then
+            Console.Log(
+                "[gr_quests][service] Quest reputation requirement failed reason=reputation-bridge-unavailable quest_key=%s.",
+                tostring(quest_row.key)
+            )
+            callback(false, {
+                quest_key = quest_row.key,
+                required_reputation_key = required_reputation_key,
+                required_reputation_min_value = required_reputation_min_value,
+            }, "quest-reputation-check-unavailable")
+            return
+        end
+
+        GRReputationBridge.ListCharacterReputations(active_character_id, function(is_reputations_success, reputation_rows, reputations_error)
+            local actual_reputation_value = 0
+
+            if not is_reputations_success then
+                Console.Log(
+                    "[gr_quests][service] Quest reputation requirement failed character_id=%s quest_key=%s reputation_key=%s reason=%s.",
+                    tostring(active_character_id),
+                    tostring(quest_row.key),
+                    tostring(required_reputation_key),
+                    tostring(reputations_error)
+                )
+                callback(false, {
+                    quest_key = quest_row.key,
+                    required_reputation_key = required_reputation_key,
+                    required_reputation_min_value = required_reputation_min_value,
+                }, "quest-reputation-check-unavailable")
+                return
+            end
+
+            for _, reputation_row in ipairs(reputation_rows or {}) do
+                if reputation_row.reputation_key == required_reputation_key then
+                    actual_reputation_value = normalize_integer(reputation_row.value, 0)
+                    break
+                end
+            end
+
+            if actual_reputation_value < required_reputation_min_value then
+                Console.Log(
+                    "[gr_quests][service] Quest reputation requirement failed character_id=%s quest_key=%s reputation_key=%s required=%s actual=%s.",
+                    tostring(active_character_id),
+                    tostring(quest_row.key),
+                    tostring(required_reputation_key),
+                    tostring(required_reputation_min_value),
+                    tostring(actual_reputation_value)
+                )
+                callback(false, {
+                    quest_key = quest_row.key,
+                    required_reputation_key = required_reputation_key,
+                    required_reputation_min_value = required_reputation_min_value,
+                    actual_reputation_value = actual_reputation_value,
+                }, "quest-reputation-insufficient")
+                return
+            end
+
+            Console.Log(
+                "[gr_quests][service] Quest reputation requirement passed character_id=%s quest_key=%s reputation_key=%s required=%s actual=%s.",
+                tostring(active_character_id),
+                tostring(quest_row.key),
+                tostring(required_reputation_key),
+                tostring(required_reputation_min_value),
+                tostring(actual_reputation_value)
+            )
+
+            self.repository:StartQuest(active_character_id, normalized_quest_key, callback)
+        end)
+    end)
 end
 
 function QuestService:AbandonQuestForActiveCharacter(player_or_platform_id, quest_key, callback)
