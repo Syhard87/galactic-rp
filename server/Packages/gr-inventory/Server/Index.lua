@@ -211,29 +211,58 @@ local function can_use_giveitem_command(player_or_platform_id)
 end
 
 local function summarize_inventory_rows(rows)
-    local summary_by_item_key = {}
-    local ordered_item_keys = {}
+    local summary_by_entry_key = {}
+    local ordered_entry_keys = {}
     local lines = {}
+
+    local function extract_quality_from_metadata_json(metadata_json)
+        local quality = nil
+
+        if type(metadata_json) ~= "string" then
+            return nil
+        end
+
+        quality = metadata_json:match('"quality"%s*:%s*"([%a_]+)"')
+
+        if quality == nil or quality == "" then
+            return nil
+        end
+
+        return string.lower(quality)
+    end
 
     for _, inventory_row in ipairs(rows or {}) do
         local item_key = tostring(inventory_row.item_key)
         local item_name = trim_string(inventory_row.item_name) or item_key
+        local quality = extract_quality_from_metadata_json(inventory_row.metadata_json)
+        local entry_key = string.format("%s|%s", item_key, tostring(quality or ""))
 
-        if summary_by_item_key[item_key] == nil then
-            summary_by_item_key[item_key] = {
+        if summary_by_entry_key[entry_key] == nil then
+            summary_by_entry_key[entry_key] = {
                 item_name = item_name,
                 quantity = 0,
+                quality = quality,
             }
 
-            ordered_item_keys[#ordered_item_keys + 1] = item_key
+            ordered_entry_keys[#ordered_entry_keys + 1] = entry_key
         end
 
-        summary_by_item_key[item_key].quantity = summary_by_item_key[item_key].quantity + (inventory_row.quantity or 0)
+        summary_by_entry_key[entry_key].quantity = summary_by_entry_key[entry_key].quantity + (inventory_row.quantity or 0)
     end
 
-    for _, item_key in ipairs(ordered_item_keys) do
-        local summary = summary_by_item_key[item_key]
-        lines[#lines + 1] = string.format("- %s x%s", tostring(summary.item_name), tostring(summary.quantity))
+    for _, entry_key in ipairs(ordered_entry_keys) do
+        local summary = summary_by_entry_key[entry_key]
+
+        if summary.quality ~= nil then
+            lines[#lines + 1] = string.format(
+                "- %s x%s quality=%s",
+                tostring(summary.item_name),
+                tostring(summary.quantity),
+                tostring(summary.quality)
+            )
+        else
+            lines[#lines + 1] = string.format("- %s x%s", tostring(summary.item_name), tostring(summary.quantity))
+        end
     end
 
     return lines

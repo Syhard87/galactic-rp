@@ -4,6 +4,13 @@ GRCrafting.Server = GRCrafting.Server or {}
 local CraftingService = {}
 CraftingService.__index = CraftingService
 
+local ALLOWED_CRAFT_QUALITIES = {
+    common = true,
+    improved = true,
+    rare = true,
+    prototype = true,
+}
+
 local function trim_string(value)
     if type(value) ~= "string" then
         return nil
@@ -216,6 +223,98 @@ local function aggregate_inventory_by_item_key(inventory_rows)
     return quantities
 end
 
+local function escape_json_string(value)
+    local normalized_value = tostring(value or "")
+
+    normalized_value = normalized_value:gsub("\\", "\\\\")
+    normalized_value = normalized_value:gsub("\"", "\\\"")
+
+    return normalized_value
+end
+
+local function build_crafted_item_metadata_json(recipe_key, quality)
+    local crafted_at = nil
+    local metadata_json = nil
+
+    if type(os) == "table" and type(os.date) == "function" then
+        crafted_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
+    end
+
+    metadata_json = string.format(
+        "{\"source\":\"crafting\",\"recipe_key\":\"%s\",\"quality\":\"%s\"",
+        escape_json_string(recipe_key),
+        escape_json_string(quality)
+    )
+
+    if type(crafted_at) == "string" and crafted_at ~= "" then
+        metadata_json = metadata_json .. string.format(
+            ",\"crafted_at\":\"%s\"",
+            escape_json_string(crafted_at)
+        )
+    end
+
+    return metadata_json .. "}"
+end
+
+local function compute_craft_quality(recipe_row, resolved_skill_level)
+    local required_skill_key = normalize_skill_key(recipe_row and recipe_row.required_skill_key)
+    local required_skill_level = normalize_non_negative_integer(recipe_row and recipe_row.required_skill_level) or 0
+    local surplus_levels = 0
+    local roll = math.random(100)
+
+    if required_skill_key == nil then
+        if roll <= 25 then
+            return "improved", nil
+        end
+
+        return "common", nil
+    end
+
+    if resolved_skill_level == nil then
+        return "common", "skill-level-unavailable"
+    end
+
+    surplus_levels = math.max(0, resolved_skill_level - required_skill_level)
+
+    if surplus_levels <= 0 then
+        return "common", nil
+    end
+
+    if surplus_levels >= 5 then
+        if roll <= 5 then
+            return "prototype", nil
+        end
+
+        if roll <= 25 then
+            return "rare", nil
+        end
+
+        if roll <= 70 then
+            return "improved", nil
+        end
+
+        return "common", nil
+    end
+
+    if surplus_levels >= 3 then
+        if roll <= 12 then
+            return "rare", nil
+        end
+
+        if roll <= 52 then
+            return "improved", nil
+        end
+
+        return "common", nil
+    end
+
+    if roll <= 30 then
+        return "improved", nil
+    end
+
+    return "common", nil
+end
+
 function CraftingService.Create(repository)
     local self = setmetatable({}, CraftingService)
 
@@ -273,6 +372,8 @@ end
 function CraftingService:CraftItem(character_id, recipe_key, callback, player_or_platform_id)
     local normalized_character_id = normalize_positive_integer(character_id)
     local normalized_recipe_key = normalize_recipe_key(recipe_key)
+    local resolved_skill_level = nil
+    local quality_fallback_reason = nil
 
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -435,13 +536,19 @@ function CraftingService:CraftItem(character_id, recipe_key, callback, player_or
                 local required_skill_key = normalize_skill_key(recipe_row.required_skill_key)
                 local required_skill_level = normalize_non_negative_integer(recipe_row.required_skill_level) or 0
 
-                if required_skill_key == nil or required_skill_level < 1 then
+                if required_skill_key == nil then
                     on_success()
                     return
                 end
 
                 if type(GRSkillsBridge) ~= "table" or type(GRSkillsBridge.ListSkills) ~= "function" then
-                    callback(false, nil, "required-skill-service-unavailable")
+                    if required_skill_level > 0 then
+                        callback(false, nil, "required-skill-service-unavailable")
+                        return
+                    end
+
+                    quality_fallback_reason = "skills-bridge-unavailable"
+                    on_success()
                     return
                 end
 
@@ -449,7 +556,13 @@ function CraftingService:CraftItem(character_id, recipe_key, callback, player_or
                     local current_skill_level = 0
 
                     if not is_skills_success then
-                        callback(false, nil, skills_error)
+                        if required_skill_level > 0 then
+                            callback(false, nil, skills_error)
+                            return
+                        end
+
+                        quality_fallback_reason = skills_error or "skill-level-unavailable"
+                        on_success()
                         return
                     end
 
@@ -459,6 +572,8 @@ function CraftingService:CraftItem(character_id, recipe_key, callback, player_or
                             break
                         end
                     end
+
+                    resolved_skill_level = current_skill_level
 
                     if current_skill_level < required_skill_level then
                         callback(false, nil, "required-skill-level-insufficient")
@@ -553,20 +668,65 @@ function CraftingService:CraftItem(character_id, recipe_key, callback, player_or
                     end
 
                     local function add_crafted_item()
+                        local crafted_quality, computed_quality_fallback_reason = compute_craft_quality(
+                            recipe_row,
+                            resolved_skill_level
+                        )
+                        local crafted_metadata_json = nil
                         local result = {
                             recipe_key = recipe_row.key,
                             result_item_key = recipe_row.result_item_key,
                             result_quantity = recipe_row.result_quantity,
                             removed_ingredients = removed_ingredients,
+                            crafted_quality = nil,
+                            result_metadata_json = nil,
                             reward_skill_key = nil,
                             reward_skill_xp = 0,
                         }
+
+                        if computed_quality_fallback_reason ~= nil and quality_fallback_reason == nil then
+                            quality_fallback_reason = computed_quality_fallback_reason
+                        end
+
+                        if ALLOWED_CRAFT_QUALITIES[crafted_quality] ~= true then
+                            crafted_quality = "common"
+                            quality_fallback_reason = quality_fallback_reason or "quality-invalid"
+                        end
+
+                        if quality_fallback_reason ~= nil then
+                            Console.Log(
+                                "[gr_crafting][service] Crafted item quality fallback reason=%s recipe_key=%s.",
+                                tostring(quality_fallback_reason),
+                                tostring(recipe_row.key)
+                            )
+                        end
+
+                        Console.Log(
+                            "[gr_crafting][service] Crafted item quality computed character_id=%s recipe_key=%s quality=%s.",
+                            tostring(normalized_character_id),
+                            tostring(recipe_row.key),
+                            tostring(crafted_quality)
+                        )
+
+                        crafted_metadata_json = build_crafted_item_metadata_json(recipe_row.key, crafted_quality)
+
+                        if crafted_metadata_json == nil then
+                            quality_fallback_reason = quality_fallback_reason or "crafted-metadata-unavailable"
+                            Console.Log(
+                                "[gr_crafting][service] Crafted item quality fallback reason=%s recipe_key=%s.",
+                                tostring(quality_fallback_reason),
+                                tostring(recipe_row.key)
+                            )
+                        end
+
+                        result.crafted_quality = crafted_quality
+                        result.result_metadata_json = crafted_metadata_json
 
                         GRInventoryBridge.AddItem(
                             normalized_character_id,
                             recipe_row.result_item_key,
                             recipe_row.result_quantity,
-                            nil,
+                            crafted_metadata_json,
                             function(is_add_success, _, add_error)
                                 if not is_add_success then
                                     Console.Log(

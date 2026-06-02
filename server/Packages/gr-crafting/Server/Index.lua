@@ -351,9 +351,10 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             Chat.SendMessage(
                 player,
                 string.format(
-                    "Craft reussi : %s x%s",
+                    "Craft reussi : %s x%s qualite=%s",
                     tostring(result.result_item_key),
-                    tostring(result.result_quantity)
+                    tostring(result.result_quantity),
+                    tostring(result.crafted_quality or "common")
                 )
             )
 
