@@ -38,6 +38,26 @@ local function normalize_positive_integer(value)
     return nil
 end
 
+local function normalize_integer(value, fallback)
+    if type(value) == "number" then
+        if value % 1 ~= 0 then
+            return fallback
+        end
+
+        return math.floor(value)
+    end
+
+    if type(value) == "string" and value:match("^[+-]?%d+$") ~= nil then
+        local parsed_value = tonumber(value)
+
+        if parsed_value ~= nil then
+            return math.floor(parsed_value)
+        end
+    end
+
+    return fallback
+end
+
 local function resolve_active_character_id(player_or_platform_id)
     local active_character = nil
 
@@ -277,7 +297,64 @@ function QuestService:CompleteQuestForActiveCharacter(player_or_platform_id, que
                         reward_item_quantity = 0,
                         reward_skill_key = nil,
                         reward_skill_xp = 0,
+                        reward_reputation_key = nil,
+                        reward_reputation_amount = 0,
                     }
+
+                    local function grant_reputation_reward()
+                        local reward_reputation_amount = normalize_integer(quest_row.reward_reputation_amount, 0)
+
+                        if quest_row.reward_reputation_key == nil or reward_reputation_amount == 0 then
+                            Console.Log(
+                                "[gr_quests][service] Quest has no reputation reward quest_key=%s.",
+                                tostring(quest_row.key)
+                            )
+                            callback(true, result, nil)
+                            return
+                        end
+
+                        if type(GRReputationBridge) ~= "table" or type(GRReputationBridge.AddReputation) ~= "function" then
+                            Console.Log(
+                                "[gr_quests][service] Quest reputation reward skipped reason=reputation-bridge-unavailable quest_key=%s.",
+                                tostring(quest_row.key)
+                            )
+                            callback(true, result, nil)
+                            return
+                        end
+
+                        GRReputationBridge.AddReputation(
+                            active_character_id,
+                            quest_row.reward_reputation_key,
+                            reward_reputation_amount,
+                            string.format("quest:%s", tostring(quest_row.key)),
+                            function(is_reputation_success, _, reputation_error)
+                                if not is_reputation_success then
+                                    Console.Log(
+                                        "[gr_quests][service] Quest reputation reward failed character_id=%s quest_key=%s reputation_key=%s reason=%s.",
+                                        tostring(active_character_id),
+                                        tostring(quest_row.key),
+                                        tostring(quest_row.reward_reputation_key),
+                                        tostring(reputation_error)
+                                    )
+                                    callback(true, result, nil)
+                                    return
+                                end
+
+                                result.reward_reputation_key = quest_row.reward_reputation_key
+                                result.reward_reputation_amount = reward_reputation_amount
+
+                                Console.Log(
+                                    "[gr_quests][service] Quest reputation reward granted character_id=%s quest_key=%s reputation_key=%s amount=%s.",
+                                    tostring(active_character_id),
+                                    tostring(quest_row.key),
+                                    tostring(quest_row.reward_reputation_key),
+                                    tostring(reward_reputation_amount)
+                                )
+
+                                callback(true, result, nil)
+                            end
+                        )
+                    end
 
                     local function grant_skill_reward()
                         if quest_row.reward_skill_key == nil or quest_row.reward_skill_xp == nil or quest_row.reward_skill_xp < 1 then
@@ -285,7 +362,7 @@ function QuestService:CompleteQuestForActiveCharacter(player_or_platform_id, que
                                 "[gr_quests][service] Quest has no skill reward quest_key=%s.",
                                 tostring(quest_row.key)
                             )
-                            callback(true, result, nil)
+                            grant_reputation_reward()
                             return
                         end
 
@@ -294,7 +371,7 @@ function QuestService:CompleteQuestForActiveCharacter(player_or_platform_id, que
                                 "[gr_quests][service] Quest skill reward skipped reason=skills-bridge-unavailable quest_key=%s.",
                                 tostring(quest_row.key)
                             )
-                            callback(true, result, nil)
+                            grant_reputation_reward()
                             return
                         end
 
@@ -312,7 +389,7 @@ function QuestService:CompleteQuestForActiveCharacter(player_or_platform_id, que
                                         tostring(quest_row.reward_skill_key),
                                         tostring(skill_error)
                                     )
-                                    callback(true, result, nil)
+                                    grant_reputation_reward()
                                     return
                                 end
 
@@ -327,7 +404,7 @@ function QuestService:CompleteQuestForActiveCharacter(player_or_platform_id, que
                                     tostring(quest_row.reward_skill_xp)
                                 )
 
-                                callback(true, result, nil)
+                                grant_reputation_reward()
                             end
                         )
                     end

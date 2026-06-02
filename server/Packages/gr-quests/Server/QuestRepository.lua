@@ -16,6 +16,8 @@ local SELECT_AVAILABLE_QUESTS_QUERY = [[
         reward_item_quantity,
         reward_skill_key,
         reward_skill_xp,
+        reward_reputation_key,
+        reward_reputation_amount,
         is_repeatable,
         is_active,
         created_at,
@@ -35,6 +37,8 @@ local SELECT_QUEST_BY_KEY_QUERY = [[
         reward_item_quantity,
         reward_skill_key,
         reward_skill_xp,
+        reward_reputation_key,
+        reward_reputation_amount,
         is_repeatable,
         is_active,
         created_at,
@@ -59,7 +63,9 @@ local SELECT_CHARACTER_QUESTS_QUERY = [[
         q.reward_item_key,
         q.reward_item_quantity,
         q.reward_skill_key,
-        q.reward_skill_xp
+        q.reward_skill_xp,
+        q.reward_reputation_key,
+        q.reward_reputation_amount
     FROM character_quests cq
     INNER JOIN quests q
         ON q.key = cq.quest_key
@@ -82,7 +88,9 @@ local SELECT_STARTED_CHARACTER_QUEST_QUERY = [[
         q.reward_item_key,
         q.reward_item_quantity,
         q.reward_skill_key,
-        q.reward_skill_xp
+        q.reward_skill_xp,
+        q.reward_reputation_key,
+        q.reward_reputation_amount
     FROM character_quests cq
     INNER JOIN quests q
         ON q.key = cq.quest_key
@@ -108,7 +116,9 @@ local SELECT_CHARACTER_QUEST_HISTORY_BY_KEY_QUERY = [[
         q.reward_item_key,
         q.reward_item_quantity,
         q.reward_skill_key,
-        q.reward_skill_xp
+        q.reward_skill_xp,
+        q.reward_reputation_key,
+        q.reward_reputation_amount
     FROM character_quests cq
     INNER JOIN quests q
         ON q.key = cq.quest_key
@@ -426,6 +436,8 @@ local function normalize_quest_row(row)
         reward_item_quantity = normalize_non_negative_integer(row.reward_item_quantity, 0),
         reward_skill_key = trim_string(row.reward_skill_key),
         reward_skill_xp = normalize_non_negative_integer(row.reward_skill_xp, 0),
+        reward_reputation_key = trim_string(row.reward_reputation_key),
+        reward_reputation_amount = tonumber(row.reward_reputation_amount) ~= nil and math.floor(tonumber(row.reward_reputation_amount)) or 0,
         is_repeatable = row.is_repeatable == true,
         is_active = row.is_active ~= false,
         created_at = row.created_at,
@@ -467,6 +479,8 @@ local function normalize_character_quest_row(row)
         reward_item_quantity = normalize_non_negative_integer(row.reward_item_quantity, 0),
         reward_skill_key = trim_string(row.reward_skill_key),
         reward_skill_xp = normalize_non_negative_integer(row.reward_skill_xp, 0),
+        reward_reputation_key = trim_string(row.reward_reputation_key),
+        reward_reputation_amount = tonumber(row.reward_reputation_amount) ~= nil and math.floor(tonumber(row.reward_reputation_amount)) or 0,
     }
 end
 
@@ -1138,6 +1152,8 @@ function QuestRepository:StartQuest(character_id, quest_key, callback)
                     started_row.reward_item_quantity = quest_row.reward_item_quantity
                     started_row.reward_skill_key = quest_row.reward_skill_key
                     started_row.reward_skill_xp = quest_row.reward_skill_xp
+                    started_row.reward_reputation_key = quest_row.reward_reputation_key
+                    started_row.reward_reputation_amount = quest_row.reward_reputation_amount
 
                     self:InitializeQuestObjectives(started_row.id, normalized_quest_key, function(is_init_success, objective_rows, init_error)
                         if not is_init_success then
