@@ -473,6 +473,43 @@ function CraftingRepository:ListIngredientsByRecipeKey(recipe_key, callback)
     end, "crafting-list-ingredients")
 end
 
+function CraftingRepository:GetRecipeDetails(recipe_key, callback)
+    local normalized_recipe_key = normalize_recipe_key(recipe_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_recipe_key == nil then
+        callback(false, nil, "recipe-key-required")
+        return true
+    end
+
+    return self:GetRecipeByKey(normalized_recipe_key, function(is_recipe_success, recipe_row, recipe_error)
+        if not is_recipe_success then
+            callback(false, nil, recipe_error)
+            return
+        end
+
+        if recipe_row == nil then
+            callback(true, nil, nil)
+            return
+        end
+
+        self:ListIngredientsByRecipeKey(normalized_recipe_key, function(is_ingredients_success, ingredient_rows, ingredients_error)
+            if not is_ingredients_success then
+                callback(false, nil, ingredients_error)
+                return
+            end
+
+            callback(true, {
+                recipe = recipe_row,
+                ingredients = ingredient_rows or {},
+            }, nil)
+        end)
+    end)
+end
+
 function CraftingRepository:GetStationByKey(station_key, callback)
     local normalized_station_key = normalize_station_key(station_key)
 

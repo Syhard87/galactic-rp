@@ -315,6 +315,16 @@ local function compute_craft_quality(recipe_row, resolved_skill_level)
     return "common", nil
 end
 
+local function build_quality_diagnostic_text(recipe_row)
+    local required_skill_key = normalize_skill_key(recipe_row and recipe_row.required_skill_key)
+
+    if required_skill_key == nil then
+        return "common / improved"
+    end
+
+    return "common / improved / rare / prototype selon competence"
+end
+
 function CraftingService.Create(repository)
     local self = setmetatable({}, CraftingService)
 
@@ -367,6 +377,78 @@ function CraftingService:ListActiveRecipes(callback)
     end
 
     return self.repository:ListActiveRecipes(callback)
+end
+
+function CraftingService:ListCraftRecipes(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self.repository:ListActiveRecipes(function(is_success, recipe_rows, error)
+        if not is_success then
+            callback(false, nil, error)
+            return
+        end
+
+        callback(true, recipe_rows or {}, nil)
+    end)
+end
+
+function CraftingService:GetCraftRecipeInfo(recipe_key, callback)
+    local normalized_recipe_key = normalize_recipe_key(recipe_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_recipe_key == nil then
+        callback(false, nil, "recipe-key-required")
+        return true
+    end
+
+    return self.repository:GetRecipeDetails(normalized_recipe_key, function(is_success, details, error)
+        local recipe_row = nil
+
+        if not is_success then
+            callback(false, nil, error)
+            return
+        end
+
+        if details == nil or type(details) ~= "table" then
+            callback(true, nil, "recipe-not-found")
+            return
+        end
+
+        recipe_row = details.recipe
+
+        if recipe_row == nil then
+            callback(true, nil, "recipe-not-found")
+            return
+        end
+
+        if recipe_row.is_active ~= true then
+            callback(true, {
+                recipe = recipe_row,
+                ingredients = details.ingredients or {},
+                quality_hint = build_quality_diagnostic_text(recipe_row),
+            }, "recipe-inactive")
+            return
+        end
+
+        callback(true, {
+            recipe = recipe_row,
+            ingredients = details.ingredients or {},
+            quality_hint = build_quality_diagnostic_text(recipe_row),
+        }, nil)
+    end)
 end
 
 function CraftingService:CraftItem(character_id, recipe_key, callback, player_or_platform_id)

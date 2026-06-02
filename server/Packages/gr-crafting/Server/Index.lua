@@ -190,6 +190,20 @@ local function get_chat_command(message)
     return string.lower(command_name), trim_string(payload)
 end
 
+local function build_recipe_summary_line(recipe_row)
+    local station_key = trim_string(recipe_row and recipe_row.station_key) or "aucune"
+    local skill_key = trim_string(recipe_row and recipe_row.required_skill_key) or "aucune"
+
+    return string.format(
+        "- %s -> %s x%s station=%s skill=%s",
+        tostring(recipe_row and recipe_row.key),
+        tostring(recipe_row and recipe_row.result_item_key),
+        tostring(recipe_row and recipe_row.result_quantity),
+        tostring(station_key),
+        tostring(skill_key)
+    )
+end
+
 local database_service = resolve_database_service()
 
 GRCrafting.Server.Repository = CraftingRepository.Create(database_service)
@@ -218,6 +232,20 @@ local GRCraftingBridge = {
         end
 
         return GRCrafting.Server.Service:ListActiveStations(callback)
+    end,
+    ListCraftRecipes = function(callback)
+        if GRCrafting.Server.Service == nil then
+            return callback_service_missing(callback)
+        end
+
+        return GRCrafting.Server.Service:ListCraftRecipes(callback)
+    end,
+    GetCraftRecipeInfo = function(recipe_key, callback)
+        if GRCrafting.Server.Service == nil then
+            return callback_service_missing(callback)
+        end
+
+        return GRCrafting.Server.Service:GetCraftRecipeInfo(recipe_key, callback)
     end,
     CraftItem = function(character_id, recipe_key, callback)
         if GRCrafting.Server.Service == nil then
@@ -249,7 +277,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
         command_name, payload = get_chat_command(message)
 
-        if command_name ~= "craft" and command_name ~= "craftstations" then
+        if command_name ~= "craft" and command_name ~= "craftstations" and command_name ~= "craftrecipes" and command_name ~= "craftinfo" then
             return
         end
 
@@ -297,6 +325,128 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         )
                     )
                 end
+            end)
+
+            return false
+        end
+
+        if command_name == "craftrecipes" then
+            GRCrafting.Server.Service:ListCraftRecipes(function(is_success, recipe_rows, error)
+                if not is_success then
+                    Console.Log(
+                        "[gr_crafting][server] Craft recipes diagnostic failed error=%s.",
+                        tostring(error)
+                    )
+                    Chat.SendMessage(player, "Recettes de craft indisponibles.")
+                    return
+                end
+
+                if type(recipe_rows) ~= "table" or #recipe_rows == 0 then
+                    Chat.SendMessage(player, "Aucune recette de craft active.")
+                    return
+                end
+
+                Chat.SendMessage(player, "Recettes de craft actives :")
+
+                for _, recipe_row in ipairs(recipe_rows) do
+                    Chat.SendMessage(player, build_recipe_summary_line(recipe_row))
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "craftinfo" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /craftinfo <recipe_key>")
+                return false
+            end
+
+            GRCrafting.Server.Service:GetCraftRecipeInfo(payload, function(is_success, details, error)
+                local recipe_row = nil
+                local skill_message = "aucune"
+                local craft_xp_message = "aucune"
+
+                if not is_success then
+                    Console.Log(
+                        "[gr_crafting][server] Craft info diagnostic failed recipe_key=%s error=%s.",
+                        tostring(payload),
+                        tostring(error)
+                    )
+                    Chat.SendMessage(player, "Informations de craft indisponibles.")
+                    return
+                end
+
+                if error == "recipe-not-found" or details == nil or type(details) ~= "table" or type(details.recipe) ~= "table" then
+                    Chat.SendMessage(player, string.format("Recette inconnue : %s", tostring(payload)))
+                    return
+                end
+
+                recipe_row = details.recipe
+
+                if error == "recipe-inactive" or recipe_row.is_active ~= true then
+                    Chat.SendMessage(player, string.format("Recette inactive : %s", tostring(recipe_row.key or payload)))
+                    return
+                end
+
+                if trim_string(recipe_row.required_skill_key) ~= nil then
+                    skill_message = string.format(
+                        "%s niveau %s",
+                        tostring(recipe_row.required_skill_key),
+                        tostring(recipe_row.required_skill_level or 0)
+                    )
+                end
+
+                if trim_string(recipe_row.craft_xp_skill_key) ~= nil and tonumber(recipe_row.craft_xp_amount) ~= nil and tonumber(recipe_row.craft_xp_amount) > 0 then
+                    craft_xp_message = string.format(
+                        "%s +%s",
+                        tostring(recipe_row.craft_xp_skill_key),
+                        tostring(recipe_row.craft_xp_amount)
+                    )
+                end
+
+                Chat.SendMessage(player, string.format("Recette : %s", tostring(recipe_row.key)))
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Resultat : %s x%s",
+                        tostring(recipe_row.result_item_key),
+                        tostring(recipe_row.result_quantity)
+                    )
+                )
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Station : %s",
+                        tostring(trim_string(recipe_row.station_key) or "aucune")
+                    )
+                )
+                Chat.SendMessage(player, string.format("Competence requise : %s", skill_message))
+                Chat.SendMessage(player, string.format("XP craft : %s", craft_xp_message))
+                Chat.SendMessage(player, "Ingredients :")
+
+                if type(details.ingredients) ~= "table" or #details.ingredients == 0 then
+                    Chat.SendMessage(player, "- aucun")
+                else
+                    for _, ingredient_row in ipairs(details.ingredients) do
+                        Chat.SendMessage(
+                            player,
+                            string.format(
+                                "- %s x%s",
+                                tostring(ingredient_row.item_key),
+                                tostring(ingredient_row.quantity)
+                            )
+                        )
+                    end
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Qualite : %s",
+                        tostring(details.quality_hint or "common / improved")
+                    )
+                )
             end)
 
             return false
