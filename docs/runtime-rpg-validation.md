@@ -150,13 +150,19 @@ dev_seed.sql
 Exemples d'application manuelle :
 
 ```powershell
-Get-Content -Raw ".\database\seeds\inventory_mvp_seed.sql" | docker exec -i galactic-rp-postgres psql -U galactic -d galactic_rp -v ON_ERROR_STOP=1
-Get-Content -Raw ".\database\seeds\quests_mvp_seed.sql" | docker exec -i galactic-rp-postgres psql -U galactic -d galactic_rp -v ON_ERROR_STOP=1
-Get-Content -Raw ".\database\seeds\quest_objectives_mvp_seed.sql" | docker exec -i galactic-rp-postgres psql -U galactic -d galactic_rp -v ON_ERROR_STOP=1
-Get-Content -Raw ".\database\seeds\crafting_stations_mvp_seed.sql" | docker exec -i galactic-rp-postgres psql -U galactic -d galactic_rp -v ON_ERROR_STOP=1
-Get-Content -Raw ".\database\seeds\crafting_mvp_seed.sql" | docker exec -i galactic-rp-postgres psql -U galactic -d galactic_rp -v ON_ERROR_STOP=1
-Get-Content -Raw ".\database\seeds\reputation_mvp_seed.sql" | docker exec -i galactic-rp-postgres psql -U galactic -d galactic_rp -v ON_ERROR_STOP=1
+docker exec -i galactic-rp-postgres psql -U galactic -d galactic_rp -v ON_ERROR_STOP=1 -f /workspace/database/seeds/factions_mvp_seed.sql
+docker exec -i galactic-rp-postgres psql -U galactic -d galactic_rp -v ON_ERROR_STOP=1 -f /workspace/database/seeds/inventory_mvp_seed.sql
+docker exec -i galactic-rp-postgres psql -U galactic -d galactic_rp -v ON_ERROR_STOP=1 -f /workspace/database/seeds/reputation_mvp_seed.sql
+docker exec -i galactic-rp-postgres psql -U galactic -d galactic_rp -v ON_ERROR_STOP=1 -f /workspace/database/seeds/quests_mvp_seed.sql
+docker exec -i galactic-rp-postgres psql -U galactic -d galactic_rp -v ON_ERROR_STOP=1 -f /workspace/database/seeds/quest_objectives_mvp_seed.sql
+docker exec -i galactic-rp-postgres psql -U galactic -d galactic_rp -v ON_ERROR_STOP=1 -f /workspace/database/seeds/crafting_stations_mvp_seed.sql
+docker exec -i galactic-rp-postgres psql -U galactic -d galactic_rp -v ON_ERROR_STOP=1 -f /workspace/database/seeds/crafting_mvp_seed.sql
 ```
+
+Important :
+
+- sur cette stack Windows/PowerShell locale, l'application d'un seed UTF-8 via `Get-Content -Raw ... | docker exec ... psql` peut degrader certains accents en `?`
+- pour les seeds, preferer `psql -f /workspace/database/seeds/...` afin de preserver les octets UTF-8 depuis le volume monte dans le conteneur
 
 ## 6. Verification DB initiale
 
