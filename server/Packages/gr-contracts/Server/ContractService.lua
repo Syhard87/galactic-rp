@@ -142,6 +142,18 @@ local function callback_repository_missing(callback)
     return true
 end
 
+local function resolve_economy_bridge()
+    if type(GREconomyBridge) ~= "table" then
+        return nil
+    end
+
+    if type(GREconomyBridge.AddMoney) ~= "function" then
+        return nil
+    end
+
+    return GREconomyBridge
+end
+
 local function resolve_contract_role(contract_row, character_id)
     local normalized_character_id = normalize_positive_integer(character_id)
     local is_creator = false
@@ -453,48 +465,77 @@ function ContractService:CompleteContract(character_id, contract_id, callback)
             end
 
             if reward_money <= 0 then
-                mark_payment_and_finish("paid", {
+                Console.Log(
+                    "[gr_contracts][service] Contract payment unavailable reason=%s contract_id=%s.",
+                    "reward-money-non-positive",
+                    tostring(normalized_contract_id)
+                )
+                mark_payment_and_finish("unavailable", {
                     money_bank = nil,
                     amount = reward_money,
                 })
                 return
             end
 
-            if type(self.repository.CreditCharacterBankMoney) ~= "function" then
+            local economy_bridge = resolve_economy_bridge()
+
+            if economy_bridge == nil then
                 Console.Log(
-                    "[gr_contracts][service] Contract payment unavailable contract_id=%s reason=%s.",
-                    tostring(normalized_contract_id),
-                    "bank-credit-unavailable"
+                    "[gr_contracts][service] Contract payment unavailable reason=%s contract_id=%s.",
+                    "economy-bridge-unavailable",
+                    tostring(normalized_contract_id)
                 )
                 mark_payment_and_finish("unavailable", nil)
                 return
             end
 
-            self.repository:CreditCharacterBankMoney(normalized_character_id, reward_money, function(is_credit_success, money_result, credit_error)
-                if not is_credit_success or money_result == nil then
+            local payment_reason = string.format("contract:%s", tostring(normalized_contract_id))
+            local payment_metadata = {
+                contract_id = normalized_contract_id,
+                contract_type = completed_row.type,
+                source = "gr-contracts",
+            }
+
+            Console.Log(
+                "[gr_contracts][service] Contract payment requested through economy contract_id=%s assignee_character_id=%s amount=%s.",
+                tostring(normalized_contract_id),
+                tostring(normalized_character_id),
+                tostring(reward_money)
+            )
+
+            economy_bridge.AddMoney(
+                normalized_character_id,
+                "bank",
+                reward_money,
+                payment_reason,
+                payment_metadata,
+                function(is_credit_success, money_result, credit_error)
+                    if not is_credit_success or money_result == nil then
+                        Console.Log(
+                            "[gr_contracts][service] Contract payment failed through economy contract_id=%s assignee_character_id=%s amount=%s reason=%s.",
+                            tostring(normalized_contract_id),
+                            tostring(normalized_character_id),
+                            tostring(reward_money),
+                            tostring(credit_error or "economy-credit-failed")
+                        )
+                        mark_payment_and_finish("failed", nil)
+                        return
+                    end
+
                     Console.Log(
-                        "[gr_contracts][service] Contract payment failed contract_id=%s assignee_character_id=%s amount=%s reason=%s.",
+                        "[gr_contracts][service] Contract payment completed through economy contract_id=%s assignee_character_id=%s amount=%s.",
                         tostring(normalized_contract_id),
                         tostring(normalized_character_id),
-                        tostring(reward_money),
-                        tostring(credit_error or "bank-credit-failed")
+                        tostring(reward_money)
                     )
-                    mark_payment_and_finish("failed", nil)
-                    return
+
+                    mark_payment_and_finish("paid", {
+                        balance = money_result.balance,
+                        transaction = money_result.transaction,
+                        amount = reward_money,
+                    })
                 end
-
-                Console.Log(
-                    "[gr_contracts][service] Contract payment completed contract_id=%s assignee_character_id=%s amount=%s.",
-                    tostring(normalized_contract_id),
-                    tostring(normalized_character_id),
-                    tostring(reward_money)
-                )
-
-                mark_payment_and_finish("paid", {
-                    money_bank = money_result.money_bank,
-                    amount = reward_money,
-                })
-            end)
+            )
         end)
     end)
 end

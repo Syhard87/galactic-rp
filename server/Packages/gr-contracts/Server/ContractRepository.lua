@@ -207,18 +207,6 @@ local UPDATE_CONTRACT_PAYMENT_STATUS_QUERY = [[
         deadline_at
 ]]
 
-local CREDIT_CHARACTER_BANK_MONEY_QUERY = [[
-    UPDATE characters
-    SET
-        money_bank = money_bank + :1,
-        updated_at = NOW()
-    WHERE id = :0
-    RETURNING
-        id,
-        money_cash,
-        money_bank
-]]
-
 local function trim_string(value)
     if type(value) ~= "string" then
         return nil
@@ -714,51 +702,6 @@ function ContractRepository:MarkContractPayment(contract_id, payment_status, cal
             callback(true, contract_rows[1], nil)
         end, normalized_contract_id, normalized_payment_status)
     end, "contracts-mark-payment")
-end
-
-function ContractRepository:CreditCharacterBankMoney(character_id, amount, callback)
-    local normalized_character_id = normalize_positive_integer(character_id)
-    local normalized_amount = normalize_non_negative_integer(amount, nil)
-
-    if type(callback) ~= "function" then
-        return false, "callback-required"
-    end
-
-    if normalized_character_id == nil then
-        callback(false, nil, "character-id-required")
-        return true
-    end
-
-    if normalized_amount == nil then
-        callback(false, nil, "reward-money-required")
-        return true
-    end
-
-    return self:Connect(function(is_connected, database_or_error, error)
-        if not is_connected then
-            callback(false, nil, error)
-            return
-        end
-
-        database_or_error:SelectAsync(CREDIT_CHARACTER_BANK_MONEY_QUERY, function(rows, update_error)
-            local credited_row = nil
-
-            if update_error ~= nil then
-                callback(false, nil, update_error)
-                return
-            end
-
-            if type(rows) == "table" and rows[1] ~= nil then
-                credited_row = {
-                    id = normalize_positive_integer(rows[1].id),
-                    money_cash = normalize_non_negative_integer(rows[1].money_cash, 0),
-                    money_bank = normalize_non_negative_integer(rows[1].money_bank, 0),
-                }
-            end
-
-            callback(true, credited_row, nil)
-        end, normalized_character_id, normalized_amount)
-    end, "contracts-credit-bank")
 end
 
 GRContracts.Server.ContractRepositoryClass = ContractRepository
