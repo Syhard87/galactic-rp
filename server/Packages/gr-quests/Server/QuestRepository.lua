@@ -424,6 +424,8 @@ local function normalize_target_key(target_key)
     return string.lower(normalized_target_key)
 end
 
+local normalize_integer
+
 local function normalize_quest_row(row)
     local quest_key = nil
 
@@ -498,7 +500,7 @@ local function normalize_character_quest_row(row)
     }
 end
 
-local function normalize_integer(value, fallback)
+normalize_integer = function(value, fallback)
     if type(value) == "number" then
         if value % 1 ~= 0 then
             return fallback

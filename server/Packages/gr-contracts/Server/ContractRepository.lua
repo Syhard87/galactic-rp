@@ -81,7 +81,7 @@ local SELECT_CONTRACTS_FOR_CHARACTER_QUERY = [[
         paid_at,
         deadline_at
     FROM contracts
-    WHERE creator_character_id = :0 OR assignee_character_id = :0
+    WHERE creator_character_id = :0 OR assignee_character_id = :1
     ORDER BY id ASC
 ]]
 
@@ -533,7 +533,7 @@ function ContractRepository:ListContractsForCharacter(character_id, callback)
             end
 
             callback(true, normalize_rows(rows), nil)
-        end, normalized_character_id)
+        end, normalized_character_id, normalized_character_id)
     end, "contracts-list-character")
 end
 

@@ -133,6 +133,20 @@ local function normalize_positive_integer(value)
     return nil
 end
 
+local function get_required_skill_xp_for_level(level)
+    local skill_xp_rules = GRSkills
+        and GRSkills.Server
+        and GRSkills.Server.SkillXpRules
+
+    if type(skill_xp_rules) == "table" and type(skill_xp_rules.GetRequiredXpForLevel) == "function" then
+        return skill_xp_rules.GetRequiredXpForLevel(level)
+    end
+
+    local normalized_level = normalize_positive_integer(level) or 1
+
+    return normalized_level * 75
+end
+
 local function get_chat_command(message)
     local trimmed_message = trim_string(message)
 
@@ -224,7 +238,7 @@ local function send_profile_messages(player, active_character, progression, fact
     for index = 1, limited_skill_count do
         local skill_row = skill_rows[index]
         local skill_level = tonumber(skill_row and skill_row.level) or 1
-        local skill_required_xp = SkillXpRules.GetRequiredXpForLevel(skill_level)
+        local skill_required_xp = get_required_skill_xp_for_level(skill_level)
 
         Chat.SendMessage(
             player,
