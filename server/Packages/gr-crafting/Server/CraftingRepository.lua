@@ -184,6 +184,38 @@ local function normalize_station_key(station_key)
     return string.lower(normalized_station_key)
 end
 
+local function normalize_boolean(value, fallback)
+    if type(value) == "boolean" then
+        return value
+    end
+
+    if type(value) == "number" then
+        if value == 1 then
+            return true
+        end
+
+        if value == 0 then
+            return false
+        end
+    end
+
+    local string_value = trim_string(value)
+
+    if string_value ~= nil then
+        local lowered_value = string.lower(string_value)
+
+        if lowered_value == "true" or lowered_value == "t" or lowered_value == "1" then
+            return true
+        end
+
+        if lowered_value == "false" or lowered_value == "f" or lowered_value == "0" then
+            return false
+        end
+    end
+
+    return fallback
+end
+
 local function normalize_coordinate(value)
     if type(value) == "number" then
         return value
@@ -236,7 +268,7 @@ local function normalize_recipe_row(row)
         craft_xp_amount = normalize_non_negative_integer(row.craft_xp_amount, 0),
         station_key = normalize_station_key(row.station_key),
         duration_seconds = normalize_non_negative_integer(row.duration_seconds, 0),
-        is_active = row.is_active == true,
+        is_active = normalize_boolean(row.is_active, false),
         created_at = row.created_at,
         updated_at = row.updated_at,
     }
@@ -301,7 +333,7 @@ local function normalize_station_row(row)
         position_y = position_y,
         position_z = position_z,
         radius = radius,
-        is_active = row.is_active == true,
+        is_active = normalize_boolean(row.is_active, false),
         created_at = row.created_at,
         updated_at = row.updated_at,
     }
