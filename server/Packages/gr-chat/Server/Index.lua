@@ -31,6 +31,7 @@ local EXTERNAL_CHAT_COMMANDS = {
     giveskillxp = true,
     inv = true,
     money = true,
+    pay = true,
     completequest = true,
     profile = true,
     questprogress = true,

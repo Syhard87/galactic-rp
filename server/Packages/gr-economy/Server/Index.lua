@@ -334,6 +334,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "givemoney"
             and command_name ~= "takemoney"
             and command_name ~= "transactions"
+            and command_name ~= "pay"
         then
             return
         end
@@ -400,6 +401,95 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     Chat.SendMessage(player, build_transaction_line(transaction_row))
                 end
             end)
+
+            return false
+        end
+
+        if command_name == "pay" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /pay <target_character_id> <wallet> <amount> [reason]")
+                return false
+            end
+
+            local target_character_id_text, wallet, amount_text, reason = payload:match("^(%S+)%s+(%S+)%s+([+-]?%d+)%s*(.*)$")
+            local normalized_target_character_id = normalize_positive_integer(target_character_id_text)
+            local normalized_wallet = normalize_wallet(wallet)
+            local normalized_amount = normalize_positive_integer(amount_text)
+            local normalized_reason = trim_string(reason) or "player-payment"
+
+            if normalized_target_character_id == nil then
+                Chat.SendMessage(player, "Paiement impossible : cible invalide.")
+                return false
+            end
+
+            if normalized_target_character_id == active_character_id then
+                Chat.SendMessage(player, "Paiement impossible : vous ne pouvez pas vous payer vous-meme.")
+                return false
+            end
+
+            if normalized_wallet == nil then
+                Chat.SendMessage(player, "Paiement impossible : wallet invalide.")
+                return false
+            end
+
+            if normalized_amount == nil or normalized_amount > 100000 then
+                Chat.SendMessage(player, "Paiement impossible : montant invalide.")
+                return false
+            end
+
+            if type(GREconomyBridge) ~= "table" or type(GREconomyBridge.TransferMoney) ~= "function" then
+                Chat.SendMessage(player, "Paiement impossible : economie indisponible.")
+                return false
+            end
+
+            GREconomyBridge.TransferMoney(
+                active_character_id,
+                normalized_target_character_id,
+                normalized_wallet,
+                normalized_amount,
+                normalized_reason,
+                function(is_success, result, error)
+                    if not is_success then
+                        if error == "target-character-not-found" or error == "character-id-required" then
+                            Chat.SendMessage(player, "Paiement impossible : cible invalide.")
+                            return
+                        end
+
+                        if error == "transfer-same-character" then
+                            Chat.SendMessage(player, "Paiement impossible : vous ne pouvez pas vous payer vous-meme.")
+                            return
+                        end
+
+                        if error == "wallet-invalid" then
+                            Chat.SendMessage(player, "Paiement impossible : wallet invalide.")
+                            return
+                        end
+
+                        if error == "amount-invalid" then
+                            Chat.SendMessage(player, "Paiement impossible : montant invalide.")
+                            return
+                        end
+
+                        if error == "insufficient-funds" then
+                            Chat.SendMessage(player, "Paiement impossible : solde insuffisant.")
+                            return
+                        end
+
+                        Chat.SendMessage(player, "Paiement impossible : economie indisponible.")
+                        return
+                    end
+
+                    Chat.SendMessage(
+                        player,
+                        string.format(
+                            "Paiement effectue : %s %s vers personnage #%s.",
+                            tostring(normalized_amount),
+                            tostring(normalized_wallet),
+                            tostring(normalized_target_character_id)
+                        )
+                    )
+                end
+            )
 
             return false
         end
