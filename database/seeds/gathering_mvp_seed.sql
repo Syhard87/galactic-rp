@@ -2,7 +2,8 @@ INSERT INTO items (key, name, description, weight, is_stackable, is_illegal)
 VALUES
     ('scrap', 'Ferraille', 'Materiau de recuperation brut', 0.40, TRUE, FALSE),
     ('electronic_component', 'Composant electronique', 'Piece reutilisable issue de materiel technique', 0.25, TRUE, FALSE),
-    ('water_bottle', 'Bouteille d''eau', 'Reserve d''eau potable standard', 0.90, TRUE, FALSE)
+    ('water_bottle', 'Bouteille d''eau', 'Reserve d''eau potable standard', 0.90, TRUE, FALSE),
+    ('repair_tool', 'Outil de reparation', 'Kit simple de maintenance et de recuperation.', 1.10, FALSE, FALSE)
 ON CONFLICT (key) DO UPDATE
 SET
     name = EXCLUDED.name,
@@ -21,6 +22,9 @@ INSERT INTO gathering_nodes (
     min_quantity,
     max_quantity,
     required_skill_key,
+    required_item_key,
+    required_item_quantity,
+    required_skill_level,
     skill_xp,
     cooldown_seconds,
     position_x,
@@ -40,6 +44,9 @@ VALUES
         1,
         3,
         'exploration',
+        NULL,
+        1,
+        NULL,
         8,
         300,
         NULL,
@@ -58,6 +65,9 @@ VALUES
         1,
         2,
         'mechanics',
+        'repair_tool',
+        1,
+        2,
         10,
         600,
         NULL,
@@ -75,6 +85,9 @@ VALUES
         'water_bottle',
         1,
         2,
+        NULL,
+        NULL,
+        1,
         NULL,
         0,
         180,
@@ -94,6 +107,9 @@ VALUES
         1,
         1,
         'medicine',
+        'medkit_basic',
+        1,
+        2,
         12,
         900,
         NULL,
@@ -112,6 +128,9 @@ SET
     min_quantity = EXCLUDED.min_quantity,
     max_quantity = EXCLUDED.max_quantity,
     required_skill_key = EXCLUDED.required_skill_key,
+    required_item_key = EXCLUDED.required_item_key,
+    required_item_quantity = EXCLUDED.required_item_quantity,
+    required_skill_level = EXCLUDED.required_skill_level,
     skill_xp = EXCLUDED.skill_xp,
     cooldown_seconds = EXCLUDED.cooldown_seconds,
     position_x = EXCLUDED.position_x,
@@ -121,4 +140,3 @@ SET
     requires_proximity = EXCLUDED.requires_proximity,
     is_active = EXCLUDED.is_active,
     updated_at = NOW();
-

@@ -227,19 +227,45 @@ local function resolve_active_character_id(player_or_platform_id)
 end
 
 local function build_node_line(node_row)
-    return string.format(
-        "- %s item=%s qty=%s-%s cooldown=%ss active=%s",
+    local requirement_parts = {}
+
+    if trim_string(node_row.required_item_key) ~= nil then
+        requirement_parts[#requirement_parts + 1] = string.format(
+            "req_item=%sx%s",
+            tostring(node_row.required_item_key),
+            tostring(node_row.required_item_quantity or 1)
+        )
+    end
+
+    if trim_string(node_row.required_skill_key) ~= nil and node_row.required_skill_level ~= nil then
+        requirement_parts[#requirement_parts + 1] = string.format(
+            "req_level=%s",
+            tostring(node_row.required_skill_level)
+        )
+    end
+
+    local line = string.format(
+        "- %s item=%s qty=%s-%s skill=%s xp=%s cooldown=%ss active=%s",
         tostring(node_row.key),
         tostring(node_row.result_item_key),
         tostring(node_row.min_quantity),
         tostring(node_row.max_quantity),
+        tostring(node_row.required_skill_key or "none"),
+        tostring(node_row.skill_xp or 0),
         tostring(node_row.cooldown_seconds),
         tostring(node_row.is_active)
     )
+
+    if #requirement_parts > 0 then
+        line = string.format("%s %s", line, table.concat(requirement_parts, " "))
+    end
+
+    return line
 end
 
 local function build_node_info_lines(node_row)
     local lines = {}
+    local requirement_text = "aucun"
 
     lines[#lines + 1] = string.format("Node %s :", tostring(node_row.key))
     lines[#lines + 1] = string.format(
@@ -252,6 +278,33 @@ local function build_node_info_lines(node_row)
         tostring(node_row.skill_xp or 0),
         tostring(node_row.requires_proximity)
     )
+
+    if trim_string(node_row.required_item_key) ~= nil
+        and trim_string(node_row.required_skill_key) ~= nil
+        and node_row.required_skill_level ~= nil
+    then
+        requirement_text = string.format(
+            "%s x%s, %s level %s",
+            tostring(node_row.required_item_key),
+            tostring(node_row.required_item_quantity or 1),
+            tostring(node_row.required_skill_key),
+            tostring(node_row.required_skill_level)
+        )
+    elseif trim_string(node_row.required_item_key) ~= nil then
+        requirement_text = string.format(
+            "%s x%s",
+            tostring(node_row.required_item_key),
+            tostring(node_row.required_item_quantity or 1)
+        )
+    elseif trim_string(node_row.required_skill_key) ~= nil and node_row.required_skill_level ~= nil then
+        requirement_text = string.format(
+            "%s level %s",
+            tostring(node_row.required_skill_key),
+            tostring(node_row.required_skill_level)
+        )
+    end
+
+    lines[#lines + 1] = string.format("requires: %s", requirement_text)
 
     return lines
 end
@@ -412,6 +465,41 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                             tostring(type(result) == "table" and result.remaining_seconds or 0)
                         )
                     )
+                    return
+                end
+
+                if error == "required-item-missing" then
+                    Chat.SendMessage(
+                        player,
+                        string.format(
+                            "Recolte impossible : outil requis manquant %s x%s.",
+                            tostring(type(result) == "table" and result.required_item_key or "unknown"),
+                            tostring(type(result) == "table" and result.required_item_quantity or 1)
+                        )
+                    )
+                    return
+                end
+
+                if error == "skill-level-insufficient" then
+                    Chat.SendMessage(
+                        player,
+                        string.format(
+                            "Recolte impossible : niveau %s insuffisant %s/%s.",
+                            tostring(type(result) == "table" and result.required_skill_key or "unknown"),
+                            tostring(type(result) == "table" and result.current_skill_level or 0),
+                            tostring(type(result) == "table" and result.required_skill_level or 0)
+                        )
+                    )
+                    return
+                end
+
+                if error == "inventory-check-unavailable" then
+                    Chat.SendMessage(player, "Recolte impossible : verification outil impossible.")
+                    return
+                end
+
+                if error == "skill-check-unavailable" then
+                    Chat.SendMessage(player, "Recolte impossible : verification skill impossible.")
                     return
                 end
 

@@ -151,6 +151,36 @@ local function encode_metadata_json(metadata)
     )
 end
 
+local function build_inventory_quantity_map(inventory_rows)
+    local quantity_by_item_key = {}
+
+    for _, inventory_row in ipairs(inventory_rows or {}) do
+        local item_key = trim_string(inventory_row.item_key)
+        local quantity = normalize_positive_integer(inventory_row.quantity)
+
+        if item_key ~= nil and quantity ~= nil then
+            quantity_by_item_key[item_key] = (quantity_by_item_key[item_key] or 0) + quantity
+        end
+    end
+
+    return quantity_by_item_key
+end
+
+local function build_skill_level_map(skill_rows)
+    local level_by_skill_key = {}
+
+    for _, skill_row in ipairs(skill_rows or {}) do
+        local skill_key = normalize_skill_key(skill_row.skill_key)
+        local level = normalize_positive_integer(skill_row.level) or 0
+
+        if skill_key ~= nil then
+            level_by_skill_key[skill_key] = level
+        end
+    end
+
+    return level_by_skill_key
+end
+
 function GatheringService.Create(repository)
     local self = setmetatable({}, GatheringService)
 
@@ -252,6 +282,119 @@ function GatheringService:ValidateNodeProximity(player, node)
     return true, nil
 end
 
+function GatheringService:ValidateGatheringRequirements(character_id, node, callback)
+    local normalized_character_id = normalize_character_id(character_id)
+    local required_item_key = nil
+    local required_item_quantity = nil
+    local required_skill_key = nil
+    local required_skill_level = nil
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "invalid-character")
+        return true
+    end
+
+    if type(node) ~= "table" then
+        callback(false, nil, "node-not-found")
+        return true
+    end
+
+    required_item_key = trim_string(node.required_item_key)
+    required_item_quantity = normalize_positive_integer(node.required_item_quantity) or 1
+    required_skill_key = normalize_skill_key(node.required_skill_key)
+    required_skill_level = normalize_positive_integer(node.required_skill_level)
+
+    local function validate_skill_requirement()
+        if required_skill_key == nil or required_skill_level == nil then
+            callback(true, nil, nil)
+            return
+        end
+
+        if type(GRSkillsBridge) ~= "table" or type(GRSkillsBridge.ListSkills) ~= "function" then
+            callback(false, {
+                required_skill_key = required_skill_key,
+                required_skill_level = required_skill_level,
+            }, "skill-check-unavailable")
+            return
+        end
+
+        GRSkillsBridge.ListSkills(normalized_character_id, function(is_success, skill_rows, error)
+            local level_by_skill_key = nil
+            local current_skill_level = 0
+
+            if not is_success or type(skill_rows) ~= "table" then
+                callback(false, {
+                    required_skill_key = required_skill_key,
+                    required_skill_level = required_skill_level,
+                    skill_error = error,
+                }, "skill-check-unavailable")
+                return
+            end
+
+            level_by_skill_key = build_skill_level_map(skill_rows)
+            current_skill_level = level_by_skill_key[required_skill_key] or 0
+
+            if current_skill_level < required_skill_level then
+                callback(false, {
+                    required_skill_key = required_skill_key,
+                    required_skill_level = required_skill_level,
+                    current_skill_level = current_skill_level,
+                }, "skill-level-insufficient")
+                return
+            end
+
+            callback(true, nil, nil)
+        end)
+    end
+
+    if required_item_key == nil then
+        validate_skill_requirement()
+        return true
+    end
+
+    if type(GRInventoryBridge) ~= "table" or type(GRInventoryBridge.ListInventory) ~= "function" then
+        callback(false, {
+            required_item_key = required_item_key,
+            required_item_quantity = required_item_quantity,
+        }, "inventory-check-unavailable")
+        return true
+    end
+
+    GRInventoryBridge.ListInventory(normalized_character_id, function(is_success, inventory_rows, error)
+        local quantity_by_item_key = nil
+        local current_item_quantity = 0
+
+        if not is_success or type(inventory_rows) ~= "table" then
+            callback(false, {
+                required_item_key = required_item_key,
+                required_item_quantity = required_item_quantity,
+                inventory_error = error,
+            }, "inventory-check-unavailable")
+            return
+        end
+
+        quantity_by_item_key = build_inventory_quantity_map(inventory_rows)
+        current_item_quantity = quantity_by_item_key[required_item_key] or 0
+
+        if current_item_quantity < required_item_quantity then
+            callback(false, {
+                required_item_key = required_item_key,
+                required_item_quantity = required_item_quantity,
+                current_item_quantity = current_item_quantity,
+            }, "required-item-missing")
+            return
+        end
+
+        validate_skill_requirement()
+    end)
+
+    return true
+end
+
 function GatheringService:Gather(character_id, player, node_key, callback)
     local normalized_character_id = normalize_character_id(character_id)
     local normalized_node_key = normalize_node_key(node_key)
@@ -334,154 +477,161 @@ function GatheringService:Gather(character_id, player, node_key, callback)
                 return
             end
 
-            if type(GRInventoryBridge) ~= "table" or type(GRInventoryBridge.AddItem) ~= "function" then
-                callback(false, {
-                    node = node_row,
-                }, "inventory-unavailable")
-                return
-            end
+            self:ValidateGatheringRequirements(normalized_character_id, node_row, function(is_requirement_success, requirement_result, requirement_error)
+                if not is_requirement_success then
+                    callback(false, requirement_result, requirement_error)
+                    return
+                end
 
-            if node_row.max_quantity < node_row.min_quantity then
-                callback(false, {
-                    node = node_row,
-                }, "database-error")
-                return
-            end
+                if type(GRInventoryBridge) ~= "table" or type(GRInventoryBridge.AddItem) ~= "function" then
+                    callback(false, {
+                        node = node_row,
+                    }, "inventory-unavailable")
+                    return
+                end
 
-            local quantity = math.random(node_row.min_quantity, node_row.max_quantity)
-            local metadata_json = encode_metadata_json({
-                source = "gathering",
-                node_key = normalized_node_key,
-            })
+                if node_row.max_quantity < node_row.min_quantity then
+                    callback(false, {
+                        node = node_row,
+                    }, "database-error")
+                    return
+                end
 
-            GRInventoryBridge.AddItem(
-                normalized_character_id,
-                node_row.result_item_key,
-                quantity,
-                metadata_json,
-                function(is_inventory_success, inventory_result, inventory_error)
-                    if not is_inventory_success then
-                        callback(false, {
-                            node = node_row,
-                            quantity = quantity,
-                            inventory_error = inventory_error,
-                        }, "inventory-failed")
-                        return
-                    end
+                local quantity = math.random(node_row.min_quantity, node_row.max_quantity)
+                local metadata_json = encode_metadata_json({
+                    source = "gathering",
+                    node_key = normalized_node_key,
+                })
 
-                    self.repository:UpsertCooldown(normalized_character_id, normalized_node_key, function(is_upsert_success, updated_cooldown, upsert_error)
-                        if not is_upsert_success or updated_cooldown == nil then
-                            if type(GRInventoryBridge) ~= "table" or type(GRInventoryBridge.RemoveItem) ~= "function" then
-                                Console.Log(
-                                    "[gr_gathering][service] Cooldown update failed without inventory rollback character_id=%s node_key=%s item_key=%s quantity=%s reason=%s.",
-                                    tostring(normalized_character_id),
-                                    tostring(normalized_node_key),
-                                    tostring(node_row.result_item_key),
-                                    tostring(quantity),
-                                    tostring(upsert_error or "cooldown-upsert-failed")
-                                )
-
-                                callback(false, nil, "database-error")
-                                return
-                            end
-
-                            GRInventoryBridge.RemoveItem(
-                                normalized_character_id,
-                                node_row.result_item_key,
-                                quantity,
-                                function(is_rollback_success, rollback_result, rollback_error)
-                                    if not is_rollback_success then
-                                        Console.Log(
-                                            "[gr_gathering][service] Inventory rollback failed character_id=%s node_key=%s item_key=%s quantity=%s reason=%s.",
-                                            tostring(normalized_character_id),
-                                            tostring(normalized_node_key),
-                                            tostring(node_row.result_item_key),
-                                            tostring(quantity),
-                                            tostring(rollback_error or upsert_error or "rollback-failed")
-                                        )
-                                    end
-
-                                    callback(false, {
-                                        node = node_row,
-                                        quantity = quantity,
-                                        inventory = inventory_result,
-                                        rollback = rollback_result,
-                                    }, "database-error")
-                                end
-                            )
-                            return
-                        end
-
-                        local function finalize_success(skill_result, skill_error)
-                            Console.Log(
-                                "[gr_gathering][service] Gathering completed character_id=%s node_key=%s item_key=%s quantity=%s.",
-                                tostring(normalized_character_id),
-                                tostring(normalized_node_key),
-                                tostring(node_row.result_item_key),
-                                tostring(quantity)
-                            )
-
-                            callback(true, {
+                GRInventoryBridge.AddItem(
+                    normalized_character_id,
+                    node_row.result_item_key,
+                    quantity,
+                    metadata_json,
+                    function(is_inventory_success, inventory_result, inventory_error)
+                        if not is_inventory_success then
+                            callback(false, {
                                 node = node_row,
                                 quantity = quantity,
-                                inventory = inventory_result,
-                                cooldown = updated_cooldown,
-                                skill = skill_result,
-                                skill_error = skill_error,
-                            }, nil)
-                        end
-
-                        local normalized_skill_key = normalize_skill_key(node_row.required_skill_key)
-                        local skill_xp = normalize_non_negative_integer(node_row.skill_xp) or 0
-
-                        if normalized_skill_key == nil or skill_xp < 1 then
-                            finalize_success(nil, nil)
+                                inventory_error = inventory_error,
+                            }, "inventory-failed")
                             return
                         end
 
-                        if type(GRSkillsBridge) ~= "table" or type(GRSkillsBridge.AddSkillXp) ~= "function" then
-                            Console.Log(
-                                "[gr_gathering][service] Skill XP skipped character_id=%s node_key=%s skill_key=%s reason=%s.",
-                                tostring(normalized_character_id),
-                                tostring(normalized_node_key),
-                                tostring(normalized_skill_key),
-                                "skills-bridge-unavailable"
-                            )
-
-                            finalize_success(nil, "skills-bridge-unavailable")
-                            return
-                        end
-
-                        GRSkillsBridge.AddSkillXp(
-                            normalized_character_id,
-                            normalized_skill_key,
-                            skill_xp,
-                            "gather:" .. tostring(normalized_node_key),
-                            function(is_skill_success, skill_row, skill_error)
-                                if not is_skill_success then
+                        self.repository:UpsertCooldown(normalized_character_id, normalized_node_key, function(is_upsert_success, updated_cooldown, upsert_error)
+                            if not is_upsert_success or updated_cooldown == nil then
+                                if type(GRInventoryBridge) ~= "table" or type(GRInventoryBridge.RemoveItem) ~= "function" then
                                     Console.Log(
-                                        "[gr_gathering][service] Skill XP grant failed character_id=%s node_key=%s skill_key=%s amount=%s reason=%s.",
+                                        "[gr_gathering][service] Cooldown update failed without inventory rollback character_id=%s node_key=%s item_key=%s quantity=%s reason=%s.",
                                         tostring(normalized_character_id),
                                         tostring(normalized_node_key),
-                                        tostring(normalized_skill_key),
-                                        tostring(skill_xp),
-                                        tostring(skill_error or "skill-xp-failed")
+                                        tostring(node_row.result_item_key),
+                                        tostring(quantity),
+                                        tostring(upsert_error or "cooldown-upsert-failed")
                                     )
 
-                                    finalize_success(nil, skill_error or "skill-xp-failed")
+                                    callback(false, nil, "database-error")
                                     return
                                 end
 
-                                finalize_success({
-                                    skill_key = normalized_skill_key,
-                                    amount = skill_xp,
-                                    row = skill_row,
+                                GRInventoryBridge.RemoveItem(
+                                    normalized_character_id,
+                                    node_row.result_item_key,
+                                    quantity,
+                                    function(is_rollback_success, rollback_result, rollback_error)
+                                        if not is_rollback_success then
+                                            Console.Log(
+                                                "[gr_gathering][service] Inventory rollback failed character_id=%s node_key=%s item_key=%s quantity=%s reason=%s.",
+                                                tostring(normalized_character_id),
+                                                tostring(normalized_node_key),
+                                                tostring(node_row.result_item_key),
+                                                tostring(quantity),
+                                                tostring(rollback_error or upsert_error or "rollback-failed")
+                                            )
+                                        end
+
+                                        callback(false, {
+                                            node = node_row,
+                                            quantity = quantity,
+                                            inventory = inventory_result,
+                                            rollback = rollback_result,
+                                        }, "database-error")
+                                    end
+                                )
+                                return
+                            end
+
+                            local function finalize_success(skill_result, skill_error)
+                                Console.Log(
+                                    "[gr_gathering][service] Gathering completed character_id=%s node_key=%s item_key=%s quantity=%s.",
+                                    tostring(normalized_character_id),
+                                    tostring(normalized_node_key),
+                                    tostring(node_row.result_item_key),
+                                    tostring(quantity)
+                                )
+
+                                callback(true, {
+                                    node = node_row,
+                                    quantity = quantity,
+                                    inventory = inventory_result,
+                                    cooldown = updated_cooldown,
+                                    skill = skill_result,
+                                    skill_error = skill_error,
                                 }, nil)
                             end
-                        )
-                    end)
-                end
-            )
+
+                            local normalized_skill_key = normalize_skill_key(node_row.required_skill_key)
+                            local skill_xp = normalize_non_negative_integer(node_row.skill_xp) or 0
+
+                            if normalized_skill_key == nil or skill_xp < 1 then
+                                finalize_success(nil, nil)
+                                return
+                            end
+
+                            if type(GRSkillsBridge) ~= "table" or type(GRSkillsBridge.AddSkillXp) ~= "function" then
+                                Console.Log(
+                                    "[gr_gathering][service] Skill XP skipped character_id=%s node_key=%s skill_key=%s reason=%s.",
+                                    tostring(normalized_character_id),
+                                    tostring(normalized_node_key),
+                                    tostring(normalized_skill_key),
+                                    "skills-bridge-unavailable"
+                                )
+
+                                finalize_success(nil, "skills-bridge-unavailable")
+                                return
+                            end
+
+                            GRSkillsBridge.AddSkillXp(
+                                normalized_character_id,
+                                normalized_skill_key,
+                                skill_xp,
+                                "gather:" .. tostring(normalized_node_key),
+                                function(is_skill_success, skill_row, skill_error)
+                                    if not is_skill_success then
+                                        Console.Log(
+                                            "[gr_gathering][service] Skill XP grant failed character_id=%s node_key=%s skill_key=%s amount=%s reason=%s.",
+                                            tostring(normalized_character_id),
+                                            tostring(normalized_node_key),
+                                            tostring(normalized_skill_key),
+                                            tostring(skill_xp),
+                                            tostring(skill_error or "skill-xp-failed")
+                                        )
+
+                                        finalize_success(nil, skill_error or "skill-xp-failed")
+                                        return
+                                    end
+
+                                    finalize_success({
+                                        skill_key = normalized_skill_key,
+                                        amount = skill_xp,
+                                        row = skill_row,
+                                    }, nil)
+                                end
+                            )
+                        end)
+                    end
+                )
+            end)
         end)
     end)
 end
