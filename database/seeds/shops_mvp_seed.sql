@@ -1,13 +1,29 @@
-INSERT INTO shops (key, name, description, shop_type, is_active)
+INSERT INTO shops (
+    key,
+    name,
+    description,
+    shop_type,
+    position_x,
+    position_y,
+    position_z,
+    radius,
+    requires_proximity,
+    is_active
+)
 VALUES
-    ('general_store', 'Magasin general', 'Biens de survie et equipements civils de base', 'general', TRUE),
-    ('medical_kiosk', 'Kiosque medical', 'Consommables de soins et secours legers', 'medical', TRUE),
-    ('tech_vendor', 'Vendeur technologique', 'Equipements utilitaires et communication', 'technology', TRUE)
+    ('general_store', 'Magasin general', 'Biens de survie et equipements civils de base', 'general', NULL, NULL, NULL, 250.0, FALSE, TRUE),
+    ('medical_kiosk', 'Kiosque medical', 'Consommables de soins et secours legers', 'medical', NULL, NULL, NULL, 250.0, FALSE, TRUE),
+    ('tech_vendor', 'Vendeur technologique', 'Equipements utilitaires et communication', 'technology', NULL, NULL, NULL, 250.0, FALSE, TRUE)
 ON CONFLICT (key) DO UPDATE
 SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,
     shop_type = EXCLUDED.shop_type,
+    position_x = EXCLUDED.position_x,
+    position_y = EXCLUDED.position_y,
+    position_z = EXCLUDED.position_z,
+    radius = EXCLUDED.radius,
+    requires_proximity = EXCLUDED.requires_proximity,
     is_active = EXCLUDED.is_active,
     updated_at = NOW();
 

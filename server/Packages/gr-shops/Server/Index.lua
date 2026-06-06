@@ -228,9 +228,11 @@ end
 
 local function build_shop_line(shop_row)
     return string.format(
-        "- %s : %s",
+        "- %s : %s radius=%s proximity=%s",
         tostring(shop_row.key),
-        tostring(shop_row.name or shop_row.key)
+        tostring(shop_row.name or shop_row.key),
+        tostring(shop_row.radius),
+        tostring(shop_row.requires_proximity)
     )
 end
 
@@ -273,20 +275,20 @@ GRShopsBridge.ListShopItems = function(shop_key, callback)
     return GRShops.Server.Service:ListShopItems(shop_key, callback)
 end
 
-GRShopsBridge.BuyItem = function(character_id, shop_key, item_key, quantity, callback)
+GRShopsBridge.BuyItem = function(player, character_id, shop_key, item_key, quantity, callback)
     if GRShops.Server.Service == nil then
         return callback_service_missing(callback)
     end
 
-    return GRShops.Server.Service:BuyItem(character_id, shop_key, item_key, quantity, callback)
+    return GRShops.Server.Service:BuyItem(player, character_id, shop_key, item_key, quantity, callback)
 end
 
-GRShopsBridge.SellItem = function(character_id, shop_key, item_key, quantity, callback)
+GRShopsBridge.SellItem = function(player, character_id, shop_key, item_key, quantity, callback)
     if GRShops.Server.Service == nil then
         return callback_service_missing(callback)
     end
 
-    return GRShops.Server.Service:SellItem(character_id, shop_key, item_key, quantity, callback)
+    return GRShops.Server.Service:SellItem(player, character_id, shop_key, item_key, quantity, callback)
 end
 
 Package.Export("GRShopsBridge", GRShopsBridge)
@@ -423,7 +425,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         end
 
         if command_name == "sell" then
-            GRShops.Server.Service:SellItem(active_character_id, shop_key, item_key, quantity, function(is_success, result, error)
+            GRShops.Server.Service:SellItem(player, active_character_id, shop_key, item_key, quantity, function(is_success, result, error)
                 if not is_success then
                     if error == "shop-not-found" then
                         Chat.SendMessage(player, "Boutique introuvable.")
@@ -446,6 +448,21 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                     if error == "quantity-invalid" then
                         Chat.SendMessage(player, "Quantite invalide.")
+                        return
+                    end
+
+                    if error == "shop-too-far" then
+                        Chat.SendMessage(player, "Vente impossible : vous etes trop loin de cette boutique.")
+                        return
+                    end
+
+                    if error == "shop-position-invalid" then
+                        Chat.SendMessage(player, "Boutique sans position valide.")
+                        return
+                    end
+
+                    if error == "player-position-unavailable" then
+                        Chat.SendMessage(player, "Position joueur indisponible.")
                         return
                     end
 
@@ -487,7 +504,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             return false
         end
 
-        GRShops.Server.Service:BuyItem(active_character_id, shop_key, item_key, quantity, function(is_success, result, error)
+        GRShops.Server.Service:BuyItem(player, active_character_id, shop_key, item_key, quantity, function(is_success, result, error)
             if not is_success then
                 if error == "shop-not-found" then
                     Chat.SendMessage(player, "Boutique introuvable.")
@@ -506,6 +523,21 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 if error == "quantity-invalid" then
                     Chat.SendMessage(player, "Quantite invalide.")
+                    return
+                end
+
+                if error == "shop-too-far" then
+                    Chat.SendMessage(player, "Achat impossible : vous etes trop loin de cette boutique.")
+                    return
+                end
+
+                if error == "shop-position-invalid" then
+                    Chat.SendMessage(player, "Boutique sans position valide.")
+                    return
+                end
+
+                if error == "player-position-unavailable" then
+                    Chat.SendMessage(player, "Position joueur indisponible.")
                     return
                 end
 

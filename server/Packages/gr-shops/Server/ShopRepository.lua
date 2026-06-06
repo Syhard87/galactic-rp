@@ -11,6 +11,11 @@ local SELECT_SHOPS_QUERY = [[
         name,
         description,
         shop_type,
+        position_x,
+        position_y,
+        position_z,
+        radius,
+        requires_proximity,
         is_active,
         created_at,
         updated_at
@@ -25,6 +30,11 @@ local SELECT_SHOP_ITEMS_QUERY = [[
         shops.name AS shop_name,
         shops.description AS shop_description,
         shops.shop_type,
+        shops.position_x,
+        shops.position_y,
+        shops.position_z,
+        shops.radius,
+        shops.requires_proximity,
         shops.is_active AS shop_is_active,
         shop_items.id AS shop_item_id,
         shop_items.item_key,
@@ -54,6 +64,11 @@ local SELECT_SHOP_ITEM_QUERY = [[
         shops.name AS shop_name,
         shops.description AS shop_description,
         shops.shop_type,
+        shops.position_x,
+        shops.position_y,
+        shops.position_z,
+        shops.radius,
+        shops.requires_proximity,
         shops.is_active AS shop_is_active,
         shop_items.id AS shop_item_id,
         shop_items.item_key,
@@ -149,6 +164,34 @@ local function normalize_wallet(wallet)
     return normalized_wallet
 end
 
+local function normalize_number(value)
+    if type(value) == "number" then
+        return value
+    end
+
+    if type(value) == "string" then
+        local trimmed_value = trim_string(value)
+
+        if trimmed_value == nil then
+            return nil
+        end
+
+        return tonumber(trimmed_value)
+    end
+
+    return nil
+end
+
+local function normalize_positive_number(value)
+    local normalized_value = normalize_number(value)
+
+    if normalized_value == nil or normalized_value <= 0 then
+        return nil
+    end
+
+    return normalized_value
+end
+
 local function normalize_shop_key(shop_key)
     return trim_string(shop_key)
 end
@@ -178,6 +221,11 @@ local function normalize_shop_row(row)
         name = trim_string(row.name),
         description = trim_string(row.description),
         shop_type = trim_string(row.shop_type),
+        position_x = normalize_number(row.position_x),
+        position_y = normalize_number(row.position_y),
+        position_z = normalize_number(row.position_z),
+        radius = normalize_positive_number(row.radius),
+        requires_proximity = normalize_boolean(row.requires_proximity, false),
         is_active = normalize_boolean(row.is_active, false),
         created_at = row.created_at,
         updated_at = row.updated_at,
@@ -216,6 +264,11 @@ local function normalize_shop_item_row(row)
             name = trim_string(row.shop_name),
             description = trim_string(row.shop_description),
             shop_type = trim_string(row.shop_type),
+            position_x = normalize_number(row.position_x),
+            position_y = normalize_number(row.position_y),
+            position_z = normalize_number(row.position_z),
+            radius = normalize_positive_number(row.radius),
+            requires_proximity = normalize_boolean(row.requires_proximity, false),
             is_active = normalize_boolean(row.shop_is_active, false),
         },
         shop_item_id = shop_item_id,

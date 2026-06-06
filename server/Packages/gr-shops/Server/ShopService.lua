@@ -60,6 +60,52 @@ local function normalize_quantity(quantity)
     return normalized_quantity
 end
 
+local function get_controlled_character(player)
+    if type(player) ~= "table" and type(player) ~= "userdata" then
+        return nil
+    end
+
+    if type(player.GetControlledCharacter) ~= "function" then
+        return nil
+    end
+
+    return player:GetControlledCharacter()
+end
+
+local function get_entity_location(entity)
+    if entity == nil or type(entity.GetLocation) ~= "function" then
+        return nil
+    end
+
+    local location = entity:GetLocation()
+
+    if location == nil then
+        return nil
+    end
+
+    if type(location.X) ~= "number" or type(location.Y) ~= "number" or type(location.Z) ~= "number" then
+        return nil
+    end
+
+    return {
+        x = location.X,
+        y = location.Y,
+        z = location.Z,
+    }
+end
+
+local function get_distance_squared(first_location, second_location)
+    if type(first_location) ~= "table" or type(second_location) ~= "table" then
+        return nil
+    end
+
+    local delta_x = first_location.x - second_location.x
+    local delta_y = first_location.y - second_location.y
+    local delta_z = first_location.z - second_location.z
+
+    return (delta_x * delta_x) + (delta_y * delta_y) + (delta_z * delta_z)
+end
+
 local function callback_repository_missing(callback)
     if type(callback) == "function" then
         callback(false, nil, "shop-repository-missing")
@@ -123,7 +169,57 @@ function ShopService:ListShopItems(shop_key, callback)
     end)
 end
 
-function ShopService:BuyItem(character_id, shop_key, item_key, quantity, callback)
+function ShopService:ValidateShopProximity(player, shop)
+    local shop_location = nil
+    local player_location = nil
+    local distance_squared = nil
+    local radius_squared = nil
+
+    if type(shop) ~= "table" then
+        return false, "shop-not-found"
+    end
+
+    if shop.requires_proximity ~= true then
+        return true, nil
+    end
+
+    if type(shop.position_x) ~= "number"
+        or type(shop.position_y) ~= "number"
+        or type(shop.position_z) ~= "number"
+        or type(shop.radius) ~= "number"
+        or shop.radius <= 0
+    then
+        return false, "shop-position-invalid"
+    end
+
+    player_location = get_entity_location(get_controlled_character(player))
+
+    if player_location == nil then
+        return false, "player-position-unavailable"
+    end
+
+    shop_location = {
+        x = shop.position_x,
+        y = shop.position_y,
+        z = shop.position_z,
+    }
+
+    distance_squared = get_distance_squared(player_location, shop_location)
+
+    if distance_squared == nil then
+        return false, "player-position-unavailable"
+    end
+
+    radius_squared = shop.radius * shop.radius
+
+    if distance_squared > radius_squared then
+        return false, "shop-too-far"
+    end
+
+    return true, nil
+end
+
+function ShopService:BuyItem(player, character_id, shop_key, item_key, quantity, callback)
     local normalized_character_id = normalize_character_id(character_id)
     local normalized_shop_key = normalize_shop_key(shop_key)
     local normalized_item_key = normalize_item_key(item_key)
@@ -208,6 +304,13 @@ function ShopService:BuyItem(character_id, shop_key, item_key, quantity, callbac
 
         if shop_item_row.is_active ~= true then
             callback(false, nil, "shop-item-inactive")
+            return
+        end
+
+        local is_near_shop, proximity_error = self:ValidateShopProximity(player, shop_item_row.shop)
+
+        if not is_near_shop then
+            callback(false, nil, proximity_error)
             return
         end
 
@@ -335,7 +438,7 @@ function ShopService:BuyItem(character_id, shop_key, item_key, quantity, callbac
     end)
 end
 
-function ShopService:SellItem(character_id, shop_key, item_key, quantity, callback)
+function ShopService:SellItem(player, character_id, shop_key, item_key, quantity, callback)
     local normalized_character_id = normalize_character_id(character_id)
     local normalized_shop_key = normalize_shop_key(shop_key)
     local normalized_item_key = normalize_item_key(item_key)
@@ -421,6 +524,13 @@ function ShopService:SellItem(character_id, shop_key, item_key, quantity, callba
 
         if shop_item_row.is_sellable ~= true then
             callback(false, nil, "shop-item-not-sellable")
+            return
+        end
+
+        local is_near_shop, proximity_error = self:ValidateShopProximity(player, shop_item_row.shop)
+
+        if not is_near_shop then
+            callback(false, nil, proximity_error)
             return
         end
 
