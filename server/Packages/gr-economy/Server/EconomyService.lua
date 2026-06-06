@@ -88,6 +88,16 @@ local function normalize_limit(limit)
     return normalized_limit
 end
 
+local function normalize_diagnostic_limit(limit)
+    local normalized_limit = normalize_positive_integer(limit) or 10
+
+    if normalized_limit > 25 then
+        return 25
+    end
+
+    return normalized_limit
+end
+
 local function callback_repository_missing(callback)
     if type(callback) == "function" then
         callback(false, nil, "economy-repository-missing")
@@ -622,6 +632,108 @@ function EconomyService:ListSalaryRules(callback)
     end
 
     return self.repository:ListSalaryRules(callback)
+end
+
+function EconomyService:GetBalanceDiagnostic(character_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    return self.repository:GetCharacterEconomySnapshot(normalized_character_id, callback)
+end
+
+function EconomyService:ListTransactionsDiagnostic(character_id, limit, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_limit = normalize_diagnostic_limit(limit)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    return self.repository:ListTransactionsForCharacter(normalized_character_id, normalized_limit, callback)
+end
+
+function EconomyService:GetSalaryDiagnostic(character_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    return self.repository:GetSalaryStatusForCharacter(normalized_character_id, function(is_success, salary_status, error)
+        if not is_success then
+            callback(false, nil, error)
+            return
+        end
+
+        if error == "character-not-found" then
+            callback(false, nil, "character-not-found")
+            return
+        end
+
+        if salary_status == nil or salary_status.salary_rule == nil then
+            callback(true, {
+                character_id = normalized_character_id,
+                salary_rule = nil,
+                salary_claim = nil,
+                cooldown_remaining = 0,
+            }, nil)
+            return
+        end
+
+        local current_epoch = os.time()
+        local last_claim_epoch = salary_status.salary_claim and salary_status.salary_claim.last_claimed_epoch or 0
+        local cooldown_seconds = salary_status.salary_rule.cooldown_seconds or 0
+        local cooldown_remaining = 0
+
+        if last_claim_epoch > 0 and cooldown_seconds > 0 then
+            cooldown_remaining = math.max(0, math.floor((last_claim_epoch + cooldown_seconds) - current_epoch))
+        end
+
+        salary_status.cooldown_remaining = cooldown_remaining
+        callback(true, salary_status, nil)
+    end)
+end
+
+function EconomyService:GetEconomyHealth(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self.repository:GetEconomyHealth(callback)
 end
 
 function EconomyService:ListTransactions(character_id, limit, callback)

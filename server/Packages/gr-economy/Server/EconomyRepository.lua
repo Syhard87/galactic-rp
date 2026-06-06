@@ -180,6 +180,13 @@ local SELECT_SALARY_CLAIM_QUERY = [[
     LIMIT 1
 ]]
 
+local SELECT_ECONOMY_HEALTH_QUERY = [[
+    SELECT
+        (SELECT COUNT(*) FROM characters) AS character_count,
+        (SELECT COUNT(*) FROM bank_transactions) AS transaction_count,
+        (SELECT COUNT(*) FROM economy_salary_rules) AS salary_rule_count
+]]
+
 local UPSERT_SALARY_CLAIM_QUERY = [[
     INSERT INTO character_salary_claims (
         character_id,
@@ -710,6 +717,18 @@ local function normalize_salary_claim_row(row)
     }
 end
 
+local function normalize_economy_health_row(row)
+    if type(row) ~= "table" then
+        return nil
+    end
+
+    return {
+        character_count = normalize_non_negative_integer(row.character_count, 0),
+        transaction_count = normalize_non_negative_integer(row.transaction_count, 0),
+        salary_rule_count = normalize_non_negative_integer(row.salary_rule_count, 0),
+    }
+end
+
 local function normalize_rows(rows, normalizer)
     local normalized_rows = {}
 
@@ -1016,6 +1035,14 @@ function EconomyRepository:ListTransactions(character_id, limit, callback)
     end, "economy-list-transactions")
 end
 
+function EconomyRepository:GetCharacterEconomySnapshot(character_id, callback)
+    return self:GetCharacterMoney(character_id, callback)
+end
+
+function EconomyRepository:ListTransactionsForCharacter(character_id, limit, callback)
+    return self:ListTransactions(character_id, limit, callback)
+end
+
 function EconomyRepository:GetSalaryRuleForCharacter(character_id, callback)
     local normalized_character_id = normalize_positive_integer(character_id)
 
@@ -1071,6 +1098,57 @@ function EconomyRepository:GetSalaryRuleForCharacter(character_id, callback)
             end, faction_id, faction_key, rank_id, rank_id)
         end, normalized_character_id)
     end, "economy-get-salary-rule-for-character")
+end
+
+function EconomyRepository:GetSalaryStatusForCharacter(character_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    return self:GetSalaryRuleForCharacter(normalized_character_id, function(is_rule_success, salary_rule, rule_error)
+        if not is_rule_success then
+            callback(false, nil, rule_error)
+            return
+        end
+
+        if rule_error == "character-not-found" then
+            callback(true, {
+                character_id = normalized_character_id,
+                salary_rule = nil,
+                salary_claim = nil,
+            }, "character-not-found")
+            return
+        end
+
+        if salary_rule == nil then
+            callback(true, {
+                character_id = normalized_character_id,
+                salary_rule = nil,
+                salary_claim = nil,
+            }, nil)
+            return
+        end
+
+        self:GetSalaryClaim(normalized_character_id, salary_rule.id, function(is_claim_success, salary_claim, claim_error)
+            if not is_claim_success then
+                callback(false, nil, claim_error)
+                return
+            end
+
+            callback(true, {
+                character_id = normalized_character_id,
+                salary_rule = salary_rule,
+                salary_claim = salary_claim,
+            }, nil)
+        end)
+    end)
 end
 
 function EconomyRepository:GetSalaryClaim(character_id, salary_rule_id, callback)
@@ -1159,6 +1237,31 @@ function EconomyRepository:ListSalaryRules(callback)
             callback(true, normalize_rows(rows, normalize_salary_rule_row), nil)
         end)
     end, "economy-list-salary-rules")
+end
+
+function EconomyRepository:GetEconomyHealth(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_ECONOMY_HEALTH_QUERY, function(rows, select_error)
+            local normalized_rows = nil
+
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            normalized_rows = normalize_rows(rows, normalize_economy_health_row)
+            callback(true, normalized_rows[1], nil)
+        end)
+    end, "economy-get-health")
 end
 
 function EconomyRepository:TransferMoneyAtomic(from_character_id, to_character_id, wallet, amount, reason, outgoing_metadata_json, incoming_metadata_json, callback)

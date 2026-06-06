@@ -259,6 +259,39 @@ local function build_transaction_line(transaction_row)
     )
 end
 
+local function truncate_text(value, max_length)
+    local normalized_value = trim_string(value)
+
+    if normalized_value == nil then
+        return ""
+    end
+
+    if type(max_length) ~= "number" or max_length < 4 or #normalized_value <= max_length then
+        return normalized_value
+    end
+
+    return normalized_value:sub(1, max_length - 3) .. "..."
+end
+
+local function build_diagnostic_transaction_line(transaction_row)
+    local direction_prefix = "+"
+    local truncated_reason = truncate_text(transaction_row and transaction_row.reason, 48)
+
+    if transaction_row.type == "debit" or transaction_row.type == "transfer_out" then
+        direction_prefix = "-"
+    end
+
+    return string.format(
+        "#%s %s %s %s%s reason=%s",
+        tostring(transaction_row.id),
+        tostring(transaction_row.type),
+        tostring(transaction_row.wallet),
+        tostring(direction_prefix),
+        tostring(transaction_row.amount),
+        tostring(truncated_reason)
+    )
+end
+
 local database_service = resolve_database_service()
 
 GREconomy.Server.Repository = EconomyRepository.Create(database_service)
@@ -332,6 +365,38 @@ GREconomyBridge.ListSalaryRules = function(callback)
     return GREconomy.Server.Service:ListSalaryRules(callback)
 end
 
+GREconomyBridge.GetBalanceDiagnostic = function(character_id, callback)
+    if GREconomy.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GREconomy.Server.Service:GetBalanceDiagnostic(character_id, callback)
+end
+
+GREconomyBridge.ListTransactionsDiagnostic = function(character_id, limit, callback)
+    if GREconomy.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GREconomy.Server.Service:ListTransactionsDiagnostic(character_id, limit, callback)
+end
+
+GREconomyBridge.GetSalaryDiagnostic = function(character_id, callback)
+    if GREconomy.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GREconomy.Server.Service:GetSalaryDiagnostic(character_id, callback)
+end
+
+GREconomyBridge.GetEconomyHealth = function(callback)
+    if GREconomy.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GREconomy.Server.Service:GetEconomyHealth(callback)
+end
+
 Package.Export("GREconomyBridge", GREconomyBridge)
 
 if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.SendMessage) == "function" then
@@ -353,6 +418,10 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "pay"
             and command_name ~= "claimsalary"
             and command_name ~= "salaryrules"
+            and command_name ~= "economybalance"
+            and command_name ~= "economytransactions"
+            and command_name ~= "economysalary"
+            and command_name ~= "economyhealth"
         then
             return
         end
@@ -369,14 +438,215 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 tostring(platform_id),
                 tostring(guard_error)
             )
+            if command_name == "economybalance"
+                or command_name == "economytransactions"
+                or command_name == "economysalary"
+                or command_name == "economyhealth"
+            then
+                Chat.SendMessage(player, "Diagnostic economie desactive.")
+                return false
+            end
+
             Chat.SendMessage(player, "Commande economie desactivee.")
+            return false
+        end
+
+        if command_name == "salaryrules" then
+            GREconomy.Server.Service:ListSalaryRules(function(is_success, salary_rules, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Salaire indisponible.")
+                    return
+                end
+
+                if type(salary_rules) ~= "table" or #salary_rules == 0 then
+                    Chat.SendMessage(player, "Regles de salaire :")
+                    Chat.SendMessage(player, "- aucune")
+                    return
+                end
+
+                Chat.SendMessage(player, "Regles de salaire :")
+
+                for _, salary_rule in ipairs(salary_rules) do
+                    Chat.SendMessage(
+                        player,
+                        string.format(
+                            "- %s amount=%s wallet=%s cooldown=%ss active=%s",
+                            tostring(salary_rule.key),
+                            tostring(salary_rule.amount),
+                            tostring(salary_rule.wallet),
+                            tostring(salary_rule.cooldown_seconds),
+                            tostring(salary_rule.is_active)
+                        )
+                    )
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "economyhealth" then
+            GREconomy.Server.Service:GetEconomyHealth(function(is_success, economy_health, error)
+                if not is_success or economy_health == nil then
+                    Chat.SendMessage(player, "Diagnostic economie indisponible.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Economy health : characters=%s transactions=%s salary_rules=%s",
+                        tostring(economy_health.character_count),
+                        tostring(economy_health.transaction_count),
+                        tostring(economy_health.salary_rule_count)
+                    )
+                )
+            end)
+
             return false
         end
 
         local active_character_id = resolve_active_character_id(player)
 
         if active_character_id == nil then
-            Chat.SendMessage(player, "Personnage actif introuvable.")
+            if command_name == "economybalance"
+                or command_name == "economytransactions"
+                or command_name == "economysalary"
+                or command_name == "money"
+                or command_name == "transactions"
+                or command_name == "claimsalary"
+                or command_name == "pay"
+                or command_name == "givemoney"
+                or command_name == "takemoney"
+            then
+                Chat.SendMessage(player, "Personnage actif introuvable.")
+                return false
+            end
+        end
+
+        if command_name == "economybalance" then
+            local target_character_id = normalize_positive_integer(payload)
+
+            if target_character_id == nil then
+                Chat.SendMessage(player, "Character id invalide.")
+                return false
+            end
+
+            GREconomy.Server.Service:GetBalanceDiagnostic(target_character_id, function(is_success, balance_row, error)
+                if not is_success then
+                    if error == "character-id-required" then
+                        Chat.SendMessage(player, "Character id invalide.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Diagnostic economie indisponible.")
+                    return
+                end
+
+                if balance_row == nil then
+                    Chat.SendMessage(player, "Personnage introuvable.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Balance #%s : cash=%s bank=%s",
+                        tostring(target_character_id),
+                        tostring(balance_row.cash),
+                        tostring(balance_row.bank)
+                    )
+                )
+            end)
+
+            return false
+        end
+
+        if command_name == "economytransactions" then
+            local target_character_id_text = nil
+            local limit_text = nil
+            local target_character_id = nil
+            local limit = nil
+
+            if payload ~= nil then
+                target_character_id_text, limit_text = payload:match("^(%S+)%s*(%S*)$")
+            end
+
+            target_character_id = normalize_positive_integer(target_character_id_text)
+            limit = normalize_positive_integer(limit_text) or 10
+
+            if target_character_id == nil then
+                Chat.SendMessage(player, "Character id invalide.")
+                return false
+            end
+
+            GREconomy.Server.Service:ListTransactionsDiagnostic(target_character_id, limit, function(is_success, transaction_rows, error)
+                if not is_success then
+                    if error == "character-id-required" then
+                        Chat.SendMessage(player, "Character id invalide.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Diagnostic economie indisponible.")
+                    return
+                end
+
+                Chat.SendMessage(player, string.format("Transactions #%s :", tostring(target_character_id)))
+
+                if type(transaction_rows) ~= "table" or #transaction_rows == 0 then
+                    Chat.SendMessage(player, "- aucune")
+                    return
+                end
+
+                for _, transaction_row in ipairs(transaction_rows) do
+                    Chat.SendMessage(player, build_diagnostic_transaction_line(transaction_row))
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "economysalary" then
+            local target_character_id = normalize_positive_integer(payload)
+
+            if target_character_id == nil then
+                Chat.SendMessage(player, "Character id invalide.")
+                return false
+            end
+
+            GREconomy.Server.Service:GetSalaryDiagnostic(target_character_id, function(is_success, salary_status, error)
+                if not is_success then
+                    if error == "character-id-required" then
+                        Chat.SendMessage(player, "Character id invalide.")
+                        return
+                    end
+
+                    if error == "character-not-found" then
+                        Chat.SendMessage(player, "Personnage introuvable.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Diagnostic economie indisponible.")
+                    return
+                end
+
+                if salary_status == nil or salary_status.salary_rule == nil then
+                    Chat.SendMessage(player, string.format("Salaire #%s : aucune regle active.", tostring(target_character_id)))
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Salaire #%s : rule=%s amount=%s wallet=%s cooldown_remaining=%ss",
+                        tostring(target_character_id),
+                        tostring(salary_status.salary_rule.key),
+                        tostring(salary_status.salary_rule.amount),
+                        tostring(salary_status.salary_rule.wallet),
+                        tostring(salary_status.cooldown_remaining or 0)
+                    )
+                )
+            end)
+
             return false
         end
 
@@ -417,39 +687,6 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 for _, transaction_row in ipairs(transaction_rows) do
                     Chat.SendMessage(player, build_transaction_line(transaction_row))
-                end
-            end)
-
-            return false
-        end
-
-        if command_name == "salaryrules" then
-            GREconomy.Server.Service:ListSalaryRules(function(is_success, salary_rules, error)
-                if not is_success then
-                    Chat.SendMessage(player, "Salaire indisponible.")
-                    return
-                end
-
-                if type(salary_rules) ~= "table" or #salary_rules == 0 then
-                    Chat.SendMessage(player, "Regles de salaire :")
-                    Chat.SendMessage(player, "- aucune")
-                    return
-                end
-
-                Chat.SendMessage(player, "Regles de salaire :")
-
-                for _, salary_rule in ipairs(salary_rules) do
-                    Chat.SendMessage(
-                        player,
-                        string.format(
-                            "- %s amount=%s wallet=%s cooldown=%ss active=%s",
-                            tostring(salary_rule.key),
-                            tostring(salary_rule.amount),
-                            tostring(salary_rule.wallet),
-                            tostring(salary_rule.cooldown_seconds),
-                            tostring(salary_rule.is_active)
-                        )
-                    )
                 end
             end)
 
