@@ -1,0 +1,124 @@
+INSERT INTO items (key, name, description, weight, is_stackable, is_illegal)
+VALUES
+    ('scrap', 'Ferraille', 'Materiau de recuperation brut', 0.40, TRUE, FALSE),
+    ('electronic_component', 'Composant electronique', 'Piece reutilisable issue de materiel technique', 0.25, TRUE, FALSE),
+    ('water_bottle', 'Bouteille d''eau', 'Reserve d''eau potable standard', 0.90, TRUE, FALSE)
+ON CONFLICT (key) DO UPDATE
+SET
+    name = EXCLUDED.name,
+    description = EXCLUDED.description,
+    weight = EXCLUDED.weight,
+    is_stackable = EXCLUDED.is_stackable,
+    is_illegal = EXCLUDED.is_illegal,
+    updated_at = NOW();
+
+INSERT INTO gathering_nodes (
+    key,
+    name,
+    description,
+    node_type,
+    result_item_key,
+    min_quantity,
+    max_quantity,
+    required_skill_key,
+    skill_xp,
+    cooldown_seconds,
+    position_x,
+    position_y,
+    position_z,
+    radius,
+    requires_proximity,
+    is_active
+)
+VALUES
+    (
+        'scrap_field',
+        'Champ de ferraille',
+        'Zone de debris et de pieces reutilisables.',
+        'scavenging',
+        'scrap',
+        1,
+        3,
+        'exploration',
+        8,
+        300,
+        NULL,
+        NULL,
+        NULL,
+        250.0,
+        FALSE,
+        TRUE
+    ),
+    (
+        'electronic_wreck',
+        'Epave electronique',
+        'Structure technique detruite contenant encore des composants.',
+        'salvage',
+        'electronic_component',
+        1,
+        2,
+        'mechanics',
+        10,
+        600,
+        NULL,
+        NULL,
+        NULL,
+        250.0,
+        FALSE,
+        TRUE
+    ),
+    (
+        'water_source',
+        'Source d''eau',
+        'Point d''approvisionnement en eau potable simple.',
+        'survival',
+        'water_bottle',
+        1,
+        2,
+        NULL,
+        0,
+        180,
+        NULL,
+        NULL,
+        NULL,
+        250.0,
+        FALSE,
+        TRUE
+    ),
+    (
+        'medical_cache',
+        'Cache medicale',
+        'Reserve medicale de terrain encore exploitable.',
+        'medical',
+        'medkit_basic',
+        1,
+        1,
+        'medicine',
+        12,
+        900,
+        NULL,
+        NULL,
+        NULL,
+        250.0,
+        FALSE,
+        TRUE
+    )
+ON CONFLICT (key) DO UPDATE
+SET
+    name = EXCLUDED.name,
+    description = EXCLUDED.description,
+    node_type = EXCLUDED.node_type,
+    result_item_key = EXCLUDED.result_item_key,
+    min_quantity = EXCLUDED.min_quantity,
+    max_quantity = EXCLUDED.max_quantity,
+    required_skill_key = EXCLUDED.required_skill_key,
+    skill_xp = EXCLUDED.skill_xp,
+    cooldown_seconds = EXCLUDED.cooldown_seconds,
+    position_x = EXCLUDED.position_x,
+    position_y = EXCLUDED.position_y,
+    position_z = EXCLUDED.position_z,
+    radius = EXCLUDED.radius,
+    requires_proximity = EXCLUDED.requires_proximity,
+    is_active = EXCLUDED.is_active,
+    updated_at = NOW();
+
