@@ -103,6 +103,216 @@ local SELECT_TRANSACTIONS_QUERY = [[
     LIMIT :2
 ]]
 
+local ATOMIC_TRANSFER_CASH_QUERY = [[
+    WITH source_row AS (
+        SELECT
+            id,
+            money_cash,
+            money_bank
+        FROM characters
+        WHERE id = :0
+        LIMIT 1
+    ),
+    target_row AS (
+        SELECT
+            id,
+            money_cash,
+            money_bank
+        FROM characters
+        WHERE id = :1
+        LIMIT 1
+    ),
+    debit_source AS (
+        UPDATE characters
+        SET
+            money_cash = money_cash - :2,
+            updated_at = NOW()
+        WHERE id = :3
+            AND EXISTS (SELECT 1 FROM target_row)
+            AND money_cash >= :4
+        RETURNING
+            id,
+            money_cash,
+            money_bank
+    ),
+    credit_target AS (
+        UPDATE characters
+        SET
+            money_cash = money_cash + :5,
+            updated_at = NOW()
+        WHERE id = :6
+            AND EXISTS (SELECT 1 FROM debit_source)
+        RETURNING
+            id,
+            money_cash,
+            money_bank
+    ),
+    outgoing_transaction AS (
+        INSERT INTO bank_transactions (
+            character_id,
+            target_character_id,
+            amount,
+            currency,
+            wallet,
+            type,
+            reason,
+            metadata_json
+        )
+        SELECT
+            :7,
+            :8,
+            :9,
+            :10,
+            :11,
+            :12,
+            :13,
+            CAST(:14 AS JSONB)
+        FROM credit_target
+        RETURNING
+            id
+    ),
+    incoming_transaction AS (
+        INSERT INTO bank_transactions (
+            character_id,
+            target_character_id,
+            amount,
+            currency,
+            wallet,
+            type,
+            reason,
+            metadata_json
+        )
+        SELECT
+            :15,
+            :16,
+            :17,
+            :18,
+            :19,
+            :20,
+            :21,
+            CAST(:22 AS JSONB)
+        FROM outgoing_transaction
+        RETURNING
+            id
+    )
+    SELECT
+        CASE WHEN EXISTS (SELECT 1 FROM source_row) THEN TRUE ELSE FALSE END AS source_exists,
+        CASE WHEN EXISTS (SELECT 1 FROM target_row) THEN TRUE ELSE FALSE END AS target_exists,
+        CASE WHEN EXISTS (SELECT 1 FROM debit_source) THEN TRUE ELSE FALSE END AS source_debited,
+        CASE WHEN EXISTS (SELECT 1 FROM credit_target) THEN TRUE ELSE FALSE END AS target_credited,
+        (SELECT money_cash FROM debit_source LIMIT 1) AS from_money_cash,
+        (SELECT money_bank FROM debit_source LIMIT 1) AS from_money_bank,
+        (SELECT money_cash FROM credit_target LIMIT 1) AS to_money_cash,
+        (SELECT money_bank FROM credit_target LIMIT 1) AS to_money_bank,
+        (SELECT id FROM outgoing_transaction LIMIT 1) AS outgoing_transaction_id,
+        (SELECT id FROM incoming_transaction LIMIT 1) AS incoming_transaction_id
+]]
+
+local ATOMIC_TRANSFER_BANK_QUERY = [[
+    WITH source_row AS (
+        SELECT
+            id,
+            money_cash,
+            money_bank
+        FROM characters
+        WHERE id = :0
+        LIMIT 1
+    ),
+    target_row AS (
+        SELECT
+            id,
+            money_cash,
+            money_bank
+        FROM characters
+        WHERE id = :1
+        LIMIT 1
+    ),
+    debit_source AS (
+        UPDATE characters
+        SET
+            money_bank = money_bank - :2,
+            updated_at = NOW()
+        WHERE id = :3
+            AND EXISTS (SELECT 1 FROM target_row)
+            AND money_bank >= :4
+        RETURNING
+            id,
+            money_cash,
+            money_bank
+    ),
+    credit_target AS (
+        UPDATE characters
+        SET
+            money_bank = money_bank + :5,
+            updated_at = NOW()
+        WHERE id = :6
+            AND EXISTS (SELECT 1 FROM debit_source)
+        RETURNING
+            id,
+            money_cash,
+            money_bank
+    ),
+    outgoing_transaction AS (
+        INSERT INTO bank_transactions (
+            character_id,
+            target_character_id,
+            amount,
+            currency,
+            wallet,
+            type,
+            reason,
+            metadata_json
+        )
+        SELECT
+            :7,
+            :8,
+            :9,
+            :10,
+            :11,
+            :12,
+            :13,
+            CAST(:14 AS JSONB)
+        FROM credit_target
+        RETURNING
+            id
+    ),
+    incoming_transaction AS (
+        INSERT INTO bank_transactions (
+            character_id,
+            target_character_id,
+            amount,
+            currency,
+            wallet,
+            type,
+            reason,
+            metadata_json
+        )
+        SELECT
+            :15,
+            :16,
+            :17,
+            :18,
+            :19,
+            :20,
+            :21,
+            CAST(:22 AS JSONB)
+        FROM outgoing_transaction
+        RETURNING
+            id
+    )
+    SELECT
+        CASE WHEN EXISTS (SELECT 1 FROM source_row) THEN TRUE ELSE FALSE END AS source_exists,
+        CASE WHEN EXISTS (SELECT 1 FROM target_row) THEN TRUE ELSE FALSE END AS target_exists,
+        CASE WHEN EXISTS (SELECT 1 FROM debit_source) THEN TRUE ELSE FALSE END AS source_debited,
+        CASE WHEN EXISTS (SELECT 1 FROM credit_target) THEN TRUE ELSE FALSE END AS target_credited,
+        (SELECT money_cash FROM debit_source LIMIT 1) AS from_money_cash,
+        (SELECT money_bank FROM debit_source LIMIT 1) AS from_money_bank,
+        (SELECT money_cash FROM credit_target LIMIT 1) AS to_money_cash,
+        (SELECT money_bank FROM credit_target LIMIT 1) AS to_money_bank,
+        (SELECT id FROM outgoing_transaction LIMIT 1) AS outgoing_transaction_id,
+        (SELECT id FROM incoming_transaction LIMIT 1) AS incoming_transaction_id
+]]
+
 local function trim_string(value)
     if type(value) ~= "string" then
         return nil
@@ -171,6 +381,28 @@ local function normalize_integer(value, fallback)
 
         if parsed_value ~= nil then
             return math.floor(parsed_value)
+        end
+    end
+
+    return fallback
+end
+
+local function normalize_boolean(value, fallback)
+    if type(value) == "boolean" then
+        return value
+    end
+
+    local string_value = trim_string(value)
+
+    if string_value ~= nil then
+        local lowered_value = string.lower(string_value)
+
+        if lowered_value == "true" or lowered_value == "t" or lowered_value == "1" then
+            return true
+        end
+
+        if lowered_value == "false" or lowered_value == "f" or lowered_value == "0" then
+            return false
         end
     end
 
@@ -309,6 +541,42 @@ local function normalize_rows(rows, normalizer)
     end
 
     return normalized_rows
+end
+
+local function normalize_transfer_result_row(row, from_character_id, to_character_id)
+    local normalized_from_character_id = normalize_positive_integer(from_character_id)
+    local normalized_to_character_id = normalize_positive_integer(to_character_id)
+
+    if type(row) ~= "table" then
+        return nil
+    end
+
+    if normalized_from_character_id == nil or normalized_to_character_id == nil then
+        return nil
+    end
+
+    return {
+        source_exists = normalize_boolean(row.source_exists, false),
+        target_exists = normalize_boolean(row.target_exists, false),
+        source_debited = normalize_boolean(row.source_debited, false),
+        target_credited = normalize_boolean(row.target_credited, false),
+        from_balance = {
+            id = normalized_from_character_id,
+            cash = normalize_non_negative_integer(row.from_money_cash, 0),
+            bank = normalize_non_negative_integer(row.from_money_bank, 0),
+        },
+        to_balance = {
+            id = normalized_to_character_id,
+            cash = normalize_non_negative_integer(row.to_money_cash, 0),
+            bank = normalize_non_negative_integer(row.to_money_bank, 0),
+        },
+        outgoing_transaction = {
+            id = normalize_positive_integer(row.outgoing_transaction_id),
+        },
+        incoming_transaction = {
+            id = normalize_positive_integer(row.incoming_transaction_id),
+        },
+    }
 end
 
 function EconomyRepository.Create(database_service)
@@ -565,6 +833,87 @@ function EconomyRepository:ListTransactions(character_id, limit, callback)
             callback(true, normalize_rows(rows, normalize_transaction_row), nil)
         end, normalized_character_id, normalized_character_id, normalized_limit)
     end, "economy-list-transactions")
+end
+
+function EconomyRepository:TransferMoneyAtomic(from_character_id, to_character_id, wallet, amount, reason, outgoing_metadata_json, incoming_metadata_json, callback)
+    local normalized_from_character_id = normalize_positive_integer(from_character_id)
+    local normalized_to_character_id = normalize_positive_integer(to_character_id)
+    local normalized_wallet = normalize_wallet(wallet)
+    local normalized_amount = normalize_positive_integer(amount)
+    local normalized_reason = trim_string(reason) or "unspecified"
+    local normalized_outgoing_metadata_json = encode_metadata_json(outgoing_metadata_json)
+    local normalized_incoming_metadata_json = encode_metadata_json(incoming_metadata_json)
+    local transfer_query = nil
+    local unpack_values = table.unpack or unpack
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_from_character_id == nil or normalized_to_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if normalized_wallet == nil then
+        callback(false, nil, "wallet-invalid")
+        return true
+    end
+
+    if normalized_amount == nil then
+        callback(false, nil, "transfer-amount-required")
+        return true
+    end
+
+    transfer_query = normalized_wallet == "cash" and ATOMIC_TRANSFER_CASH_QUERY or ATOMIC_TRANSFER_BANK_QUERY
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        local query_parameters = {
+            normalized_from_character_id,
+            normalized_to_character_id,
+            normalized_amount,
+            normalized_from_character_id,
+            normalized_amount,
+            normalized_amount,
+            normalized_to_character_id,
+            normalized_from_character_id,
+            normalized_to_character_id,
+            normalized_amount,
+            "credits",
+            normalized_wallet,
+            "transfer_out",
+            normalized_reason,
+            normalized_outgoing_metadata_json,
+            normalized_to_character_id,
+            normalized_from_character_id,
+            normalized_amount,
+            "credits",
+            normalized_wallet,
+            "transfer_in",
+            normalized_reason,
+            normalized_incoming_metadata_json,
+        }
+
+        database_or_error:SelectAsync(transfer_query, function(rows, select_error)
+            local normalized_rows = nil
+
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            normalized_rows = normalize_rows(rows, function(row)
+                return normalize_transfer_result_row(row, normalized_from_character_id, normalized_to_character_id)
+            end)
+
+            callback(true, normalized_rows[1], nil)
+        end, unpack_values(query_parameters))
+    end, "economy-transfer-money-atomic")
 end
 
 GREconomy.Server.EconomyRepositoryClass = EconomyRepository

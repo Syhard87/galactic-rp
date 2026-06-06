@@ -332,6 +332,8 @@ function EconomyService:TransferMoney(from_character_id, to_character_id, wallet
     local normalized_wallet = normalize_wallet(wallet)
     local normalized_amount = normalize_amount(amount)
     local normalized_reason = normalize_reason(reason)
+    local outgoing_metadata = nil
+    local incoming_metadata = nil
 
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -342,68 +344,91 @@ function EconomyService:TransferMoney(from_character_id, to_character_id, wallet
     end
 
     if normalized_from_character_id == nil or normalized_to_character_id == nil then
-        callback(false, nil, "character-id-required")
+        if normalized_from_character_id == nil then
+            callback(false, nil, "invalid-source-character")
+            return true
+        end
+
+        callback(false, nil, "invalid-target-character")
         return true
     end
 
     if normalized_from_character_id == normalized_to_character_id then
-        callback(false, nil, "transfer-same-character")
+        callback(false, nil, "same-character")
         return true
     end
 
     if normalized_wallet == nil then
-        callback(false, nil, "wallet-invalid")
+        callback(false, nil, "invalid-wallet")
         return true
     end
 
     if normalized_amount == nil then
-        callback(false, nil, "amount-invalid")
+        callback(false, nil, "invalid-amount")
         return true
     end
 
-    return self.repository:GetCharacterMoney(normalized_from_character_id, function(is_balance_success, source_money_row, balance_error)
-        if not is_balance_success then
-            Console.Log(
-                "[gr_economy][service] Money operation failed reason=%s character_id=%s wallet=%s amount=%s.",
-                tostring(balance_error),
-                tostring(normalized_from_character_id),
-                tostring(normalized_wallet),
-                tostring(normalized_amount)
-            )
-            callback(false, nil, balance_error)
-            return
-        end
+    outgoing_metadata = {
+        direction = "out",
+        target_character_id = normalized_to_character_id,
+    }
 
-        if source_money_row == nil then
-            callback(false, nil, "character-not-found")
-            return
-        end
+    incoming_metadata = {
+        direction = "in",
+        source_character_id = normalized_from_character_id,
+    }
 
-        self.repository:GetCharacterMoney(normalized_to_character_id, function(is_target_success, target_money_row, target_error)
-            if not is_target_success then
+    return self.repository:TransferMoneyAtomic(
+        normalized_from_character_id,
+        normalized_to_character_id,
+        normalized_wallet,
+        normalized_amount,
+        normalized_reason,
+        outgoing_metadata,
+        incoming_metadata,
+        function(is_transfer_success, transfer_result, transfer_error)
+            if not is_transfer_success then
                 Console.Log(
-                    "[gr_economy][service] Money operation failed reason=%s character_id=%s wallet=%s amount=%s.",
-                    tostring(target_error),
+                    "[gr_economy][service] Transfer failed reason=%s from_character_id=%s to_character_id=%s wallet=%s amount=%s.",
+                    tostring(transfer_error or "database-error"),
+                    tostring(normalized_from_character_id),
                     tostring(normalized_to_character_id),
                     tostring(normalized_wallet),
                     tostring(normalized_amount)
                 )
-                callback(false, nil, target_error)
+                callback(false, nil, "database-error")
                 return
             end
 
-            if target_money_row == nil then
-                callback(false, nil, "target-character-not-found")
-                return
-            end
-
-            local source_balance = normalized_wallet == "cash" and (source_money_row.cash or 0) or (source_money_row.bank or 0)
-
-            if source_balance < normalized_amount then
+            if transfer_result == nil then
                 Console.Log(
-                    "[gr_economy][service] Money operation failed reason=%s character_id=%s wallet=%s amount=%s.",
+                    "[gr_economy][service] Transfer failed reason=%s from_character_id=%s to_character_id=%s wallet=%s amount=%s.",
+                    "transfer-result-missing",
+                    tostring(normalized_from_character_id),
+                    tostring(normalized_to_character_id),
+                    tostring(normalized_wallet),
+                    tostring(normalized_amount)
+                )
+                callback(false, nil, "database-error")
+                return
+            end
+
+            if transfer_result.source_exists ~= true then
+                callback(false, nil, "invalid-source-character")
+                return
+            end
+
+            if transfer_result.target_exists ~= true then
+                callback(false, nil, "invalid-target-character")
+                return
+            end
+
+            if transfer_result.source_debited ~= true then
+                Console.Log(
+                    "[gr_economy][service] Transfer failed reason=%s from_character_id=%s to_character_id=%s wallet=%s amount=%s.",
                     "insufficient-funds",
                     tostring(normalized_from_character_id),
+                    tostring(normalized_to_character_id),
                     tostring(normalized_wallet),
                     tostring(normalized_amount)
                 )
@@ -411,103 +436,41 @@ function EconomyService:TransferMoney(from_character_id, to_character_id, wallet
                 return
             end
 
-            self.repository:UpdateWallet(normalized_from_character_id, normalized_wallet, -normalized_amount, function(is_debit_success, debited_row, debit_error)
-                if not is_debit_success or debited_row == nil then
-                    Console.Log(
-                        "[gr_economy][service] Money operation failed reason=%s character_id=%s wallet=%s amount=%s.",
-                        tostring(debit_error or "wallet-update-failed"),
-                        tostring(normalized_from_character_id),
-                        tostring(normalized_wallet),
-                        tostring(normalized_amount)
-                    )
-                    callback(false, nil, debit_error or "wallet-update-failed")
-                    return
-                end
+            if transfer_result.target_credited ~= true
+                or transfer_result.outgoing_transaction == nil
+                or transfer_result.outgoing_transaction.id == nil
+                or transfer_result.incoming_transaction == nil
+                or transfer_result.incoming_transaction.id == nil
+            then
+                Console.Log(
+                    "[gr_economy][service] Transfer failed reason=%s from_character_id=%s to_character_id=%s wallet=%s amount=%s.",
+                    "transfer-incomplete",
+                    tostring(normalized_from_character_id),
+                    tostring(normalized_to_character_id),
+                    tostring(normalized_wallet),
+                    tostring(normalized_amount)
+                )
+                callback(false, nil, "transfer-incomplete")
+                return
+            end
 
-                self.repository:UpdateWallet(normalized_to_character_id, normalized_wallet, normalized_amount, function(is_credit_success, credited_row, credit_error)
-                    if not is_credit_success or credited_row == nil then
-                        Console.Log(
-                            "[gr_economy][service] Money operation failed reason=%s character_id=%s wallet=%s amount=%s.",
-                            tostring(credit_error or "wallet-update-failed"),
-                            tostring(normalized_to_character_id),
-                            tostring(normalized_wallet),
-                            tostring(normalized_amount)
-                        )
-                        callback(false, nil, credit_error or "wallet-update-failed")
-                        return
-                    end
+            Console.Log(
+                "[gr_economy][service] Money transferred from_character_id=%s to_character_id=%s wallet=%s amount=%s reason=%s.",
+                tostring(normalized_from_character_id),
+                tostring(normalized_to_character_id),
+                tostring(normalized_wallet),
+                tostring(normalized_amount),
+                tostring(normalized_reason)
+            )
 
-                    self.repository:InsertTransaction({
-                        character_id = normalized_from_character_id,
-                        target_character_id = normalized_to_character_id,
-                        amount = normalized_amount,
-                        currency = "credits",
-                        wallet = normalized_wallet,
-                        type = "transfer_out",
-                        reason = normalized_reason,
-                        metadata_json = {
-                            direction = "out",
-                            target_character_id = normalized_to_character_id,
-                        },
-                    }, function(is_out_success, outgoing_transaction, outgoing_error)
-                        if not is_out_success then
-                            Console.Log(
-                                "[gr_economy][service] Money operation failed reason=%s character_id=%s wallet=%s amount=%s.",
-                                tostring(outgoing_error or "transaction-insert-failed"),
-                                tostring(normalized_from_character_id),
-                                tostring(normalized_wallet),
-                                tostring(normalized_amount)
-                            )
-                            callback(false, nil, outgoing_error or "transaction-insert-failed")
-                            return
-                        end
-
-                        self.repository:InsertTransaction({
-                            character_id = normalized_to_character_id,
-                            target_character_id = normalized_from_character_id,
-                            amount = normalized_amount,
-                            currency = "credits",
-                            wallet = normalized_wallet,
-                            type = "transfer_in",
-                            reason = normalized_reason,
-                            metadata_json = {
-                                direction = "in",
-                                source_character_id = normalized_from_character_id,
-                            },
-                        }, function(is_in_success, incoming_transaction, incoming_error)
-                            if not is_in_success then
-                                Console.Log(
-                                    "[gr_economy][service] Money operation failed reason=%s character_id=%s wallet=%s amount=%s.",
-                                    tostring(incoming_error or "transaction-insert-failed"),
-                                    tostring(normalized_to_character_id),
-                                    tostring(normalized_wallet),
-                                    tostring(normalized_amount)
-                                )
-                                callback(false, nil, incoming_error or "transaction-insert-failed")
-                                return
-                            end
-
-                            Console.Log(
-                                "[gr_economy][service] Money transferred from_character_id=%s to_character_id=%s wallet=%s amount=%s reason=%s.",
-                                tostring(normalized_from_character_id),
-                                tostring(normalized_to_character_id),
-                                tostring(normalized_wallet),
-                                tostring(normalized_amount),
-                                tostring(normalized_reason)
-                            )
-
-                            callback(true, {
-                                from_balance = debited_row,
-                                to_balance = credited_row,
-                                outgoing_transaction = outgoing_transaction,
-                                incoming_transaction = incoming_transaction,
-                            }, nil)
-                        end)
-                    end)
-                end)
-            end)
-        end)
-    end)
+            callback(true, {
+                from_balance = transfer_result.from_balance,
+                to_balance = transfer_result.to_balance,
+                outgoing_transaction = transfer_result.outgoing_transaction,
+                incoming_transaction = transfer_result.incoming_transaction,
+            }, nil)
+        end
+    )
 end
 
 function EconomyService:ListTransactions(character_id, limit, callback)

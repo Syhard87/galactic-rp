@@ -450,22 +450,22 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 normalized_reason,
                 function(is_success, result, error)
                     if not is_success then
-                        if error == "target-character-not-found" or error == "character-id-required" then
+                        if error == "invalid-source-character" or error == "invalid-target-character" or error == "character-id-required" then
                             Chat.SendMessage(player, "Paiement impossible : cible invalide.")
                             return
                         end
 
-                        if error == "transfer-same-character" then
+                        if error == "same-character" or error == "transfer-same-character" then
                             Chat.SendMessage(player, "Paiement impossible : vous ne pouvez pas vous payer vous-meme.")
                             return
                         end
 
-                        if error == "wallet-invalid" then
+                        if error == "invalid-wallet" or error == "wallet-invalid" then
                             Chat.SendMessage(player, "Paiement impossible : wallet invalide.")
                             return
                         end
 
-                        if error == "amount-invalid" then
+                        if error == "invalid-amount" or error == "amount-invalid" then
                             Chat.SendMessage(player, "Paiement impossible : montant invalide.")
                             return
                         end
@@ -475,7 +475,15 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                             return
                         end
 
-                        Chat.SendMessage(player, "Paiement impossible : economie indisponible.")
+                        if error == "transfer-incomplete"
+                            or error == "transaction-log-failed"
+                            or error == "rollback-failed"
+                        then
+                            Chat.SendMessage(player, "Paiement impossible : transfert incomplet.")
+                            return
+                        end
+
+                        Chat.SendMessage(player, "Paiement impossible : erreur economie.")
                         return
                     end
 
