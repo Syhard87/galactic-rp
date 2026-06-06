@@ -42,6 +42,9 @@ local SELECT_SHOP_ITEMS_QUERY = [[
         shop_items.price,
         shop_items.sell_price,
         shop_items.is_sellable AS shop_item_is_sellable,
+        shop_items.stock_enabled AS shop_item_stock_enabled,
+        shop_items.stock_quantity,
+        shop_items.max_stock,
         shop_items.is_active AS shop_item_is_active,
         items.name AS item_name,
         items.description AS item_description,
@@ -76,6 +79,9 @@ local SELECT_SHOP_ITEM_QUERY = [[
         shop_items.price,
         shop_items.sell_price,
         shop_items.is_sellable AS shop_item_is_sellable,
+        shop_items.stock_enabled AS shop_item_stock_enabled,
+        shop_items.stock_quantity,
+        shop_items.max_stock,
         shop_items.is_active AS shop_item_is_active,
         items.name AS item_name,
         items.description AS item_description,
@@ -240,6 +246,8 @@ local function normalize_shop_item_row(row)
     local wallet = nil
     local price = nil
     local sell_price = nil
+    local stock_quantity = nil
+    local max_stock = nil
 
     if type(row) ~= "table" then
         return nil
@@ -252,6 +260,8 @@ local function normalize_shop_item_row(row)
     wallet = normalize_wallet(row.wallet)
     price = normalize_positive_integer(row.price)
     sell_price = normalize_positive_integer(row.sell_price)
+    stock_quantity = normalize_number(row.stock_quantity)
+    max_stock = normalize_number(row.max_stock)
 
     if shop_id == nil or shop_key == nil then
         return nil
@@ -277,6 +287,9 @@ local function normalize_shop_item_row(row)
         price = price,
         sell_price = sell_price,
         is_sellable = normalize_boolean(row.shop_item_is_sellable, false),
+        stock_enabled = normalize_boolean(row.shop_item_stock_enabled, false),
+        stock_quantity = stock_quantity ~= nil and math.floor(stock_quantity) or nil,
+        max_stock = max_stock ~= nil and math.floor(max_stock) or nil,
         is_active = normalize_boolean(row.shop_item_is_active, false),
         item_name = trim_string(row.item_name),
         item_description = trim_string(row.item_description),
@@ -285,6 +298,82 @@ local function normalize_shop_item_row(row)
         is_illegal = normalize_boolean(row.is_illegal, false),
     }
 end
+
+local DECREASE_SHOP_ITEM_STOCK_QUERY = [[
+    UPDATE shop_items
+    SET
+        stock_quantity = stock_quantity - :0,
+        updated_at = NOW()
+    FROM shops
+    WHERE
+        shops.id = shop_items.shop_id
+        AND shops.key = :1
+        AND shop_items.item_key = :2
+        AND shop_items.stock_enabled = TRUE
+        AND shop_items.stock_quantity IS NOT NULL
+        AND shop_items.stock_quantity >= :0
+    RETURNING
+        shops.id AS shop_id,
+        shops.key AS shop_key,
+        shops.name AS shop_name,
+        shops.description AS shop_description,
+        shops.shop_type,
+        shops.position_x,
+        shops.position_y,
+        shops.position_z,
+        shops.radius,
+        shops.requires_proximity,
+        shops.is_active AS shop_is_active,
+        shop_items.id AS shop_item_id,
+        shop_items.item_key,
+        shop_items.wallet,
+        shop_items.price,
+        shop_items.sell_price,
+        shop_items.is_sellable AS shop_item_is_sellable,
+        shop_items.stock_enabled AS shop_item_stock_enabled,
+        shop_items.stock_quantity,
+        shop_items.max_stock,
+        shop_items.is_active AS shop_item_is_active
+]]
+
+local INCREASE_SHOP_ITEM_STOCK_QUERY = [[
+    UPDATE shop_items
+    SET
+        stock_quantity = CASE
+            WHEN max_stock IS NULL THEN stock_quantity + :0
+            ELSE LEAST(max_stock, stock_quantity + :0)
+        END,
+        updated_at = NOW()
+    FROM shops
+    WHERE
+        shops.id = shop_items.shop_id
+        AND shops.key = :1
+        AND shop_items.item_key = :2
+        AND shop_items.stock_enabled = TRUE
+        AND shop_items.stock_quantity IS NOT NULL
+    RETURNING
+        shops.id AS shop_id,
+        shops.key AS shop_key,
+        shops.name AS shop_name,
+        shops.description AS shop_description,
+        shops.shop_type,
+        shops.position_x,
+        shops.position_y,
+        shops.position_z,
+        shops.radius,
+        shops.requires_proximity,
+        shops.is_active AS shop_is_active,
+        shop_items.id AS shop_item_id,
+        shop_items.item_key,
+        shop_items.wallet,
+        shop_items.price,
+        shop_items.sell_price,
+        shop_items.is_sellable AS shop_item_is_sellable,
+        shop_items.stock_enabled AS shop_item_stock_enabled,
+        shop_items.stock_quantity,
+        shop_items.max_stock,
+        shop_items.is_active AS shop_item_is_active
+]]
 
 local function normalize_rows(rows, normalizer)
     local normalized_rows = {}
@@ -435,6 +524,143 @@ end
 
 function ShopRepository:GetSellableShopItem(shop_key, item_key, callback)
     return self:GetShopItem(shop_key, item_key, callback)
+end
+
+function ShopRepository:DecreaseShopItemStock(shop_key, item_key, quantity, callback)
+    local normalized_shop_key = normalize_shop_key(shop_key)
+    local normalized_item_key = normalize_item_key(item_key)
+    local normalized_quantity = normalize_positive_integer(quantity)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_shop_key == nil then
+        callback(false, nil, "shop-key-required")
+        return true
+    end
+
+    if normalized_item_key == nil then
+        callback(false, nil, "item-key-required")
+        return true
+    end
+
+    if normalized_quantity == nil then
+        callback(false, nil, "quantity-required")
+        return true
+    end
+
+    return self:GetShopItem(normalized_shop_key, normalized_item_key, function(is_item_success, shop_item_row, item_error)
+        if not is_item_success then
+            callback(false, nil, item_error)
+            return
+        end
+
+        if shop_item_row == nil then
+            callback(false, nil, "shop-item-not-found")
+            return
+        end
+
+        if shop_item_row.stock_enabled ~= true then
+            callback(true, shop_item_row, nil)
+            return
+        end
+
+        if type(shop_item_row.stock_quantity) ~= "number" or shop_item_row.stock_quantity < 0 then
+            callback(false, nil, "stock-invalid")
+            return
+        end
+
+        if shop_item_row.stock_quantity < normalized_quantity then
+            callback(false, nil, "stock-insufficient")
+            return
+        end
+
+        self:Connect(function(is_connected, database_or_error, error)
+            if not is_connected then
+                callback(false, nil, error)
+                return
+            end
+
+            database_or_error:SelectAsync(DECREASE_SHOP_ITEM_STOCK_QUERY, function(rows, select_error)
+                local normalized_rows = nil
+
+                if select_error ~= nil then
+                    callback(false, nil, select_error)
+                    return
+                end
+
+                normalized_rows = normalize_rows(rows, normalize_shop_item_row)
+                callback(true, normalized_rows[1], nil)
+            end, normalized_quantity, normalized_shop_key, normalized_item_key)
+        end, "shop-item-stock-decrease")
+    end)
+end
+
+function ShopRepository:IncreaseShopItemStock(shop_key, item_key, quantity, callback)
+    local normalized_shop_key = normalize_shop_key(shop_key)
+    local normalized_item_key = normalize_item_key(item_key)
+    local normalized_quantity = normalize_positive_integer(quantity)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_shop_key == nil then
+        callback(false, nil, "shop-key-required")
+        return true
+    end
+
+    if normalized_item_key == nil then
+        callback(false, nil, "item-key-required")
+        return true
+    end
+
+    if normalized_quantity == nil then
+        callback(false, nil, "quantity-required")
+        return true
+    end
+
+    return self:GetShopItem(normalized_shop_key, normalized_item_key, function(is_item_success, shop_item_row, item_error)
+        if not is_item_success then
+            callback(false, nil, item_error)
+            return
+        end
+
+        if shop_item_row == nil then
+            callback(false, nil, "shop-item-not-found")
+            return
+        end
+
+        if shop_item_row.stock_enabled ~= true then
+            callback(false, nil, "stock-disabled")
+            return
+        end
+
+        if type(shop_item_row.stock_quantity) ~= "number" or shop_item_row.stock_quantity < 0 then
+            callback(false, nil, "stock-invalid")
+            return
+        end
+
+        self:Connect(function(is_connected, database_or_error, error)
+            if not is_connected then
+                callback(false, nil, error)
+                return
+            end
+
+            database_or_error:SelectAsync(INCREASE_SHOP_ITEM_STOCK_QUERY, function(rows, select_error)
+                local normalized_rows = nil
+
+                if select_error ~= nil then
+                    callback(false, nil, select_error)
+                    return
+                end
+
+                normalized_rows = normalize_rows(rows, normalize_shop_item_row)
+                callback(true, normalized_rows[1], nil)
+            end, normalized_quantity, normalized_shop_key, normalized_item_key)
+        end, "shop-item-stock-increase")
+    end)
 end
 
 GRShops.Server.ShopRepositoryClass = ShopRepository

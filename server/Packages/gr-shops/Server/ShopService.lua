@@ -114,6 +114,32 @@ local function callback_repository_missing(callback)
     return true
 end
 
+local function validate_shop_item_stock(shop_item_row, quantity)
+    if type(shop_item_row) ~= "table" then
+        return false, "shop-item-not-found"
+    end
+
+    if shop_item_row.stock_enabled ~= true then
+        return true, nil
+    end
+
+    if type(shop_item_row.stock_quantity) ~= "number" or shop_item_row.stock_quantity < 0 then
+        return false, "stock-invalid"
+    end
+
+    if type(shop_item_row.max_stock) == "number" and shop_item_row.max_stock >= 0 then
+        if shop_item_row.stock_quantity > shop_item_row.max_stock then
+            return false, "stock-invalid"
+        end
+    end
+
+    if shop_item_row.stock_quantity < quantity then
+        return false, "stock-insufficient"
+    end
+
+    return true, nil
+end
+
 function ShopService.Create(repository)
     local self = setmetatable({}, ShopService)
 
@@ -257,6 +283,8 @@ function ShopService:BuyItem(player, character_id, shop_key, item_key, quantity,
         local total_price = nil
         local reason = nil
         local metadata = nil
+        local is_stock_valid = false
+        local stock_error = nil
 
         if not is_success then
             callback(false, nil, "database-error")
@@ -314,6 +342,13 @@ function ShopService:BuyItem(player, character_id, shop_key, item_key, quantity,
             return
         end
 
+        is_stock_valid, stock_error = validate_shop_item_stock(shop_item_row, normalized_quantity)
+
+        if not is_stock_valid then
+            callback(false, nil, stock_error)
+            return
+        end
+
         total_price = (shop_item_row.price or 0) * normalized_quantity
 
         if total_price <= 0 then
@@ -345,6 +380,49 @@ function ShopService:BuyItem(player, character_id, shop_key, item_key, quantity,
             reason,
             metadata,
             function(is_payment_success, payment_result, payment_error)
+                local function rollback_money(stock_result, rollback_reason, final_error)
+                    GREconomyBridge.AddMoney(
+                        normalized_character_id,
+                        shop_item_row.wallet,
+                        total_price,
+                        "shop-rollback:" .. reason,
+                        {
+                            shop_key = normalized_shop_key,
+                            item_key = normalized_item_key,
+                            quantity = normalized_quantity,
+                            rollback_reason = rollback_reason,
+                        },
+                        function(is_rollback_success, rollback_result, rollback_error)
+                            if is_rollback_success then
+                                callback(false, {
+                                    shop_item = stock_result or shop_item_row,
+                                    total_price = total_price,
+                                    payment = payment_result,
+                                    rollback = rollback_result,
+                                }, final_error)
+                                return
+                            end
+
+                            Console.Log(
+                                "[gr_shops][service] Shop rollback failed character_id=%s shop_key=%s item_key=%s quantity=%s total_price=%s reason=%s.",
+                                tostring(normalized_character_id),
+                                tostring(normalized_shop_key),
+                                tostring(normalized_item_key),
+                                tostring(normalized_quantity),
+                                tostring(total_price),
+                                tostring(rollback_error or rollback_reason or "rollback-failed")
+                            )
+
+                            callback(false, {
+                                shop_item = stock_result or shop_item_row,
+                                total_price = total_price,
+                                payment = payment_result,
+                                rollback_error = rollback_error,
+                            }, "rollback-failed")
+                        end
+                    )
+                end
+
                 if not is_payment_success then
                     callback(false, {
                         shop_item = shop_item_row,
@@ -353,86 +431,77 @@ function ShopService:BuyItem(player, character_id, shop_key, item_key, quantity,
                     return
                 end
 
-                GRInventoryBridge.AddItem(
-                    normalized_character_id,
-                    normalized_item_key,
-                    normalized_quantity,
-                    nil,
-                    function(is_inventory_success, inventory_result, inventory_error)
-                        if is_inventory_success then
-                            Console.Log(
-                                "[gr_shops][service] Shop purchase completed character_id=%s shop_key=%s item_key=%s quantity=%s total_price=%s wallet=%s.",
-                                tostring(normalized_character_id),
-                                tostring(normalized_shop_key),
-                                tostring(normalized_item_key),
-                                tostring(normalized_quantity),
-                                tostring(total_price),
-                                tostring(shop_item_row.wallet)
-                            )
-
-                            callback(true, {
-                                shop_item = shop_item_row,
-                                quantity = normalized_quantity,
-                                total_price = total_price,
-                                payment = payment_result,
-                                inventory = inventory_result,
-                            }, nil)
-                            return
-                        end
-
-                        GREconomyBridge.AddMoney(
-                            normalized_character_id,
-                            shop_item_row.wallet,
-                            total_price,
-                            "shop-rollback:" .. reason,
-                            {
-                                shop_key = normalized_shop_key,
-                                item_key = normalized_item_key,
-                                quantity = normalized_quantity,
-                                rollback_reason = "inventory-add-failed",
-                            },
-                            function(is_rollback_success, rollback_result, rollback_error)
-                                if is_rollback_success then
-                                    Console.Log(
-                                        "[gr_shops][service] Shop rollback completed character_id=%s shop_key=%s item_key=%s quantity=%s total_price=%s.",
-                                        tostring(normalized_character_id),
-                                        tostring(normalized_shop_key),
-                                        tostring(normalized_item_key),
-                                        tostring(normalized_quantity),
-                                        tostring(total_price)
-                                    )
-
-                                    callback(false, {
-                                        shop_item = shop_item_row,
-                                        total_price = total_price,
-                                        payment = payment_result,
-                                        inventory_error = inventory_error,
-                                        rollback = rollback_result,
-                                    }, "inventory-add-failed")
-                                    return
-                                end
-
+                local function add_inventory_after_stock(stock_result)
+                    GRInventoryBridge.AddItem(
+                        normalized_character_id,
+                        normalized_item_key,
+                        normalized_quantity,
+                        nil,
+                        function(is_inventory_success, inventory_result, inventory_error)
+                            if is_inventory_success then
                                 Console.Log(
-                                    "[gr_shops][service] Shop rollback failed character_id=%s shop_key=%s item_key=%s quantity=%s total_price=%s reason=%s.",
+                                    "[gr_shops][service] Shop purchase completed character_id=%s shop_key=%s item_key=%s quantity=%s total_price=%s wallet=%s.",
                                     tostring(normalized_character_id),
                                     tostring(normalized_shop_key),
                                     tostring(normalized_item_key),
                                     tostring(normalized_quantity),
                                     tostring(total_price),
-                                    tostring(rollback_error or inventory_error or "rollback-failed")
+                                    tostring(shop_item_row.wallet)
                                 )
 
-                                callback(false, {
-                                    shop_item = shop_item_row,
+                                callback(true, {
+                                    shop_item = stock_result or shop_item_row,
+                                    quantity = normalized_quantity,
                                     total_price = total_price,
                                     payment = payment_result,
-                                    inventory_error = inventory_error,
-                                    rollback_error = rollback_error,
-                                }, "rollback-failed")
+                                    inventory = inventory_result,
+                                }, nil)
+                                return
                             end
-                        )
+
+                            local function restore_stock_then_money()
+                                if shop_item_row.stock_enabled ~= true then
+                                    rollback_money(stock_result, "inventory-add-failed", "inventory-add-failed")
+                                    return
+                                end
+
+                                self.repository:IncreaseShopItemStock(normalized_shop_key, normalized_item_key, normalized_quantity, function(is_restore_success, restored_stock_row, restore_error)
+                                    if not is_restore_success or restored_stock_row == nil then
+                                        Console.Log(
+                                            "[gr_shops][service] Shop stock restore failed character_id=%s shop_key=%s item_key=%s quantity=%s total_price=%s reason=%s.",
+                                            tostring(normalized_character_id),
+                                            tostring(normalized_shop_key),
+                                            tostring(normalized_item_key),
+                                            tostring(normalized_quantity),
+                                            tostring(total_price),
+                                            tostring(restore_error or "stock-restore-failed")
+                                        )
+                                        rollback_money(stock_result, "inventory-add-failed", "rollback-failed")
+                                        return
+                                    end
+
+                                    rollback_money(restored_stock_row, "inventory-add-failed", "inventory-add-failed")
+                                end)
+                            end
+
+                            restore_stock_then_money()
+                        end
+                    )
+                end
+
+                if shop_item_row.stock_enabled ~= true then
+                    add_inventory_after_stock(shop_item_row)
+                    return
+                end
+
+                self.repository:DecreaseShopItemStock(normalized_shop_key, normalized_item_key, normalized_quantity, function(is_stock_update_success, stock_result, stock_update_error)
+                    if is_stock_update_success and stock_result ~= nil then
+                        add_inventory_after_stock(stock_result)
+                        return
                     end
-                )
+
+                    rollback_money(shop_item_row, stock_update_error or "stock-update-failed", "stock-update-failed")
+                end)
             end
         )
     end)
@@ -648,6 +717,66 @@ function ShopService:SellItem(player, character_id, shop_key, item_key, quantity
                 )
             end
         )
+    end)
+end
+
+function ShopService:RestockShopItem(shop_key, item_key, quantity, callback)
+    local normalized_shop_key = normalize_shop_key(shop_key)
+    local normalized_item_key = normalize_item_key(item_key)
+    local normalized_quantity = normalize_positive_integer(quantity)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_shop_key == nil then
+        callback(false, nil, "shop-key-required")
+        return true
+    end
+
+    if normalized_item_key == nil then
+        callback(false, nil, "item-key-required")
+        return true
+    end
+
+    if normalized_quantity == nil or normalized_quantity > 1000 then
+        callback(false, nil, "quantity-invalid")
+        return true
+    end
+
+    return self.repository:GetShopItem(normalized_shop_key, normalized_item_key, function(is_success, shop_item_row, error)
+        if not is_success then
+            callback(false, nil, "database-error")
+            return
+        end
+
+        if shop_item_row == nil then
+            callback(false, nil, "shop-item-not-found")
+            return
+        end
+
+        if shop_item_row.stock_enabled ~= true then
+            callback(false, nil, "stock-disabled")
+            return
+        end
+
+        if type(shop_item_row.stock_quantity) ~= "number" or shop_item_row.stock_quantity < 0 then
+            callback(false, nil, "stock-invalid")
+            return
+        end
+
+        return self.repository:IncreaseShopItemStock(normalized_shop_key, normalized_item_key, normalized_quantity, function(is_restock_success, updated_row, restock_error)
+            if not is_restock_success or updated_row == nil then
+                callback(false, nil, restock_error or "stock-update-failed")
+                return
+            end
+
+            callback(true, updated_row, nil)
+        end)
     end)
 end
 

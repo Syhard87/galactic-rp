@@ -237,13 +237,24 @@ local function build_shop_line(shop_row)
 end
 
 local function build_shop_item_line(shop_item_row)
+    local stock_text = "illimite"
+
+    if shop_item_row.stock_enabled == true then
+        stock_text = string.format(
+            "%s/%s",
+            tostring(shop_item_row.stock_quantity),
+            tostring(shop_item_row.max_stock)
+        )
+    end
+
     return string.format(
-        "- %s price=%s sell_price=%s wallet=%s sellable=%s active=%s",
+        "- %s price=%s sell_price=%s wallet=%s sellable=%s stock=%s active=%s",
         tostring(shop_item_row.item_key),
         tostring(shop_item_row.price),
         tostring(shop_item_row.sell_price),
         tostring(shop_item_row.wallet),
         tostring(shop_item_row.is_sellable),
+        tostring(stock_text),
         tostring(shop_item_row.is_active)
     )
 end
@@ -291,6 +302,14 @@ GRShopsBridge.SellItem = function(player, character_id, shop_key, item_key, quan
     return GRShops.Server.Service:SellItem(player, character_id, shop_key, item_key, quantity, callback)
 end
 
+GRShopsBridge.RestockShopItem = function(shop_key, item_key, quantity, callback)
+    if GRShops.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRShops.Server.Service:RestockShopItem(shop_key, item_key, quantity, callback)
+end
+
 Package.Export("GRShopsBridge", GRShopsBridge)
 
 if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.SendMessage) == "function" then
@@ -309,6 +328,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "shopitems"
             and command_name ~= "buy"
             and command_name ~= "sell"
+            and command_name ~= "restockshop"
         then
             return
         end
@@ -384,6 +404,56 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 for _, shop_item_row in ipairs(shop_item_rows) do
                     Chat.SendMessage(player, build_shop_item_line(shop_item_row))
                 end
+            end)
+
+            return false
+        end
+
+        if command_name == "restockshop" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /restockshop <shop_key> <item_key> <quantity>")
+                return false
+            end
+
+            local restock_shop_key, restock_item_key, restock_quantity_text = payload:match("^(%S+)%s+(%S+)%s+(%S+)$")
+            local restock_quantity = normalize_positive_integer(restock_quantity_text)
+
+            if trim_string(restock_shop_key) == nil or trim_string(restock_item_key) == nil or restock_quantity_text == nil then
+                Chat.SendMessage(player, "Usage : /restockshop <shop_key> <item_key> <quantity>")
+                return false
+            end
+
+            if restock_quantity == nil or restock_quantity > 1000 then
+                Chat.SendMessage(player, "Restock impossible : quantite invalide.")
+                return false
+            end
+
+            GRShops.Server.Service:RestockShopItem(restock_shop_key, restock_item_key, restock_quantity, function(is_success, result, error)
+                if not is_success then
+                    if error == "stock-disabled" then
+                        Chat.SendMessage(player, "Restock impossible : stock desactive pour cet objet.")
+                        return
+                    end
+
+                    if error == "quantity-invalid" then
+                        Chat.SendMessage(player, "Restock impossible : quantite invalide.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Restock impossible : erreur boutique.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Stock mis a jour : %s %s stock=%s/%s.",
+                        tostring(restock_shop_key),
+                        tostring(restock_item_key),
+                        tostring(result.stock_quantity),
+                        tostring(result.max_stock)
+                    )
+                )
             end)
 
             return false
@@ -523,6 +593,11 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 if error == "quantity-invalid" then
                     Chat.SendMessage(player, "Quantite invalide.")
+                    return
+                end
+
+                if error == "stock-insufficient" or error == "stock-update-failed" or error == "stock-invalid" then
+                    Chat.SendMessage(player, "Achat impossible : stock insuffisant.")
                     return
                 end
 

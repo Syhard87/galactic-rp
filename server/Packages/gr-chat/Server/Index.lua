@@ -26,6 +26,7 @@ local EXTERNAL_CHAT_COMMANDS = {
     shopitems = true,
     buy = true,
     sell = true,
+    restockshop = true,
     economybalance = true,
     economytransactions = true,
     economysalary = true,
