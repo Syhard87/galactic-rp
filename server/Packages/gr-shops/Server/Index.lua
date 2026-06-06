@@ -236,10 +236,12 @@ end
 
 local function build_shop_item_line(shop_item_row)
     return string.format(
-        "- %s price=%s wallet=%s active=%s",
+        "- %s price=%s sell_price=%s wallet=%s sellable=%s active=%s",
         tostring(shop_item_row.item_key),
         tostring(shop_item_row.price),
+        tostring(shop_item_row.sell_price),
         tostring(shop_item_row.wallet),
+        tostring(shop_item_row.is_sellable),
         tostring(shop_item_row.is_active)
     )
 end
@@ -279,6 +281,14 @@ GRShopsBridge.BuyItem = function(character_id, shop_key, item_key, quantity, cal
     return GRShops.Server.Service:BuyItem(character_id, shop_key, item_key, quantity, callback)
 end
 
+GRShopsBridge.SellItem = function(character_id, shop_key, item_key, quantity, callback)
+    if GRShops.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRShops.Server.Service:SellItem(character_id, shop_key, item_key, quantity, callback)
+end
+
 Package.Export("GRShopsBridge", GRShopsBridge)
 
 if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.SendMessage) == "function" then
@@ -296,6 +306,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         if command_name ~= "shops"
             and command_name ~= "shopitems"
             and command_name ~= "buy"
+            and command_name ~= "sell"
         then
             return
         end
@@ -384,7 +395,12 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         end
 
         if payload == nil then
-            Chat.SendMessage(player, "Usage : /buy <shop_key> <item_key> <quantity>")
+            if command_name == "buy" then
+                Chat.SendMessage(player, "Usage : /buy <shop_key> <item_key> <quantity>")
+                return false
+            end
+
+            Chat.SendMessage(player, "Usage : /sell <shop_key> <item_key> <quantity>")
             return false
         end
 
@@ -392,12 +408,82 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         local quantity = normalize_positive_integer(quantity_text)
 
         if trim_string(shop_key) == nil or trim_string(item_key) == nil or quantity_text == nil then
-            Chat.SendMessage(player, "Usage : /buy <shop_key> <item_key> <quantity>")
+            if command_name == "buy" then
+                Chat.SendMessage(player, "Usage : /buy <shop_key> <item_key> <quantity>")
+                return false
+            end
+
+            Chat.SendMessage(player, "Usage : /sell <shop_key> <item_key> <quantity>")
             return false
         end
 
         if quantity == nil then
             Chat.SendMessage(player, "Quantite invalide.")
+            return false
+        end
+
+        if command_name == "sell" then
+            GRShops.Server.Service:SellItem(active_character_id, shop_key, item_key, quantity, function(is_success, result, error)
+                if not is_success then
+                    if error == "shop-not-found" then
+                        Chat.SendMessage(player, "Boutique introuvable.")
+                        return
+                    end
+
+                    if error == "shop-inactive" then
+                        Chat.SendMessage(player, "Boutique inactive.")
+                        return
+                    end
+
+                    if error == "shop-item-not-found"
+                        or error == "shop-item-inactive"
+                        or error == "shop-item-not-sellable"
+                        or error == "sell-price-invalid"
+                    then
+                        Chat.SendMessage(player, "Objet non revendable dans cette boutique.")
+                        return
+                    end
+
+                    if error == "quantity-invalid" then
+                        Chat.SendMessage(player, "Quantite invalide.")
+                        return
+                    end
+
+                    if error == "inventory-item-quantity-insufficient" then
+                        Chat.SendMessage(player, "Inventaire insuffisant.")
+                        return
+                    end
+
+                    if error == "inventory-unavailable" then
+                        Chat.SendMessage(player, "Inventaire indisponible.")
+                        return
+                    end
+
+                    if error == "economy-unavailable" then
+                        Chat.SendMessage(player, "Economie indisponible.")
+                        return
+                    end
+
+                    if error == "economy-credit-failed" or error == "rollback-failed" then
+                        Chat.SendMessage(player, "Erreur lors de la vente.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Erreur lors de la vente.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Vente effectuee : %s x%s pour %s credits.",
+                        tostring(item_key),
+                        tostring(quantity),
+                        tostring(result and result.total_price or 0)
+                    )
+                )
+            end)
+
             return false
         end
 

@@ -30,6 +30,8 @@ local SELECT_SHOP_ITEMS_QUERY = [[
         shop_items.item_key,
         shop_items.wallet,
         shop_items.price,
+        shop_items.sell_price,
+        shop_items.is_sellable AS shop_item_is_sellable,
         shop_items.is_active AS shop_item_is_active,
         items.name AS item_name,
         items.description AS item_description,
@@ -57,6 +59,8 @@ local SELECT_SHOP_ITEM_QUERY = [[
         shop_items.item_key,
         shop_items.wallet,
         shop_items.price,
+        shop_items.sell_price,
+        shop_items.is_sellable AS shop_item_is_sellable,
         shop_items.is_active AS shop_item_is_active,
         items.name AS item_name,
         items.description AS item_description,
@@ -187,6 +191,7 @@ local function normalize_shop_item_row(row)
     local item_key = nil
     local wallet = nil
     local price = nil
+    local sell_price = nil
 
     if type(row) ~= "table" then
         return nil
@@ -198,6 +203,7 @@ local function normalize_shop_item_row(row)
     item_key = normalize_item_key(row.item_key)
     wallet = normalize_wallet(row.wallet)
     price = normalize_positive_integer(row.price)
+    sell_price = normalize_positive_integer(row.sell_price)
 
     if shop_id == nil or shop_key == nil then
         return nil
@@ -216,6 +222,8 @@ local function normalize_shop_item_row(row)
         item_key = item_key,
         wallet = wallet,
         price = price,
+        sell_price = sell_price,
+        is_sellable = normalize_boolean(row.shop_item_is_sellable, false),
         is_active = normalize_boolean(row.shop_item_is_active, false),
         item_name = trim_string(row.item_name),
         item_description = trim_string(row.item_description),
@@ -370,6 +378,10 @@ function ShopRepository:GetShopItem(shop_key, item_key, callback)
             callback(true, normalized_rows[1], nil)
         end, normalized_shop_key, normalized_item_key)
     end, "shop-item-get")
+end
+
+function ShopRepository:GetSellableShopItem(shop_key, item_key, callback)
+    return self:GetShopItem(shop_key, item_key, callback)
 end
 
 GRShops.Server.ShopRepositoryClass = ShopRepository
