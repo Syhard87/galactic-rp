@@ -316,6 +316,22 @@ GREconomyBridge.ListTransactions = function(character_id, limit, callback)
     return GREconomy.Server.Service:ListTransactions(character_id, limit, callback)
 end
 
+GREconomyBridge.ClaimSalary = function(character_id, callback)
+    if GREconomy.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GREconomy.Server.Service:ClaimSalary(character_id, callback)
+end
+
+GREconomyBridge.ListSalaryRules = function(callback)
+    if GREconomy.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GREconomy.Server.Service:ListSalaryRules(callback)
+end
+
 Package.Export("GREconomyBridge", GREconomyBridge)
 
 if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.SendMessage) == "function" then
@@ -335,6 +351,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "takemoney"
             and command_name ~= "transactions"
             and command_name ~= "pay"
+            and command_name ~= "claimsalary"
+            and command_name ~= "salaryrules"
         then
             return
         end
@@ -400,6 +418,97 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 for _, transaction_row in ipairs(transaction_rows) do
                     Chat.SendMessage(player, build_transaction_line(transaction_row))
                 end
+            end)
+
+            return false
+        end
+
+        if command_name == "salaryrules" then
+            GREconomy.Server.Service:ListSalaryRules(function(is_success, salary_rules, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Salaire indisponible.")
+                    return
+                end
+
+                if type(salary_rules) ~= "table" or #salary_rules == 0 then
+                    Chat.SendMessage(player, "Regles de salaire :")
+                    Chat.SendMessage(player, "- aucune")
+                    return
+                end
+
+                Chat.SendMessage(player, "Regles de salaire :")
+
+                for _, salary_rule in ipairs(salary_rules) do
+                    Chat.SendMessage(
+                        player,
+                        string.format(
+                            "- %s amount=%s wallet=%s cooldown=%ss active=%s",
+                            tostring(salary_rule.key),
+                            tostring(salary_rule.amount),
+                            tostring(salary_rule.wallet),
+                            tostring(salary_rule.cooldown_seconds),
+                            tostring(salary_rule.is_active)
+                        )
+                    )
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "claimsalary" then
+            GREconomy.Server.Service:ClaimSalary(active_character_id, function(is_success, result, error)
+                if not is_success then
+                    if error == "character-not-found" then
+                        Chat.SendMessage(player, "Personnage actif introuvable.")
+                        return
+                    end
+
+                    if error == "salary-rule-not-found" then
+                        Chat.SendMessage(player, "Aucune regle de salaire pour votre faction.")
+                        return
+                    end
+
+                    if error == "salary-on-cooldown" then
+                        Chat.SendMessage(
+                            player,
+                            string.format(
+                                "Salaire indisponible : cooldown restant %ss.",
+                                tostring(result and result.remaining_seconds or 0)
+                            )
+                        )
+                        return
+                    end
+
+                    if error == "payment-failed" then
+                        Chat.SendMessage(player, "Erreur lors du versement du salaire.")
+                        return
+                    end
+
+                    if error == "claim-update-failed" or error == "rollback-failed" then
+                        Chat.SendMessage(player, "Erreur lors du versement du salaire.")
+                        return
+                    end
+
+                    if error == "database-error" then
+                        Chat.SendMessage(player, "Economie indisponible.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Salaire indisponible.")
+                    return
+                end
+
+                local salary_rule = result and result.salary_rule or nil
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Salaire verse : %s %s.",
+                        tostring(salary_rule and salary_rule.amount or 0),
+                        tostring(salary_rule and salary_rule.wallet or "bank")
+                    )
+                )
             end)
 
             return false

@@ -103,6 +103,112 @@ local SELECT_TRANSACTIONS_QUERY = [[
     LIMIT :2
 ]]
 
+local SELECT_CHARACTER_SALARY_AFFILIATION_QUERY = [[
+    SELECT
+        characters.id,
+        characters.faction_id,
+        characters.rank_id,
+        factions.type AS faction_key
+    FROM characters
+    LEFT JOIN factions
+        ON factions.id = characters.faction_id
+    WHERE characters.id = :0
+    LIMIT 1
+]]
+
+local SELECT_SALARY_RULE_FOR_CHARACTER_QUERY = [[
+    SELECT
+        id,
+        key,
+        label,
+        faction_id,
+        faction_key,
+        rank_id,
+        wallet,
+        amount,
+        cooldown_seconds,
+        is_active,
+        created_at,
+        updated_at
+    FROM economy_salary_rules
+    WHERE is_active = TRUE
+        AND (
+            (faction_id IS NOT NULL AND faction_id = NULLIF(:0, 0))
+            OR (
+                faction_id IS NULL
+                AND faction_key IS NOT NULL
+                AND faction_key = NULLIF(:1, '')
+            )
+        )
+        AND (rank_id IS NULL OR rank_id = NULLIF(:2, 0))
+    ORDER BY
+        CASE WHEN rank_id = NULLIF(:3, 0) THEN 0 ELSE 1 END,
+        CASE WHEN faction_id IS NOT NULL THEN 0 ELSE 1 END,
+        id ASC
+    LIMIT 1
+]]
+
+local SELECT_SALARY_RULES_QUERY = [[
+    SELECT
+        id,
+        key,
+        label,
+        faction_id,
+        faction_key,
+        rank_id,
+        wallet,
+        amount,
+        cooldown_seconds,
+        is_active,
+        created_at,
+        updated_at
+    FROM economy_salary_rules
+    ORDER BY is_active DESC, key ASC, id ASC
+]]
+
+local SELECT_SALARY_CLAIM_QUERY = [[
+    SELECT
+        character_id,
+        salary_rule_id,
+        last_claimed_at,
+        EXTRACT(EPOCH FROM last_claimed_at) AS last_claimed_epoch,
+        claim_count,
+        updated_at
+    FROM character_salary_claims
+    WHERE character_id = :0
+        AND salary_rule_id = :1
+    LIMIT 1
+]]
+
+local UPSERT_SALARY_CLAIM_QUERY = [[
+    INSERT INTO character_salary_claims (
+        character_id,
+        salary_rule_id,
+        last_claimed_at,
+        claim_count,
+        updated_at
+    )
+    VALUES (
+        :0,
+        :1,
+        NOW(),
+        1,
+        NOW()
+    )
+    ON CONFLICT (character_id, salary_rule_id) DO UPDATE
+    SET
+        last_claimed_at = NOW(),
+        claim_count = character_salary_claims.claim_count + 1,
+        updated_at = NOW()
+    RETURNING
+        character_id,
+        salary_rule_id,
+        last_claimed_at,
+        EXTRACT(EPOCH FROM last_claimed_at) AS last_claimed_epoch,
+        claim_count,
+        updated_at
+]]
+
 local ATOMIC_TRANSFER_CASH_QUERY = [[
     WITH source_row AS (
         SELECT
@@ -529,6 +635,81 @@ local function normalize_transaction_row(row)
     }
 end
 
+local function normalize_salary_affiliation_row(row)
+    local character_id = nil
+
+    if type(row) ~= "table" then
+        return nil
+    end
+
+    character_id = normalize_positive_integer(row.id)
+
+    if character_id == nil then
+        return nil
+    end
+
+    return {
+        id = character_id,
+        faction_id = normalize_positive_integer(row.faction_id),
+        rank_id = normalize_positive_integer(row.rank_id),
+        faction_key = trim_string(row.faction_key),
+    }
+end
+
+local function normalize_salary_rule_row(row)
+    local salary_rule_id = nil
+
+    if type(row) ~= "table" then
+        return nil
+    end
+
+    salary_rule_id = normalize_positive_integer(row.id)
+
+    if salary_rule_id == nil then
+        return nil
+    end
+
+    return {
+        id = salary_rule_id,
+        key = trim_string(row.key),
+        label = trim_string(row.label),
+        faction_id = normalize_positive_integer(row.faction_id),
+        faction_key = trim_string(row.faction_key),
+        rank_id = normalize_positive_integer(row.rank_id),
+        wallet = normalize_wallet(row.wallet),
+        amount = normalize_positive_integer(row.amount),
+        cooldown_seconds = normalize_positive_integer(row.cooldown_seconds),
+        is_active = normalize_boolean(row.is_active, false),
+        created_at = row.created_at,
+        updated_at = row.updated_at,
+    }
+end
+
+local function normalize_salary_claim_row(row)
+    local character_id = nil
+    local salary_rule_id = nil
+
+    if type(row) ~= "table" then
+        return nil
+    end
+
+    character_id = normalize_positive_integer(row.character_id)
+    salary_rule_id = normalize_positive_integer(row.salary_rule_id)
+
+    if character_id == nil or salary_rule_id == nil then
+        return nil
+    end
+
+    return {
+        character_id = character_id,
+        salary_rule_id = salary_rule_id,
+        last_claimed_at = row.last_claimed_at,
+        last_claimed_epoch = tonumber(row.last_claimed_epoch) or 0,
+        claim_count = normalize_non_negative_integer(row.claim_count, 0),
+        updated_at = row.updated_at,
+    }
+end
+
 local function normalize_rows(rows, normalizer)
     local normalized_rows = {}
 
@@ -833,6 +1014,151 @@ function EconomyRepository:ListTransactions(character_id, limit, callback)
             callback(true, normalize_rows(rows, normalize_transaction_row), nil)
         end, normalized_character_id, normalized_character_id, normalized_limit)
     end, "economy-list-transactions")
+end
+
+function EconomyRepository:GetSalaryRuleForCharacter(character_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_CHARACTER_SALARY_AFFILIATION_QUERY, function(character_rows, character_error)
+            local normalized_character_rows = nil
+            local affiliation_row = nil
+            local faction_id = 0
+            local faction_key = ""
+            local rank_id = 0
+
+            if character_error ~= nil then
+                callback(false, nil, character_error)
+                return
+            end
+
+            normalized_character_rows = normalize_rows(character_rows, normalize_salary_affiliation_row)
+            affiliation_row = normalized_character_rows[1]
+
+            if affiliation_row == nil then
+                callback(true, nil, "character-not-found")
+                return
+            end
+
+            faction_id = affiliation_row.faction_id or 0
+            faction_key = affiliation_row.faction_key or ""
+            rank_id = affiliation_row.rank_id or 0
+
+            database_or_error:SelectAsync(SELECT_SALARY_RULE_FOR_CHARACTER_QUERY, function(rule_rows, rule_error)
+                local normalized_rule_rows = nil
+
+                if rule_error ~= nil then
+                    callback(false, nil, rule_error)
+                    return
+                end
+
+                normalized_rule_rows = normalize_rows(rule_rows, normalize_salary_rule_row)
+                callback(true, normalized_rule_rows[1], nil)
+            end, faction_id, faction_key, rank_id, rank_id)
+        end, normalized_character_id)
+    end, "economy-get-salary-rule-for-character")
+end
+
+function EconomyRepository:GetSalaryClaim(character_id, salary_rule_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_salary_rule_id = normalize_positive_integer(salary_rule_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_id == nil or normalized_salary_rule_id == nil then
+        callback(false, nil, "salary-claim-key-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_SALARY_CLAIM_QUERY, function(rows, select_error)
+            local normalized_rows = nil
+
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            normalized_rows = normalize_rows(rows, normalize_salary_claim_row)
+            callback(true, normalized_rows[1], nil)
+        end, normalized_character_id, normalized_salary_rule_id)
+    end, "economy-get-salary-claim")
+end
+
+function EconomyRepository:UpsertSalaryClaim(character_id, salary_rule_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_salary_rule_id = normalize_positive_integer(salary_rule_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_id == nil or normalized_salary_rule_id == nil then
+        callback(false, nil, "salary-claim-key-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(UPSERT_SALARY_CLAIM_QUERY, function(rows, upsert_error)
+            local normalized_rows = nil
+
+            if upsert_error ~= nil then
+                callback(false, nil, upsert_error)
+                return
+            end
+
+            normalized_rows = normalize_rows(rows, normalize_salary_claim_row)
+            callback(true, normalized_rows[1], nil)
+        end, normalized_character_id, normalized_salary_rule_id)
+    end, "economy-upsert-salary-claim")
+end
+
+function EconomyRepository:ListSalaryRules(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_SALARY_RULES_QUERY, function(rows, select_error)
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            callback(true, normalize_rows(rows, normalize_salary_rule_row), nil)
+        end)
+    end, "economy-list-salary-rules")
 end
 
 function EconomyRepository:TransferMoneyAtomic(from_character_id, to_character_id, wallet, amount, reason, outgoing_metadata_json, incoming_metadata_json, callback)

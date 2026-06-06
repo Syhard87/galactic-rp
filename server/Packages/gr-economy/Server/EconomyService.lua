@@ -473,6 +473,157 @@ function EconomyService:TransferMoney(from_character_id, to_character_id, wallet
     )
 end
 
+function EconomyService:ClaimSalary(character_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-not-found")
+        return true
+    end
+
+    return self.repository:GetSalaryRuleForCharacter(normalized_character_id, function(is_rule_success, salary_rule, rule_error)
+        if not is_rule_success then
+            callback(false, nil, "database-error")
+            return
+        end
+
+        if rule_error == "character-not-found" then
+            callback(false, nil, "character-not-found")
+            return
+        end
+
+        if salary_rule == nil then
+            callback(false, nil, "salary-rule-not-found")
+            return
+        end
+
+        self.repository:GetSalaryClaim(normalized_character_id, salary_rule.id, function(is_claim_success, salary_claim, claim_error)
+            if not is_claim_success then
+                callback(false, nil, "database-error")
+                return
+            end
+
+            local current_epoch = os.time()
+            local last_claim_epoch = salary_claim and salary_claim.last_claimed_epoch or 0
+            local cooldown_seconds = salary_rule.cooldown_seconds or 0
+            local remaining_seconds = 0
+
+            if last_claim_epoch > 0 and cooldown_seconds > 0 then
+                remaining_seconds = math.max(0, math.floor((last_claim_epoch + cooldown_seconds) - current_epoch))
+            end
+
+            if remaining_seconds > 0 then
+                callback(false, {
+                    salary_rule = salary_rule,
+                    remaining_seconds = remaining_seconds,
+                    salary_claim = salary_claim,
+                }, "salary-on-cooldown")
+                return
+            end
+
+            local reason = "salary:" .. tostring(salary_rule.key or salary_rule.id)
+            local metadata = {
+                salary_rule_id = salary_rule.id,
+                salary_rule_key = salary_rule.key,
+            }
+
+            self:AddMoney(normalized_character_id, salary_rule.wallet, salary_rule.amount, reason, metadata, function(is_payment_success, payment_result, payment_error)
+                if not is_payment_success then
+                    callback(false, {
+                        salary_rule = salary_rule,
+                        payment_error = payment_error,
+                    }, "payment-failed")
+                    return
+                end
+
+                self.repository:UpsertSalaryClaim(normalized_character_id, salary_rule.id, function(is_upsert_success, updated_claim, upsert_error)
+                    if is_upsert_success and updated_claim ~= nil then
+                        Console.Log(
+                            "[gr_economy][service] Salary claimed character_id=%s salary_rule_id=%s salary_rule_key=%s wallet=%s amount=%s.",
+                            tostring(normalized_character_id),
+                            tostring(salary_rule.id),
+                            tostring(salary_rule.key),
+                            tostring(salary_rule.wallet),
+                            tostring(salary_rule.amount)
+                        )
+
+                        callback(true, {
+                            salary_rule = salary_rule,
+                            claim = updated_claim,
+                            balance = payment_result and payment_result.balance or nil,
+                            transaction = payment_result and payment_result.transaction or nil,
+                        }, nil)
+                        return
+                    end
+
+                    local rollback_reason = "salary-rollback:" .. tostring(salary_rule.key or salary_rule.id)
+                    local rollback_metadata = {
+                        salary_rule_id = salary_rule.id,
+                        salary_rule_key = salary_rule.key,
+                        rollback_reason = "claim-update-failed",
+                    }
+
+                    self:RemoveMoney(normalized_character_id, salary_rule.wallet, salary_rule.amount, rollback_reason, rollback_metadata, function(is_rollback_success, rollback_result, rollback_error)
+                        if is_rollback_success then
+                            Console.Log(
+                                "[gr_economy][service] Salary rollback completed character_id=%s salary_rule_id=%s salary_rule_key=%s wallet=%s amount=%s.",
+                                tostring(normalized_character_id),
+                                tostring(salary_rule.id),
+                                tostring(salary_rule.key),
+                                tostring(salary_rule.wallet),
+                                tostring(salary_rule.amount)
+                            )
+
+                            callback(false, {
+                                salary_rule = salary_rule,
+                                claim_error = upsert_error,
+                                rollback = rollback_result,
+                            }, "claim-update-failed")
+                            return
+                        end
+
+                        Console.Log(
+                            "[gr_economy][service] Salary rollback failed character_id=%s salary_rule_id=%s salary_rule_key=%s wallet=%s amount=%s reason=%s.",
+                            tostring(normalized_character_id),
+                            tostring(salary_rule.id),
+                            tostring(salary_rule.key),
+                            tostring(salary_rule.wallet),
+                            tostring(salary_rule.amount),
+                            tostring(rollback_error or upsert_error or "rollback-failed")
+                        )
+
+                        callback(false, {
+                            salary_rule = salary_rule,
+                            claim_error = upsert_error,
+                            rollback_error = rollback_error,
+                        }, "rollback-failed")
+                    end)
+                end)
+            end)
+        end)
+    end)
+end
+
+function EconomyService:ListSalaryRules(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self.repository:ListSalaryRules(callback)
+end
+
 function EconomyService:ListTransactions(character_id, limit, callback)
     local normalized_character_id = normalize_positive_integer(character_id)
     local normalized_limit = normalize_limit(limit)
