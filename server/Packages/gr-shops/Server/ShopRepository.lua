@@ -11,6 +11,9 @@ local SELECT_SHOPS_QUERY = [[
         name,
         description,
         shop_type,
+        required_reputation_key,
+        required_reputation_min_value,
+        required_faction_key,
         position_x,
         position_y,
         position_z,
@@ -30,6 +33,9 @@ local SELECT_SHOP_ITEMS_QUERY = [[
         shops.name AS shop_name,
         shops.description AS shop_description,
         shops.shop_type,
+        shops.required_reputation_key AS shop_required_reputation_key,
+        shops.required_reputation_min_value AS shop_required_reputation_min_value,
+        shops.required_faction_key AS shop_required_faction_key,
         shops.position_x,
         shops.position_y,
         shops.position_z,
@@ -41,6 +47,9 @@ local SELECT_SHOP_ITEMS_QUERY = [[
         shop_items.wallet,
         shop_items.price,
         shop_items.sell_price,
+        shop_items.required_reputation_key AS shop_item_required_reputation_key,
+        shop_items.required_reputation_min_value AS shop_item_required_reputation_min_value,
+        shop_items.required_faction_key AS shop_item_required_faction_key,
         shop_items.is_sellable AS shop_item_is_sellable,
         shop_items.stock_enabled AS shop_item_stock_enabled,
         shop_items.stock_quantity,
@@ -67,6 +76,9 @@ local SELECT_SHOP_ITEM_QUERY = [[
         shops.name AS shop_name,
         shops.description AS shop_description,
         shops.shop_type,
+        shops.required_reputation_key AS shop_required_reputation_key,
+        shops.required_reputation_min_value AS shop_required_reputation_min_value,
+        shops.required_faction_key AS shop_required_faction_key,
         shops.position_x,
         shops.position_y,
         shops.position_z,
@@ -78,6 +90,9 @@ local SELECT_SHOP_ITEM_QUERY = [[
         shop_items.wallet,
         shop_items.price,
         shop_items.sell_price,
+        shop_items.required_reputation_key AS shop_item_required_reputation_key,
+        shop_items.required_reputation_min_value AS shop_item_required_reputation_min_value,
+        shop_items.required_faction_key AS shop_item_required_faction_key,
         shop_items.is_sellable AS shop_item_is_sellable,
         shop_items.stock_enabled AS shop_item_stock_enabled,
         shop_items.stock_quantity,
@@ -154,6 +169,26 @@ local function normalize_boolean(value, fallback)
     return fallback
 end
 
+local function normalize_non_negative_integer(value)
+    if type(value) == "number" then
+        if value < 0 or value % 1 ~= 0 then
+            return nil
+        end
+
+        return math.floor(value)
+    end
+
+    if type(value) == "string" and value:match("^%d+$") ~= nil then
+        local parsed_value = tonumber(value)
+
+        if parsed_value ~= nil then
+            return math.floor(parsed_value)
+        end
+    end
+
+    return nil
+end
+
 local function normalize_wallet(wallet)
     local normalized_wallet = trim_string(wallet)
 
@@ -168,6 +203,22 @@ local function normalize_wallet(wallet)
     end
 
     return normalized_wallet
+end
+
+local function normalize_requirement_key(value)
+    local normalized_value = trim_string(value)
+
+    if normalized_value == nil then
+        return nil
+    end
+
+    normalized_value = string.lower(normalized_value)
+
+    if normalized_value:match("^[a-z0-9_]+$") == nil then
+        return nil
+    end
+
+    return normalized_value
 end
 
 local function normalize_number(value)
@@ -227,6 +278,9 @@ local function normalize_shop_row(row)
         name = trim_string(row.name),
         description = trim_string(row.description),
         shop_type = trim_string(row.shop_type),
+        required_reputation_key = normalize_requirement_key(row.required_reputation_key),
+        required_reputation_min_value = normalize_non_negative_integer(row.required_reputation_min_value),
+        required_faction_key = normalize_requirement_key(row.required_faction_key),
         position_x = normalize_number(row.position_x),
         position_y = normalize_number(row.position_y),
         position_z = normalize_number(row.position_z),
@@ -274,6 +328,9 @@ local function normalize_shop_item_row(row)
             name = trim_string(row.shop_name),
             description = trim_string(row.shop_description),
             shop_type = trim_string(row.shop_type),
+            required_reputation_key = normalize_requirement_key(row.shop_required_reputation_key),
+            required_reputation_min_value = normalize_non_negative_integer(row.shop_required_reputation_min_value),
+            required_faction_key = normalize_requirement_key(row.shop_required_faction_key),
             position_x = normalize_number(row.position_x),
             position_y = normalize_number(row.position_y),
             position_z = normalize_number(row.position_z),
@@ -286,6 +343,9 @@ local function normalize_shop_item_row(row)
         wallet = wallet,
         price = price,
         sell_price = sell_price,
+        required_reputation_key = normalize_requirement_key(row.shop_item_required_reputation_key),
+        required_reputation_min_value = normalize_non_negative_integer(row.shop_item_required_reputation_min_value),
+        required_faction_key = normalize_requirement_key(row.shop_item_required_faction_key),
         is_sellable = normalize_boolean(row.shop_item_is_sellable, false),
         stock_enabled = normalize_boolean(row.shop_item_stock_enabled, false),
         stock_quantity = stock_quantity ~= nil and math.floor(stock_quantity) or nil,

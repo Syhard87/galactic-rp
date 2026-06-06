@@ -226,18 +226,55 @@ local function resolve_active_character_id(player_or_platform_id)
     return active_character.id
 end
 
+local function build_access_requirements_text(requirement_row)
+    local requirement_parts = {}
+
+    if type(requirement_row) ~= "table" then
+        return nil
+    end
+
+    if trim_string(requirement_row.required_reputation_key) ~= nil then
+        requirement_parts[#requirement_parts + 1] = string.format(
+            "req_rep=%s>=%s",
+            tostring(requirement_row.required_reputation_key),
+            tostring(requirement_row.required_reputation_min_value or 0)
+        )
+    end
+
+    if trim_string(requirement_row.required_faction_key) ~= nil then
+        requirement_parts[#requirement_parts + 1] = string.format(
+            "req_faction=%s",
+            tostring(requirement_row.required_faction_key)
+        )
+    end
+
+    if #requirement_parts < 1 then
+        return nil
+    end
+
+    return table.concat(requirement_parts, " ")
+end
+
 local function build_shop_line(shop_row)
-    return string.format(
+    local requirement_text = build_access_requirements_text(shop_row)
+    local line = string.format(
         "- %s : %s radius=%s proximity=%s",
         tostring(shop_row.key),
         tostring(shop_row.name or shop_row.key),
         tostring(shop_row.radius),
         tostring(shop_row.requires_proximity)
     )
+
+    if requirement_text ~= nil then
+        line = string.format("%s %s", line, requirement_text)
+    end
+
+    return line
 end
 
 local function build_shop_item_line(shop_item_row)
     local stock_text = "illimite"
+    local requirement_text = build_access_requirements_text(shop_item_row)
 
     if shop_item_row.stock_enabled == true then
         stock_text = string.format(
@@ -247,7 +284,7 @@ local function build_shop_item_line(shop_item_row)
         )
     end
 
-    return string.format(
+    local line = string.format(
         "- %s price=%s sell_price=%s wallet=%s sellable=%s stock=%s active=%s",
         tostring(shop_item_row.item_key),
         tostring(shop_item_row.price),
@@ -257,6 +294,12 @@ local function build_shop_item_line(shop_item_row)
         tostring(stock_text),
         tostring(shop_item_row.is_active)
     )
+
+    if requirement_text ~= nil then
+        line = string.format("%s %s", line, requirement_text)
+    end
+
+    return line
 end
 
 local database_service = resolve_database_service()
@@ -526,6 +569,26 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         return
                     end
 
+                    if error == "reputation-insufficient" then
+                        Chat.SendMessage(player, "Vente impossible : reputation insuffisante.")
+                        return
+                    end
+
+                    if error == "reputation-check-unavailable" then
+                        Chat.SendMessage(player, "Vente impossible : verification reputation impossible.")
+                        return
+                    end
+
+                    if error == "faction-required" then
+                        Chat.SendMessage(player, "Vente impossible : faction requise.")
+                        return
+                    end
+
+                    if error == "faction-check-unavailable" or error == "access-denied" then
+                        Chat.SendMessage(player, "Vente impossible : acces boutique refuse.")
+                        return
+                    end
+
                     if error == "shop-position-invalid" then
                         Chat.SendMessage(player, "Boutique sans position valide.")
                         return
@@ -603,6 +666,26 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 if error == "shop-too-far" then
                     Chat.SendMessage(player, "Achat impossible : vous etes trop loin de cette boutique.")
+                    return
+                end
+
+                if error == "reputation-insufficient" then
+                    Chat.SendMessage(player, "Achat impossible : reputation insuffisante.")
+                    return
+                end
+
+                if error == "reputation-check-unavailable" then
+                    Chat.SendMessage(player, "Achat impossible : verification reputation impossible.")
+                    return
+                end
+
+                if error == "faction-required" then
+                    Chat.SendMessage(player, "Achat impossible : faction requise.")
+                    return
+                end
+
+                if error == "faction-check-unavailable" or error == "access-denied" then
+                    Chat.SendMessage(player, "Achat impossible : acces boutique refuse.")
                     return
                 end
 
