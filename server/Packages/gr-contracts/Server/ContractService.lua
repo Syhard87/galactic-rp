@@ -135,6 +135,25 @@ local function normalize_payment_status(payment_status)
     return normalized_payment_status
 end
 
+local function normalize_pickup_status(pickup_status)
+    local normalized_pickup_status = trim_string(pickup_status)
+
+    if normalized_pickup_status == nil then
+        return "none"
+    end
+
+    normalized_pickup_status = string.lower(normalized_pickup_status)
+
+    if normalized_pickup_status ~= "none"
+        and normalized_pickup_status ~= "pending"
+        and normalized_pickup_status ~= "picked_up"
+    then
+        return "none"
+    end
+
+    return normalized_pickup_status
+end
+
 local function normalize_item_key(item_key)
     local normalized_item_key = trim_string(item_key)
 
@@ -432,6 +451,9 @@ function ContractService:CreateDeliveryContract(creator_character_id, item_key, 
         required_item_key = normalized_item_key,
         required_item_quantity = normalized_quantity,
         consume_required_items = true,
+        pickup_location_key = nil,
+        requires_pickup_location = false,
+        pickup_status = "none",
         delivery_location_key = nil,
         requires_delivery_location = false,
     }, function(is_success, contract_row, error)
@@ -525,6 +547,9 @@ function ContractService:CreateDeliveryContractAt(creator_character_id, item_key
             required_item_key = normalized_item_key,
             required_item_quantity = normalized_quantity,
             consume_required_items = true,
+            pickup_location_key = nil,
+            requires_pickup_location = false,
+            pickup_status = "none",
             delivery_location_key = normalized_location_key,
             requires_delivery_location = true,
         }, function(is_success, contract_row, error)
@@ -544,6 +569,128 @@ function ContractService:CreateDeliveryContractAt(creator_character_id, item_key
             )
 
             callback(true, contract_row, nil)
+        end)
+    end)
+end
+
+function ContractService:CreateHaulContract(creator_character_id, item_key, quantity, reward_money, pickup_location_key, delivery_location_key, description, callback)
+    local normalized_character_id = normalize_positive_integer(creator_character_id)
+    local normalized_item_key = normalize_item_key(item_key)
+    local normalized_quantity = normalize_positive_integer(quantity)
+    local normalized_reward_money = normalize_reward_money(reward_money)
+    local normalized_pickup_location_key = normalize_location_key(pickup_location_key)
+    local normalized_delivery_location_key = normalize_location_key(delivery_location_key)
+    local normalized_description = normalize_description(description)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if normalized_item_key == nil then
+        callback(false, nil, "item-key-invalid")
+        return true
+    end
+
+    if normalized_quantity == nil or normalized_quantity > MAX_DELIVERY_QUANTITY then
+        callback(false, nil, "quantity-invalid")
+        return true
+    end
+
+    if normalized_reward_money == nil then
+        callback(false, nil, "reward-money-invalid")
+        return true
+    end
+
+    if normalized_pickup_location_key == nil then
+        callback(false, nil, "pickup-location-key-invalid")
+        return true
+    end
+
+    if normalized_delivery_location_key == nil then
+        callback(false, nil, "delivery-location-key-invalid")
+        return true
+    end
+
+    if normalized_description == nil then
+        callback(false, nil, "description-invalid")
+        return true
+    end
+
+    return self.repository:GetDeliveryLocation(normalized_pickup_location_key, function(is_pickup_success, pickup_location, pickup_error)
+        if not is_pickup_success then
+            callback(false, nil, pickup_error or "pickup-location-not-found")
+            return
+        end
+
+        if pickup_location == nil then
+            callback(false, nil, "pickup-location-not-found")
+            return
+        end
+
+        if pickup_location.is_active ~= true then
+            callback(false, nil, "pickup-location-inactive")
+            return
+        end
+
+        self.repository:GetDeliveryLocation(normalized_delivery_location_key, function(is_delivery_success, delivery_location, delivery_error)
+            if not is_delivery_success then
+                callback(false, nil, delivery_error or "delivery-location-not-found")
+                return
+            end
+
+            if delivery_location == nil then
+                callback(false, nil, "delivery-location-not-found")
+                return
+            end
+
+            if delivery_location.is_active ~= true then
+                callback(false, nil, "delivery-location-inactive")
+                return
+            end
+
+            self.repository:CreateContract({
+                creator_character_id = normalized_character_id,
+                type = "delivery",
+                title = build_contract_title("delivery"),
+                description = normalized_description,
+                reward_money = normalized_reward_money,
+                deadline_at = nil,
+                required_item_key = normalized_item_key,
+                required_item_quantity = normalized_quantity,
+                consume_required_items = true,
+                pickup_location_key = normalized_pickup_location_key,
+                requires_pickup_location = true,
+                pickup_status = "pending",
+                delivery_location_key = normalized_delivery_location_key,
+                requires_delivery_location = true,
+            }, function(is_success, contract_row, error)
+                if not is_success then
+                    callback(false, nil, error)
+                    return
+                end
+
+                Console.Log(
+                    "[gr_contracts][service] Haul contract created id=%s creator_character_id=%s item=%s quantity=%s reward_money=%s pickup=%s delivery=%s.",
+                    tostring(contract_row and contract_row.id),
+                    tostring(normalized_character_id),
+                    tostring(normalized_item_key),
+                    tostring(normalized_quantity),
+                    tostring(normalized_reward_money),
+                    tostring(normalized_pickup_location_key),
+                    tostring(normalized_delivery_location_key)
+                )
+
+                callback(true, contract_row, nil)
+            end)
         end)
     end)
 end
@@ -851,6 +998,175 @@ function ContractService:ValidateDeliveryLocationProximity(player, delivery_loca
     return true, nil
 end
 
+function ContractService:PickupContract(character_id, player, contract_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_contract_id = normalize_contract_id(contract_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-invalid")
+        return true
+    end
+
+    return self.repository:GetContractById(normalized_contract_id, function(is_get_success, contract_row, get_error)
+        if not is_get_success then
+            callback(false, nil, get_error)
+            return
+        end
+
+        if contract_row == nil then
+            callback(false, nil, "contract-not-found")
+            return
+        end
+
+        if contract_row.status ~= "accepted"
+            or normalize_positive_integer(contract_row.assignee_character_id) ~= normalized_character_id
+        then
+            callback(false, contract_row, "pickup-contract-forbidden")
+            return
+        end
+
+        if contract_row.requires_pickup_location ~= true then
+            callback(false, contract_row, "pickup-not-required")
+            return
+        end
+
+        local pickup_status = normalize_pickup_status(contract_row.pickup_status)
+
+        if pickup_status ~= "pending" then
+            callback(false, contract_row, "pickup-already-completed")
+            return
+        end
+
+        local pickup_location_key = normalize_location_key(contract_row.pickup_location_key)
+        local required_item_key = normalize_item_key(contract_row.required_item_key)
+        local required_item_quantity = normalize_positive_integer(contract_row.required_item_quantity)
+        local inventory_bridge = resolve_inventory_bridge()
+
+        if pickup_location_key == nil then
+            callback(false, contract_row, "pickup-location-not-found")
+            return
+        end
+
+        if required_item_key == nil or required_item_quantity == nil then
+            callback(false, contract_row, "pickup-item-invalid")
+            return
+        end
+
+        if inventory_bridge == nil then
+            callback(false, contract_row, "inventory-unavailable")
+            return
+        end
+
+        self.repository:GetDeliveryLocation(pickup_location_key, function(is_location_success, pickup_location, location_error)
+            if not is_location_success then
+                callback(false, contract_row, location_error or "pickup-location-not-found")
+                return
+            end
+
+            if pickup_location == nil then
+                callback(false, contract_row, "pickup-location-not-found")
+                return
+            end
+
+            local is_near_pickup, proximity_error = self:ValidateDeliveryLocationProximity(player, pickup_location)
+
+            if not is_near_pickup then
+                if proximity_error == "delivery-location-not-found" then
+                    callback(false, contract_row, "pickup-location-not-found")
+                    return
+                end
+
+                if proximity_error == "delivery-location-inactive" then
+                    callback(false, contract_row, "pickup-location-inactive")
+                    return
+                end
+
+                if proximity_error == "delivery-location-position-missing" then
+                    callback(false, contract_row, "pickup-location-position-missing")
+                    return
+                end
+
+                if proximity_error == "too-far-from-delivery-location" then
+                    callback(false, contract_row, "too-far-from-pickup-location")
+                    return
+                end
+
+                callback(false, contract_row, proximity_error)
+                return
+            end
+
+            inventory_bridge.AddItem(normalized_character_id, required_item_key, required_item_quantity, {
+                source = "contract_pickup",
+                contract_id = normalized_contract_id,
+                pickup_location_key = pickup_location_key,
+            }, function(is_add_success, _, add_error)
+                if not is_add_success then
+                    Console.Log(
+                        "[gr_contracts][service] Contract pickup add item failed contract_id=%s assignee_character_id=%s item_key=%s quantity=%s reason=%s.",
+                        tostring(normalized_contract_id),
+                        tostring(normalized_character_id),
+                        tostring(required_item_key),
+                        tostring(required_item_quantity),
+                        tostring(add_error or "inventory-add-failed")
+                    )
+                    callback(false, contract_row, "inventory-unavailable")
+                    return
+                end
+
+                self.repository:MarkContractPickedUp(normalized_contract_id, function(is_mark_success, picked_up_row, mark_error)
+                    if not is_mark_success then
+                        inventory_bridge.RemoveItem(normalized_character_id, required_item_key, required_item_quantity, function(is_remove_success)
+                            if not is_remove_success then
+                                callback(false, contract_row, "inventory-compensation-failed")
+                                return
+                            end
+
+                            callback(false, contract_row, mark_error or "database-error")
+                        end)
+                        return
+                    end
+
+                    if picked_up_row == nil then
+                        inventory_bridge.RemoveItem(normalized_character_id, required_item_key, required_item_quantity, function(is_remove_success)
+                            if not is_remove_success then
+                                callback(false, contract_row, "inventory-compensation-failed")
+                                return
+                            end
+
+                            callback(false, contract_row, "pickup-already-completed")
+                        end)
+                        return
+                    end
+
+                    Console.Log(
+                        "[gr_contracts][service] Contract cargo picked up id=%s assignee_character_id=%s pickup=%s item=%s quantity=%s.",
+                        tostring(picked_up_row.id),
+                        tostring(normalized_character_id),
+                        tostring(pickup_location_key),
+                        tostring(required_item_key),
+                        tostring(required_item_quantity)
+                    )
+
+                    callback(true, picked_up_row, nil)
+                end)
+            end)
+        end)
+    end)
+end
+
 function ContractService:CompleteContract(character_id, contract_id, player_or_callback, callback)
     local normalized_character_id = normalize_positive_integer(character_id)
     local normalized_contract_id = normalize_contract_id(contract_id)
@@ -913,8 +1229,15 @@ function ContractService:CompleteContract(character_id, contract_id, player_or_c
         local required_item_quantity = normalize_positive_integer(contract_row.required_item_quantity)
         local should_consume_required_items = contract_row.consume_required_items ~= false
         local inventory_bridge = nil
+        local requires_pickup_location = contract_row.requires_pickup_location == true
+        local pickup_status = normalize_pickup_status(contract_row.pickup_status)
         local delivery_location_key = normalize_location_key(contract_row.delivery_location_key)
         local requires_delivery_location = contract_row.requires_delivery_location == true
+
+        if requires_pickup_location and pickup_status ~= "picked_up" then
+            callback(false, contract_row, "pickup-not-completed")
+            return
+        end
 
         local function continue_after_requirements()
             self.repository:CompleteContract(normalized_contract_id, normalized_character_id, function(is_complete_success, completed_row, complete_error)

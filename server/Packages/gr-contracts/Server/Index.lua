@@ -248,6 +248,27 @@ local function format_contract_destination(contract_row)
     return string.format("destination=%s", tostring(delivery_location_key))
 end
 
+local function format_contract_pickup(contract_row)
+    local pickup_location_key = trim_string(contract_row and contract_row.pickup_location_key)
+    local requires_pickup_location = contract_row ~= nil and contract_row.requires_pickup_location == true
+
+    if pickup_location_key == nil or not requires_pickup_location then
+        return "pickup=aucun"
+    end
+
+    return string.format("pickup=%s", tostring(pickup_location_key))
+end
+
+local function format_contract_pickup_status(contract_row)
+    local pickup_status = trim_string(contract_row and contract_row.pickup_status)
+
+    if pickup_status == nil then
+        return "pickup_status=none"
+    end
+
+    return string.format("pickup_status=%s", tostring(pickup_status))
+end
+
 local function format_coordinate_value(value)
     if type(value) ~= "number" then
         return "NULL"
@@ -283,29 +304,35 @@ end
 local function build_contract_line(contract_row)
     local payment_status = trim_string(contract_row and contract_row.payment_status)
     local item_requirement = format_contract_item_requirement(contract_row)
+    local pickup = format_contract_pickup(contract_row)
+    local pickup_status = format_contract_pickup_status(contract_row)
     local destination = format_contract_destination(contract_row)
 
     if payment_status ~= nil then
         return string.format(
-            "- #%s %s reward=%s status=%s payment=%s %s %s desc=%s",
+            "- #%s %s reward=%s status=%s payment=%s %s %s %s %s desc=%s",
             tostring(contract_row.id),
             tostring(contract_row.type),
             tostring(contract_row.reward_money),
             tostring(contract_row.status),
             tostring(payment_status),
             tostring(item_requirement),
+            tostring(pickup),
+            tostring(pickup_status),
             tostring(destination),
             tostring(contract_row.description)
         )
     end
 
     return string.format(
-        "- #%s %s reward=%s status=%s %s %s desc=%s",
+        "- #%s %s reward=%s status=%s %s %s %s %s desc=%s",
         tostring(contract_row.id),
         tostring(contract_row.type),
         tostring(contract_row.reward_money),
         tostring(contract_row.status),
         tostring(item_requirement),
+        tostring(pickup),
+        tostring(pickup_status),
         tostring(destination),
         tostring(contract_row.description)
     )
@@ -314,11 +341,13 @@ end
 local function build_my_contract_line(contract_row)
     local payment_status = trim_string(contract_row and contract_row.payment_status)
     local item_requirement = format_contract_item_requirement(contract_row)
+    local pickup = format_contract_pickup(contract_row)
+    local pickup_status = format_contract_pickup_status(contract_row)
     local destination = format_contract_destination(contract_row)
 
     if payment_status ~= nil then
         return string.format(
-            "- #%s %s reward=%s status=%s payment=%s role=%s %s %s",
+            "- #%s %s reward=%s status=%s payment=%s role=%s %s %s %s %s",
             tostring(contract_row.id),
             tostring(contract_row.type),
             tostring(contract_row.reward_money),
@@ -326,18 +355,22 @@ local function build_my_contract_line(contract_row)
             tostring(payment_status),
             tostring(contract_row.role or "unknown"),
             tostring(item_requirement),
+            tostring(pickup),
+            tostring(pickup_status),
             tostring(destination)
         )
     end
 
     return string.format(
-        "- #%s %s reward=%s status=%s role=%s %s %s",
+        "- #%s %s reward=%s status=%s role=%s %s %s %s %s",
         tostring(contract_row.id),
         tostring(contract_row.type),
         tostring(contract_row.reward_money),
         tostring(contract_row.status),
         tostring(contract_row.role or "unknown"),
         tostring(item_requirement),
+        tostring(pickup),
+        tostring(pickup_status),
         tostring(destination)
     )
 end
@@ -398,6 +431,23 @@ GRContractsBridge.CreateDeliveryContractAt = function(character_id, item_key, qu
     )
 end
 
+GRContractsBridge.CreateHaulContract = function(character_id, item_key, quantity, reward_money, pickup_location_key, delivery_location_key, description, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:CreateHaulContract(
+        character_id,
+        item_key,
+        quantity,
+        reward_money,
+        pickup_location_key,
+        delivery_location_key,
+        description,
+        callback
+    )
+end
+
 GRContractsBridge.ListOpenContracts = function(callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -428,6 +478,14 @@ GRContractsBridge.CompleteContract = function(character_id, contract_id, callbac
     end
 
     return GRContracts.Server.Service:CompleteContract(character_id, contract_id, callback)
+end
+
+GRContractsBridge.PickupContract = function(character_id, player, contract_id, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:PickupContract(character_id, player, contract_id, callback)
 end
 
 GRContractsBridge.CancelContract = function(character_id, contract_id, callback)
@@ -489,10 +547,12 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "createcontract"
             and command_name ~= "createdeliverycontract"
             and command_name ~= "createdeliverycontractat"
+            and command_name ~= "createhaulcontract"
             and command_name ~= "deliverylocations"
             and command_name ~= "deliverylocationinfo"
             and command_name ~= "setdeliverylocationhere"
             and command_name ~= "acceptcontract"
+            and command_name ~= "pickupcontract"
             and command_name ~= "completecontract"
             and command_name ~= "cancelcontract"
         then
@@ -858,9 +918,96 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             return false
         end
 
+        if command_name == "createhaulcontract" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /createhaulcontract <item_key> <quantity> <reward_money> <pickup_location_key> <delivery_location_key> <description>")
+                return false
+            end
+
+            local item_key, quantity_text, reward_money_text, pickup_location_key, delivery_location_key, description =
+                payload:match("^(%S+)%s+(%S+)%s+([+-]?%d+)%s+(%S+)%s+(%S+)%s+(.+)$")
+
+            if item_key == nil then
+                Chat.SendMessage(player, "Usage : /createhaulcontract <item_key> <quantity> <reward_money> <pickup_location_key> <delivery_location_key> <description>")
+                return false
+            end
+
+            GRContracts.Server.Service:CreateHaulContract(
+                active_character_id,
+                item_key,
+                quantity_text,
+                reward_money_text,
+                pickup_location_key,
+                delivery_location_key,
+                description,
+                function(is_success, contract_row, error)
+                    if not is_success then
+                        if error == "item-key-invalid" then
+                            Chat.SendMessage(player, "Item requis invalide.")
+                            return
+                        end
+
+                        if error == "quantity-invalid" then
+                            Chat.SendMessage(player, "Quantite invalide.")
+                            return
+                        end
+
+                        if error == "reward-money-invalid" then
+                            Chat.SendMessage(player, "Montant invalide.")
+                            return
+                        end
+
+                        if error == "pickup-location-key-invalid" or error == "pickup-location-not-found" then
+                            Chat.SendMessage(player, "Point de recuperation introuvable.")
+                            return
+                        end
+
+                        if error == "pickup-location-inactive" then
+                            Chat.SendMessage(player, "Point de recuperation inactif.")
+                            return
+                        end
+
+                        if error == "delivery-location-key-invalid" or error == "delivery-location-not-found" then
+                            Chat.SendMessage(player, "Point de livraison introuvable.")
+                            return
+                        end
+
+                        if error == "delivery-location-inactive" then
+                            Chat.SendMessage(player, "Point de livraison inactif.")
+                            return
+                        end
+
+                        if error == "description-invalid" then
+                            Chat.SendMessage(player, "Description invalide.")
+                            return
+                        end
+
+                        Chat.SendMessage(player, "Impossible de creer le contrat transport.")
+                        return
+                    end
+
+                    Chat.SendMessage(
+                        player,
+                        string.format(
+                            "Contrat transport cree : #%s %s reward=%s pickup=%s destination=%s.",
+                            tostring(contract_row.id),
+                            tostring(format_contract_item_requirement(contract_row)),
+                            tostring(contract_row.reward_money),
+                            tostring(contract_row.pickup_location_key or "aucun"),
+                            tostring(contract_row.delivery_location_key or "aucune")
+                        )
+                    )
+                end
+            )
+
+            return false
+        end
+
         if payload == nil then
             if command_name == "acceptcontract" then
                 Chat.SendMessage(player, "Usage : /acceptcontract <contract_id>")
+            elseif command_name == "pickupcontract" then
+                Chat.SendMessage(player, "Usage : /pickupcontract <contract_id>")
             elseif command_name == "completecontract" then
                 Chat.SendMessage(player, "Usage : /completecontract <contract_id>")
             else
@@ -874,6 +1021,72 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
         if contract_id == nil then
             Chat.SendMessage(player, "Contrat introuvable.")
+            return false
+        end
+
+        if command_name == "pickupcontract" then
+            GRContracts.Server.Service:PickupContract(active_character_id, player, contract_id, function(is_success, contract_row, error)
+                if not is_success then
+                    if error == "contract-not-found" then
+                        Chat.SendMessage(player, "Pickup impossible : contrat introuvable.")
+                        return
+                    end
+
+                    if error == "pickup-contract-forbidden" then
+                        Chat.SendMessage(player, "Pickup impossible : contrat non accepte par vous.")
+                        return
+                    end
+
+                    if error == "pickup-already-completed" or error == "pickup-not-required" then
+                        Chat.SendMessage(player, "Pickup impossible : cargaison deja recuperee.")
+                        return
+                    end
+
+                    if error == "pickup-location-not-found" then
+                        Chat.SendMessage(player, "Pickup impossible : point de recuperation introuvable.")
+                        return
+                    end
+
+                    if error == "pickup-location-inactive" then
+                        Chat.SendMessage(player, "Pickup impossible : point de recuperation inactif.")
+                        return
+                    end
+
+                    if error == "pickup-location-position-missing" then
+                        Chat.SendMessage(player, "Pickup impossible : position point de recuperation manquante.")
+                        return
+                    end
+
+                    if error == "player-position-unavailable" then
+                        Chat.SendMessage(player, "Pickup impossible : position joueur indisponible.")
+                        return
+                    end
+
+                    if error == "too-far-from-pickup-location" then
+                        Chat.SendMessage(player, "Pickup impossible : vous etes trop loin du point de recuperation.")
+                        return
+                    end
+
+                    if error == "inventory-unavailable" or error == "pickup-item-invalid" then
+                        Chat.SendMessage(player, "Pickup impossible : inventaire indisponible.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Pickup impossible.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Cargaison recuperee : contrat #%s %s pickup=%s.",
+                        tostring(contract_row.id),
+                        tostring(format_contract_item_requirement(contract_row)),
+                        tostring(contract_row.pickup_location_key or "aucun")
+                    )
+                )
+            end)
+
             return false
         end
 
@@ -930,6 +1143,11 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         return
                     end
 
+                    if error == "pickup-not-completed" then
+                        Chat.SendMessage(player, "Contrat impossible : cargaison non recuperee.")
+                        return
+                    end
+
                     if error == "delivery-location-not-found" then
                         Chat.SendMessage(player, "Contrat impossible : point de livraison introuvable.")
                         return
@@ -983,8 +1201,9 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 Chat.SendMessage(
                     player,
                     string.format(
-                        "Contrat termine : #%s livraison=%s %s paiement=%s.",
+                        "Contrat termine : #%s pickup=%s livraison=%s %s paiement=%s.",
                         tostring(contract_row.id),
+                        tostring(contract_row.pickup_location_key or "aucun"),
                         tostring(contract_row.delivery_location_key or "aucune"),
                         tostring(format_contract_item_requirement(contract_row)),
                         tostring(payment_message)

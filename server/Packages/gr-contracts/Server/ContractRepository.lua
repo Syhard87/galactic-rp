@@ -15,6 +15,10 @@ local CONTRACT_SELECT_COLUMNS = [[
         required_item_key,
         required_item_quantity,
         consume_required_items,
+        pickup_location_key,
+        requires_pickup_location,
+        pickup_status,
+        picked_up_at,
         delivery_location_key,
         requires_delivery_location,
         status,
@@ -98,6 +102,9 @@ local INSERT_CONTRACT_QUERY = [[
         required_item_key,
         required_item_quantity,
         consume_required_items,
+        pickup_location_key,
+        requires_pickup_location,
+        pickup_status,
         delivery_location_key,
         requires_delivery_location,
         status,
@@ -114,8 +121,11 @@ local INSERT_CONTRACT_QUERY = [[
         :7,
         :8,
         :9,
+        :10,
+        :11,
+        :12,
         'open',
-        :10
+        :13
     )
     RETURNING
 ]] .. CONTRACT_SELECT_COLUMNS .. [[
@@ -162,6 +172,16 @@ local COMPLETE_CONTRACT_QUERY = [[
         status = 'completed',
         completed_at = NOW()
     WHERE id = :0 AND assignee_character_id = :1 AND status = 'accepted'
+    RETURNING
+]] .. CONTRACT_SELECT_COLUMNS .. [[
+]]
+
+local MARK_CONTRACT_PICKED_UP_QUERY = [[
+    UPDATE contracts
+    SET
+        pickup_status = 'picked_up',
+        picked_up_at = NOW()
+    WHERE id = :0 AND status = 'accepted' AND pickup_status = 'pending'
     RETURNING
 ]] .. CONTRACT_SELECT_COLUMNS .. [[
 ]]
@@ -369,6 +389,25 @@ local function normalize_payment_status(payment_status)
     return normalized_payment_status
 end
 
+local function normalize_pickup_status(pickup_status)
+    local normalized_pickup_status = trim_string(pickup_status)
+
+    if normalized_pickup_status == nil then
+        return "none"
+    end
+
+    normalized_pickup_status = string.lower(normalized_pickup_status)
+
+    if normalized_pickup_status ~= "none"
+        and normalized_pickup_status ~= "pending"
+        and normalized_pickup_status ~= "picked_up"
+    then
+        return "none"
+    end
+
+    return normalized_pickup_status
+end
+
 local function normalize_contract_row(row)
     local contract_id = nil
     local creator_character_id = nil
@@ -397,6 +436,10 @@ local function normalize_contract_row(row)
         required_item_key = normalize_item_key(row.required_item_key),
         required_item_quantity = normalize_non_negative_integer(row.required_item_quantity, 0),
         consume_required_items = normalize_boolean(row.consume_required_items, true),
+        pickup_location_key = normalize_location_key(row.pickup_location_key),
+        requires_pickup_location = normalize_boolean(row.requires_pickup_location, false),
+        pickup_status = normalize_pickup_status(row.pickup_status),
+        picked_up_at = row.picked_up_at,
         delivery_location_key = normalize_location_key(row.delivery_location_key),
         requires_delivery_location = normalize_boolean(row.requires_delivery_location, false),
         status = normalize_contract_status(row.status),
@@ -519,6 +562,9 @@ function ContractRepository:CreateContract(contract, callback)
     local normalized_required_item_key = normalize_item_key(contract and contract.required_item_key)
     local normalized_required_item_quantity = normalize_non_negative_integer(contract and contract.required_item_quantity, 0)
     local normalized_consume_required_items = normalize_boolean(contract and contract.consume_required_items, true)
+    local normalized_pickup_location_key = normalize_location_key(contract and contract.pickup_location_key)
+    local normalized_requires_pickup_location = normalize_boolean(contract and contract.requires_pickup_location, false)
+    local normalized_pickup_status = normalize_pickup_status(contract and contract.pickup_status)
     local normalized_delivery_location_key = normalize_location_key(contract and contract.delivery_location_key)
     local normalized_requires_delivery_location = normalize_boolean(contract and contract.requires_delivery_location, false)
     local normalized_deadline_at = contract ~= nil and contract.deadline_at or nil
@@ -557,6 +603,11 @@ function ContractRepository:CreateContract(contract, callback)
         return true
     end
 
+    if normalized_requires_pickup_location and normalized_pickup_location_key == nil then
+        callback(false, nil, "pickup-location-key-invalid")
+        return true
+    end
+
     if normalized_requires_delivery_location and normalized_delivery_location_key == nil then
         callback(false, nil, "delivery-location-key-invalid")
         return true
@@ -589,6 +640,9 @@ function ContractRepository:CreateContract(contract, callback)
             normalized_required_item_key,
             normalized_required_item_quantity,
             normalized_consume_required_items,
+            normalized_pickup_location_key,
+            normalized_requires_pickup_location,
+            normalized_pickup_status,
             normalized_delivery_location_key,
             normalized_requires_delivery_location,
             normalized_deadline_at
@@ -853,6 +907,38 @@ function ContractRepository:CompleteContract(contract_id, character_id, callback
             callback(true, contract_rows[1], nil)
         end, normalized_contract_id, normalized_character_id)
     end, "contracts-complete")
+end
+
+function ContractRepository:MarkContractPickedUp(contract_id, callback)
+    local normalized_contract_id = normalize_positive_integer(contract_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(MARK_CONTRACT_PICKED_UP_QUERY, function(rows, update_error)
+            local contract_rows = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            contract_rows = normalize_rows(rows)
+            callback(true, contract_rows[1], nil)
+        end, normalized_contract_id)
+    end, "contracts-mark-picked-up")
 end
 
 function ContractRepository:CancelContract(contract_id, character_id, callback)
