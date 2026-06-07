@@ -182,6 +182,20 @@ local function normalize_location_key(location_key)
     return string.lower(normalized_location_key)
 end
 
+local function normalize_route_key(route_key)
+    local normalized_route_key = trim_string(route_key)
+
+    if normalized_route_key == nil then
+        return nil
+    end
+
+    if normalized_route_key:match("^[a-z0-9_]+$") == nil then
+        return nil
+    end
+
+    return string.lower(normalized_route_key)
+end
+
 local function normalize_number(value)
     if type(value) == "number" then
         if value ~= value or value == math.huge or value == -math.huge then
@@ -250,6 +264,17 @@ end
 
 local function build_contract_title(contract_type)
     return CONTRACT_TYPE_TITLES[contract_type] or contract_type
+end
+
+local function build_route_contract_description(route_template)
+    local route_key = trim_string(route_template and route_template.key) or "unknown_route"
+    local route_description = normalize_description(route_template and route_template.description)
+
+    if route_description == nil then
+        return string.format("[route:%s] Transport route", tostring(route_key))
+    end
+
+    return string.format("[route:%s] %s", tostring(route_key), tostring(route_description))
 end
 
 local function callback_repository_missing(callback)
@@ -695,6 +720,69 @@ function ContractService:CreateHaulContract(creator_character_id, item_key, quan
     end)
 end
 
+function ContractService:CreateHaulContractFromRoute(creator_character_id, route_key, callback)
+    local normalized_character_id = normalize_positive_integer(creator_character_id)
+    local normalized_route_key = normalize_route_key(route_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "invalid-character")
+        return true
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "route-not-found")
+        return true
+    end
+
+    return self.repository:GetRouteTemplate(normalized_route_key, function(is_success, route_template, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        if route_template == nil then
+            callback(false, nil, "route-not-found")
+            return
+        end
+
+        if route_template.is_active ~= true then
+            callback(false, route_template, "route-inactive")
+            return
+        end
+
+        self:CreateHaulContract(
+            normalized_character_id,
+            route_template.item_key,
+            route_template.item_quantity,
+            route_template.reward_money,
+            route_template.pickup_location_key,
+            route_template.delivery_location_key,
+            build_route_contract_description(route_template),
+            function(is_create_success, contract_row, create_error)
+                if not is_create_success then
+                    callback(false, route_template, create_error)
+                    return
+                end
+
+                if type(contract_row) == "table" then
+                    contract_row.route_key = route_template.key
+                    contract_row.route_name = route_template.name
+                end
+
+                callback(true, contract_row, nil)
+            end
+        )
+    end)
+end
+
 function ContractService:ListDeliveryLocations(callback)
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -705,6 +793,64 @@ function ContractService:ListDeliveryLocations(callback)
     end
 
     return self.repository:ListDeliveryLocations(callback)
+end
+
+function ContractService:ListRouteTemplates(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self.repository:ListRouteTemplates(function(is_success, route_templates, error)
+        local active_route_templates = {}
+
+        if not is_success then
+            callback(false, nil, error)
+            return
+        end
+
+        for _, route_template in ipairs(route_templates or {}) do
+            if route_template.is_active == true then
+                active_route_templates[#active_route_templates + 1] = route_template
+            end
+        end
+
+        callback(true, active_route_templates, nil)
+    end)
+end
+
+function ContractService:GetRouteTemplate(route_key, callback)
+    local normalized_route_key = normalize_route_key(route_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "route-not-found")
+        return true
+    end
+
+    return self.repository:GetRouteTemplate(normalized_route_key, function(is_success, route_template, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        if route_template == nil then
+            callback(false, nil, "route-not-found")
+            return
+        end
+
+        callback(true, route_template, nil)
+    end)
 end
 
 function ContractService:GetDeliveryLocation(location_key, callback)

@@ -68,6 +68,43 @@ local SELECT_DELIVERY_LOCATION_BY_KEY_QUERY = [[
     LIMIT 1
 ]]
 
+local SELECT_ROUTE_TEMPLATES_QUERY = [[
+    SELECT
+        id,
+        key,
+        name,
+        description,
+        item_key,
+        item_quantity,
+        reward_money,
+        pickup_location_key,
+        delivery_location_key,
+        is_active,
+        created_at,
+        updated_at
+    FROM contract_route_templates
+    ORDER BY key ASC
+]]
+
+local SELECT_ROUTE_TEMPLATE_BY_KEY_QUERY = [[
+    SELECT
+        id,
+        key,
+        name,
+        description,
+        item_key,
+        item_quantity,
+        reward_money,
+        pickup_location_key,
+        delivery_location_key,
+        is_active,
+        created_at,
+        updated_at
+    FROM contract_route_templates
+    WHERE key = :0
+    LIMIT 1
+]]
+
 local UPDATE_DELIVERY_LOCATION_POSITION_QUERY = [[
     UPDATE contract_delivery_locations
     SET
@@ -333,6 +370,20 @@ local function normalize_location_key(location_key)
     return string.lower(normalized_location_key)
 end
 
+local function normalize_route_key(route_key)
+    local normalized_route_key = trim_string(route_key)
+
+    if normalized_route_key == nil then
+        return nil
+    end
+
+    if normalized_route_key:match("^[a-z0-9_]+$") == nil then
+        return nil
+    end
+
+    return string.lower(normalized_route_key)
+end
+
 local function normalize_contract_type(contract_type)
     local normalized_contract_type = trim_string(contract_type)
 
@@ -484,11 +535,56 @@ local function normalize_delivery_location_row(row)
     }
 end
 
+local function normalize_route_template_row(row)
+    local route_id = nil
+    local route_key = nil
+
+    if type(row) ~= "table" then
+        return nil
+    end
+
+    route_id = normalize_positive_integer(row.id)
+    route_key = normalize_route_key(row.key)
+
+    if route_id == nil or route_key == nil then
+        return nil
+    end
+
+    return {
+        id = route_id,
+        key = route_key,
+        name = trim_string(row.name) or route_key,
+        description = trim_string(row.description) or "",
+        item_key = normalize_item_key(row.item_key),
+        item_quantity = normalize_positive_integer(row.item_quantity),
+        reward_money = normalize_non_negative_integer(row.reward_money, 0),
+        pickup_location_key = normalize_location_key(row.pickup_location_key),
+        delivery_location_key = normalize_location_key(row.delivery_location_key),
+        is_active = normalize_boolean(row.is_active, true),
+        created_at = row.created_at,
+        updated_at = row.updated_at,
+    }
+end
+
 local function normalize_delivery_location_rows(rows)
     local normalized_rows = {}
 
     for _, row in ipairs(rows or {}) do
         local normalized_row = normalize_delivery_location_row(row)
+
+        if normalized_row ~= nil then
+            normalized_rows[#normalized_rows + 1] = normalized_row
+        end
+    end
+
+    return normalized_rows
+end
+
+local function normalize_route_template_rows(rows)
+    local normalized_rows = {}
+
+    for _, row in ipairs(rows or {}) do
+        local normalized_row = normalize_route_template_row(row)
 
         if normalized_row ~= nil then
             normalized_rows[#normalized_rows + 1] = normalized_row
@@ -670,6 +766,60 @@ function ContractRepository:ListDeliveryLocations(callback)
             callback(true, normalize_delivery_location_rows(rows), nil)
         end)
     end, "contracts-list-delivery-locations")
+end
+
+function ContractRepository:ListRouteTemplates(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_ROUTE_TEMPLATES_QUERY, function(rows, select_error)
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            callback(true, normalize_route_template_rows(rows), nil)
+        end)
+    end, "contracts-list-route-templates")
+end
+
+function ContractRepository:GetRouteTemplate(route_key, callback)
+    local normalized_route_key = normalize_route_key(route_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "route-key-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_ROUTE_TEMPLATE_BY_KEY_QUERY, function(rows, select_error)
+            local route_templates = nil
+
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            route_templates = normalize_route_template_rows(rows)
+            callback(true, route_templates[1], nil)
+        end, normalized_route_key)
+    end, "contracts-get-route-template")
 end
 
 function ContractRepository:GetDeliveryLocation(location_key, callback)

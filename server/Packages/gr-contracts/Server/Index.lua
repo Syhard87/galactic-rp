@@ -269,6 +269,30 @@ local function format_contract_pickup_status(contract_row)
     return string.format("pickup_status=%s", tostring(pickup_status))
 end
 
+local function build_route_template_line(route_template)
+    return string.format(
+        "- %s item=%s x%s reward=%s pickup=%s destination=%s active=%s",
+        tostring(route_template.key),
+        tostring(route_template.item_key or "inconnu"),
+        tostring(route_template.item_quantity or "?"),
+        tostring(route_template.reward_money or 0),
+        tostring(route_template.pickup_location_key or "aucun"),
+        tostring(route_template.delivery_location_key or "aucune"),
+        tostring(route_template.is_active)
+    )
+end
+
+local function build_route_template_info_line(route_template)
+    return string.format(
+        "item=%s x%s reward=%s pickup=%s destination=%s",
+        tostring(route_template.item_key or "inconnu"),
+        tostring(route_template.item_quantity or "?"),
+        tostring(route_template.reward_money or 0),
+        tostring(route_template.pickup_location_key or "aucun"),
+        tostring(route_template.delivery_location_key or "aucune")
+    )
+end
+
 local function format_coordinate_value(value)
     if type(value) ~= "number" then
         return "NULL"
@@ -448,6 +472,14 @@ GRContractsBridge.CreateHaulContract = function(character_id, item_key, quantity
     )
 end
 
+GRContractsBridge.CreateHaulContractFromRoute = function(character_id, route_key, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:CreateHaulContractFromRoute(character_id, route_key, callback)
+end
+
 GRContractsBridge.ListOpenContracts = function(callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -504,6 +536,22 @@ GRContractsBridge.ListDeliveryLocations = function(callback)
     return GRContracts.Server.Service:ListDeliveryLocations(callback)
 end
 
+GRContractsBridge.ListRouteTemplates = function(callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:ListRouteTemplates(callback)
+end
+
+GRContractsBridge.GetRouteTemplate = function(route_key, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetRouteTemplate(route_key, callback)
+end
+
 GRContractsBridge.GetDeliveryLocation = function(location_key, callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -544,10 +592,13 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
         if command_name ~= "contracts"
             and command_name ~= "mycontracts"
+            and command_name ~= "contractroutes"
+            and command_name ~= "contractrouteinfo"
             and command_name ~= "createcontract"
             and command_name ~= "createdeliverycontract"
             and command_name ~= "createdeliverycontractat"
             and command_name ~= "createhaulcontract"
+            and command_name ~= "createhaulfromroute"
             and command_name ~= "deliverylocations"
             and command_name ~= "deliverylocationinfo"
             and command_name ~= "setdeliverylocationhere"
@@ -604,6 +655,48 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             return false
         end
 
+        if command_name == "contractroutes" then
+            GRContracts.Server.Service:ListRouteTemplates(function(is_success, route_templates, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Routes transport indisponibles.")
+                    return
+                end
+
+                if type(route_templates) ~= "table" or #route_templates == 0 then
+                    Chat.SendMessage(player, "Aucune route transport.")
+                    return
+                end
+
+                Chat.SendMessage(player, "Routes transport :")
+
+                for _, route_template in ipairs(route_templates) do
+                    Chat.SendMessage(player, build_route_template_line(route_template))
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "contractrouteinfo" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /contractrouteinfo <route_key>")
+                return false
+            end
+
+            GRContracts.Server.Service:GetRouteTemplate(payload, function(is_success, route_template, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Route transport introuvable.")
+                    return
+                end
+
+                Chat.SendMessage(player, string.format("Route %s :", tostring(route_template.key)))
+                Chat.SendMessage(player, build_route_template_info_line(route_template))
+                Chat.SendMessage(player, string.format("description=%s", tostring(route_template.description or "")))
+            end)
+
+            return false
+        end
+
         if command_name == "deliverylocations" then
             GRContracts.Server.Service:ListDeliveryLocations(function(is_success, delivery_locations, error)
                 if not is_success then
@@ -629,6 +722,63 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         )
                     )
                 end
+            end)
+
+            return false
+        end
+
+        if command_name == "createhaulfromroute" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /createhaulfromroute <route_key>")
+                return false
+            end
+
+            GRContracts.Server.Service:CreateHaulContractFromRoute(active_character_id, payload, function(is_success, contract_row, error)
+                if not is_success then
+                    if error == "route-not-found" then
+                        Chat.SendMessage(player, "Route transport introuvable.")
+                        return
+                    end
+
+                    if error == "route-inactive" then
+                        Chat.SendMessage(player, "Route transport inactive.")
+                        return
+                    end
+
+                    if error == "pickup-location-not-found" or error == "pickup-location-key-invalid" then
+                        Chat.SendMessage(player, "Point de recuperation introuvable.")
+                        return
+                    end
+
+                    if error == "pickup-location-inactive" then
+                        Chat.SendMessage(player, "Point de recuperation inactif.")
+                        return
+                    end
+
+                    if error == "delivery-location-not-found" or error == "delivery-location-key-invalid" then
+                        Chat.SendMessage(player, "Point de livraison introuvable.")
+                        return
+                    end
+
+                    if error == "delivery-location-inactive" then
+                        Chat.SendMessage(player, "Point de livraison inactif.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Impossible de creer le contrat depuis la route.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Contrat transport cree depuis route : #%s route=%s %s reward=%s.",
+                        tostring(contract_row.id),
+                        tostring(contract_row.route_key or "inconnue"),
+                        tostring(format_contract_item_requirement(contract_row)),
+                        tostring(contract_row.reward_money)
+                    )
+                )
             end)
 
             return false
