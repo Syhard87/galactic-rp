@@ -181,6 +181,10 @@ local function build_skill_level_map(skill_rows)
     return level_by_skill_key
 end
 
+local function normalize_stock_quantity(value)
+    return normalize_non_negative_integer(value)
+end
+
 function GatheringService.Create(repository)
     local self = setmetatable({}, GatheringService)
 
@@ -230,6 +234,35 @@ function GatheringService:GetNodeInfo(node_key, callback)
 
         callback(true, node_row, nil)
     end)
+end
+
+function GatheringService:RestockNode(node_key, quantity, callback)
+    local normalized_node_key = normalize_node_key(node_key)
+    local normalized_quantity = nil
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_node_key == nil then
+        callback(false, nil, "node-key-required")
+        return true
+    end
+
+    if quantity ~= nil then
+        normalized_quantity = normalize_positive_integer(quantity)
+
+        if normalized_quantity == nil or normalized_quantity > 1000 then
+            callback(false, nil, "quantity-required")
+            return true
+        end
+    end
+
+    return self.repository:RestockNode(normalized_node_key, normalized_quantity, callback)
 end
 
 function GatheringService:ValidateNodeProximity(player, node)
@@ -395,6 +428,43 @@ function GatheringService:ValidateGatheringRequirements(character_id, node, call
     return true
 end
 
+function GatheringService:ResolveGatherQuantity(node)
+    local quantity = nil
+    local available_stock = nil
+
+    if type(node) ~= "table" then
+        return nil, "node-not-found"
+    end
+
+    if node.min_quantity == nil or node.max_quantity == nil or node.max_quantity < node.min_quantity then
+        return nil, "database-error"
+    end
+
+    quantity = math.random(node.min_quantity, node.max_quantity)
+
+    if node.stock_enabled ~= true then
+        return quantity, nil
+    end
+
+    available_stock = normalize_stock_quantity(node.stock_quantity)
+
+    if available_stock == nil then
+        return nil, "stock-invalid"
+    end
+
+    if available_stock < 1 then
+        return nil, "node-exhausted"
+    end
+
+    quantity = math.min(quantity, available_stock)
+
+    if quantity < 1 then
+        return nil, "node-exhausted"
+    end
+
+    return quantity, nil
+end
+
 function GatheringService:Gather(character_id, player, node_key, callback)
     local normalized_character_id = normalize_character_id(character_id)
     local normalized_node_key = normalize_node_key(node_key)
@@ -433,204 +503,261 @@ function GatheringService:Gather(character_id, player, node_key, callback)
             return
         end
 
-        if node_row.result_item_key == nil
-            or node_row.min_quantity == nil
-            or node_row.max_quantity == nil
-            or node_row.cooldown_seconds == nil
-        then
-            callback(false, nil, "database-error")
-            return
-        end
-
-        local is_near_node, proximity_error = self:ValidateNodeProximity(player, node_row)
-
-        if not is_near_node then
-            callback(false, {
-                node = node_row,
-            }, proximity_error)
-            return
-        end
-
-        self.repository:GetCooldown(normalized_character_id, normalized_node_key, function(is_cooldown_success, cooldown_row, cooldown_error)
+        self.repository:MaybeRestockNode(normalized_node_key, function(is_restock_success, maybe_restocked_node, restock_error)
             local current_epoch = os.time()
-            local last_gathered_epoch = cooldown_row and cooldown_row.last_gathered_epoch or 0
+            local last_gathered_epoch = 0
             local remaining_seconds = 0
+            local effective_node = maybe_restocked_node or node_row
 
-            if not is_cooldown_success then
+            if not is_restock_success or type(effective_node) ~= "table" then
                 callback(false, nil, "database-error")
                 return
             end
 
-            if last_gathered_epoch > 0 then
-                remaining_seconds = math.max(
-                    0,
-                    math.floor((last_gathered_epoch + node_row.cooldown_seconds) - current_epoch)
-                )
-            end
-
-            if remaining_seconds > 0 then
-                callback(false, {
-                    node = node_row,
-                    cooldown = cooldown_row,
-                    remaining_seconds = remaining_seconds,
-                }, "cooldown-active")
+            if effective_node.result_item_key == nil
+                or effective_node.min_quantity == nil
+                or effective_node.max_quantity == nil
+                or effective_node.cooldown_seconds == nil
+            then
+                callback(false, nil, "database-error")
                 return
             end
 
-            self:ValidateGatheringRequirements(normalized_character_id, node_row, function(is_requirement_success, requirement_result, requirement_error)
-                if not is_requirement_success then
-                    callback(false, requirement_result, requirement_error)
+            local is_near_node, proximity_error = self:ValidateNodeProximity(player, effective_node)
+
+            if not is_near_node then
+                callback(false, {
+                    node = effective_node,
+                }, proximity_error)
+                return
+            end
+
+            self.repository:GetCooldown(normalized_character_id, normalized_node_key, function(is_cooldown_success, cooldown_row, cooldown_error)
+                if not is_cooldown_success then
+                    callback(false, nil, "database-error")
                     return
                 end
 
-                if type(GRInventoryBridge) ~= "table" or type(GRInventoryBridge.AddItem) ~= "function" then
+                last_gathered_epoch = cooldown_row and cooldown_row.last_gathered_epoch or 0
+
+                if last_gathered_epoch > 0 then
+                    remaining_seconds = math.max(
+                        0,
+                        math.floor((last_gathered_epoch + effective_node.cooldown_seconds) - current_epoch)
+                    )
+                end
+
+                if remaining_seconds > 0 then
                     callback(false, {
-                        node = node_row,
-                    }, "inventory-unavailable")
+                        node = effective_node,
+                        cooldown = cooldown_row,
+                        remaining_seconds = remaining_seconds,
+                    }, "cooldown-active")
                     return
                 end
 
-                if node_row.max_quantity < node_row.min_quantity then
-                    callback(false, {
-                        node = node_row,
-                    }, "database-error")
-                    return
-                end
+                self:ValidateGatheringRequirements(normalized_character_id, effective_node, function(is_requirement_success, requirement_result, requirement_error)
+                    if not is_requirement_success then
+                        callback(false, requirement_result, requirement_error)
+                        return
+                    end
 
-                local quantity = math.random(node_row.min_quantity, node_row.max_quantity)
-                local metadata_json = encode_metadata_json({
-                    source = "gathering",
-                    node_key = normalized_node_key,
-                })
+                    if type(GRInventoryBridge) ~= "table" or type(GRInventoryBridge.AddItem) ~= "function" then
+                        callback(false, {
+                            node = effective_node,
+                        }, "inventory-unavailable")
+                        return
+                    end
 
-                GRInventoryBridge.AddItem(
-                    normalized_character_id,
-                    node_row.result_item_key,
-                    quantity,
-                    metadata_json,
-                    function(is_inventory_success, inventory_result, inventory_error)
-                        if not is_inventory_success then
-                            callback(false, {
-                                node = node_row,
-                                quantity = quantity,
-                                inventory_error = inventory_error,
-                            }, "inventory-failed")
-                            return
-                        end
+                    local quantity, quantity_error = self:ResolveGatherQuantity(effective_node)
 
-                        self.repository:UpsertCooldown(normalized_character_id, normalized_node_key, function(is_upsert_success, updated_cooldown, upsert_error)
-                            if not is_upsert_success or updated_cooldown == nil then
-                                if type(GRInventoryBridge) ~= "table" or type(GRInventoryBridge.RemoveItem) ~= "function" then
-                                    Console.Log(
-                                        "[gr_gathering][service] Cooldown update failed without inventory rollback character_id=%s node_key=%s item_key=%s quantity=%s reason=%s.",
-                                        tostring(normalized_character_id),
-                                        tostring(normalized_node_key),
-                                        tostring(node_row.result_item_key),
-                                        tostring(quantity),
-                                        tostring(upsert_error or "cooldown-upsert-failed")
-                                    )
+                    if quantity == nil then
+                        callback(false, {
+                            node = effective_node,
+                        }, quantity_error or "database-error")
+                        return
+                    end
 
-                                    callback(false, nil, "database-error")
-                                    return
-                                end
+                    local metadata_json = encode_metadata_json({
+                        source = "gathering",
+                        node_key = normalized_node_key,
+                    })
 
-                                GRInventoryBridge.RemoveItem(
-                                    normalized_character_id,
-                                    node_row.result_item_key,
-                                    quantity,
-                                    function(is_rollback_success, rollback_result, rollback_error)
-                                        if not is_rollback_success then
-                                            Console.Log(
-                                                "[gr_gathering][service] Inventory rollback failed character_id=%s node_key=%s item_key=%s quantity=%s reason=%s.",
-                                                tostring(normalized_character_id),
-                                                tostring(normalized_node_key),
-                                                tostring(node_row.result_item_key),
-                                                tostring(quantity),
-                                                tostring(rollback_error or upsert_error or "rollback-failed")
-                                            )
-                                        end
-
+                    local function continue_with_inventory(stock_result)
+                        GRInventoryBridge.AddItem(
+                            normalized_character_id,
+                            effective_node.result_item_key,
+                            quantity,
+                            metadata_json,
+                            function(is_inventory_success, inventory_result, inventory_error)
+                                local function rollback_stock(final_error, rollback_reason)
+                                    if effective_node.stock_enabled ~= true then
                                         callback(false, {
-                                            node = node_row,
+                                            node = stock_result or effective_node,
                                             quantity = quantity,
-                                            inventory = inventory_result,
-                                            rollback = rollback_result,
-                                        }, "database-error")
-                                    end
-                                )
-                                return
-                            end
-
-                            local function finalize_success(skill_result, skill_error)
-                                Console.Log(
-                                    "[gr_gathering][service] Gathering completed character_id=%s node_key=%s item_key=%s quantity=%s.",
-                                    tostring(normalized_character_id),
-                                    tostring(normalized_node_key),
-                                    tostring(node_row.result_item_key),
-                                    tostring(quantity)
-                                )
-
-                                callback(true, {
-                                    node = node_row,
-                                    quantity = quantity,
-                                    inventory = inventory_result,
-                                    cooldown = updated_cooldown,
-                                    skill = skill_result,
-                                    skill_error = skill_error,
-                                }, nil)
-                            end
-
-                            local normalized_skill_key = normalize_skill_key(node_row.required_skill_key)
-                            local skill_xp = normalize_non_negative_integer(node_row.skill_xp) or 0
-
-                            if normalized_skill_key == nil or skill_xp < 1 then
-                                finalize_success(nil, nil)
-                                return
-                            end
-
-                            if type(GRSkillsBridge) ~= "table" or type(GRSkillsBridge.AddSkillXp) ~= "function" then
-                                Console.Log(
-                                    "[gr_gathering][service] Skill XP skipped character_id=%s node_key=%s skill_key=%s reason=%s.",
-                                    tostring(normalized_character_id),
-                                    tostring(normalized_node_key),
-                                    tostring(normalized_skill_key),
-                                    "skills-bridge-unavailable"
-                                )
-
-                                finalize_success(nil, "skills-bridge-unavailable")
-                                return
-                            end
-
-                            GRSkillsBridge.AddSkillXp(
-                                normalized_character_id,
-                                normalized_skill_key,
-                                skill_xp,
-                                "gather:" .. tostring(normalized_node_key),
-                                function(is_skill_success, skill_row, skill_error)
-                                    if not is_skill_success then
-                                        Console.Log(
-                                            "[gr_gathering][service] Skill XP grant failed character_id=%s node_key=%s skill_key=%s amount=%s reason=%s.",
-                                            tostring(normalized_character_id),
-                                            tostring(normalized_node_key),
-                                            tostring(normalized_skill_key),
-                                            tostring(skill_xp),
-                                            tostring(skill_error or "skill-xp-failed")
-                                        )
-
-                                        finalize_success(nil, skill_error or "skill-xp-failed")
+                                            inventory_error = inventory_error,
+                                        }, final_error)
                                         return
                                     end
 
-                                    finalize_success({
-                                        skill_key = normalized_skill_key,
-                                        amount = skill_xp,
-                                        row = skill_row,
-                                    }, nil)
+                                    self.repository:IncreaseNodeStock(normalized_node_key, quantity, function(is_restore_success, restored_node, restore_error)
+                                        if not is_restore_success then
+                                            Console.Log(
+                                                "[gr_gathering][service] Stock rollback failed node_key=%s quantity=%s reason=%s.",
+                                                tostring(normalized_node_key),
+                                                tostring(quantity),
+                                                tostring(restore_error or rollback_reason or "stock-compensation-failed")
+                                            )
+
+                                            callback(false, {
+                                                node = stock_result or effective_node,
+                                                quantity = quantity,
+                                                inventory_error = inventory_error,
+                                                rollback_error = restore_error,
+                                            }, "stock-compensation-failed")
+                                            return
+                                        end
+
+                                        callback(false, {
+                                            node = restored_node,
+                                            quantity = quantity,
+                                            inventory_error = inventory_error,
+                                        }, final_error)
+                                    end)
                                 end
-                            )
-                        end)
+
+                                if not is_inventory_success then
+                                    rollback_stock("inventory-failed", "inventory-add-failed")
+                                    return
+                                end
+
+                                self.repository:UpsertCooldown(normalized_character_id, normalized_node_key, function(is_upsert_success, updated_cooldown, upsert_error)
+                                    local function finalize_success(skill_result, skill_error)
+                                        Console.Log(
+                                            "[gr_gathering][service] Gathering completed character_id=%s node_key=%s item_key=%s quantity=%s.",
+                                            tostring(normalized_character_id),
+                                            tostring(normalized_node_key),
+                                            tostring(effective_node.result_item_key),
+                                            tostring(quantity)
+                                        )
+
+                                        callback(true, {
+                                            node = stock_result or effective_node,
+                                            quantity = quantity,
+                                            inventory = inventory_result,
+                                            cooldown = updated_cooldown,
+                                            skill = skill_result,
+                                            skill_error = skill_error,
+                                        }, nil)
+                                    end
+
+                                    if not is_upsert_success or updated_cooldown == nil then
+                                        if type(GRInventoryBridge) ~= "table" or type(GRInventoryBridge.RemoveItem) ~= "function" then
+                                            Console.Log(
+                                                "[gr_gathering][service] Cooldown update failed without inventory rollback character_id=%s node_key=%s item_key=%s quantity=%s reason=%s.",
+                                                tostring(normalized_character_id),
+                                                tostring(normalized_node_key),
+                                                tostring(effective_node.result_item_key),
+                                                tostring(quantity),
+                                                tostring(upsert_error or "cooldown-upsert-failed")
+                                            )
+
+                                            rollback_stock("database-error", "cooldown-upsert-failed")
+                                            return
+                                        end
+
+                                        GRInventoryBridge.RemoveItem(
+                                            normalized_character_id,
+                                            effective_node.result_item_key,
+                                            quantity,
+                                            function(is_rollback_success, rollback_result, rollback_error)
+                                                if not is_rollback_success then
+                                                    Console.Log(
+                                                        "[gr_gathering][service] Inventory rollback failed character_id=%s node_key=%s item_key=%s quantity=%s reason=%s.",
+                                                        tostring(normalized_character_id),
+                                                        tostring(normalized_node_key),
+                                                        tostring(effective_node.result_item_key),
+                                                        tostring(quantity),
+                                                        tostring(rollback_error or upsert_error or "rollback-failed")
+                                                    )
+                                                end
+
+                                                rollback_stock("database-error", "cooldown-upsert-failed")
+                                            end
+                                        )
+                                        return
+                                    end
+
+                                    local normalized_skill_key = normalize_skill_key(effective_node.required_skill_key)
+                                    local skill_xp = normalize_non_negative_integer(effective_node.skill_xp) or 0
+
+                                    if normalized_skill_key == nil or skill_xp < 1 then
+                                        finalize_success(nil, nil)
+                                        return
+                                    end
+
+                                    if type(GRSkillsBridge) ~= "table" or type(GRSkillsBridge.AddSkillXp) ~= "function" then
+                                        Console.Log(
+                                            "[gr_gathering][service] Skill XP skipped character_id=%s node_key=%s skill_key=%s reason=%s.",
+                                            tostring(normalized_character_id),
+                                            tostring(normalized_node_key),
+                                            tostring(normalized_skill_key),
+                                            "skills-bridge-unavailable"
+                                        )
+
+                                        finalize_success(nil, "skills-bridge-unavailable")
+                                        return
+                                    end
+
+                                    GRSkillsBridge.AddSkillXp(
+                                        normalized_character_id,
+                                        normalized_skill_key,
+                                        skill_xp,
+                                        "gather:" .. tostring(normalized_node_key),
+                                        function(is_skill_success, skill_row, skill_error)
+                                            if not is_skill_success then
+                                                Console.Log(
+                                                    "[gr_gathering][service] Skill XP grant failed character_id=%s node_key=%s skill_key=%s amount=%s reason=%s.",
+                                                    tostring(normalized_character_id),
+                                                    tostring(normalized_node_key),
+                                                    tostring(normalized_skill_key),
+                                                    tostring(skill_xp),
+                                                    tostring(skill_error or "skill-xp-failed")
+                                                )
+
+                                                finalize_success(nil, skill_error or "skill-xp-failed")
+                                                return
+                                            end
+
+                                            finalize_success({
+                                                skill_key = normalized_skill_key,
+                                                amount = skill_xp,
+                                                row = skill_row,
+                                            }, nil)
+                                        end
+                                    )
+                                end)
+                            end
+                        )
                     end
-                )
+
+                    if effective_node.stock_enabled == true then
+                        self.repository:DecreaseNodeStock(normalized_node_key, quantity, function(is_stock_success, stock_result, stock_error)
+                            if not is_stock_success or stock_result == nil then
+                                callback(false, {
+                                    node = effective_node,
+                                    quantity = quantity,
+                                }, stock_error or "stock-update-failed")
+                                return
+                            end
+
+                            continue_with_inventory(stock_result)
+                        end)
+                        return
+                    end
+
+                    continue_with_inventory(effective_node)
+                end)
             end)
         end)
     end)

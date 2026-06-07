@@ -226,6 +226,30 @@ local function resolve_active_character_id(player_or_platform_id)
     return active_character.id
 end
 
+local function build_stock_text(node_row)
+    if type(node_row) ~= "table" or node_row.stock_enabled ~= true then
+        return "illimite"
+    end
+
+    return string.format(
+        "%s/%s",
+        tostring(node_row.stock_quantity),
+        tostring(node_row.max_stock)
+    )
+end
+
+local function build_restock_text(node_row)
+    if type(node_row) ~= "table" or node_row.stock_enabled ~= true then
+        return "none"
+    end
+
+    if node_row.restock_seconds == nil then
+        return "none"
+    end
+
+    return string.format("%ss", tostring(node_row.restock_seconds))
+end
+
 local function build_node_line(node_row)
     local requirement_parts = {}
 
@@ -245,15 +269,16 @@ local function build_node_line(node_row)
     end
 
     local line = string.format(
-        "- %s item=%s qty=%s-%s skill=%s xp=%s cooldown=%ss active=%s",
+        "- %s item=%s qty=%s-%s stock=%s cooldown=%ss active=%s skill=%s xp=%s",
         tostring(node_row.key),
         tostring(node_row.result_item_key),
         tostring(node_row.min_quantity),
         tostring(node_row.max_quantity),
-        tostring(node_row.required_skill_key or "none"),
-        tostring(node_row.skill_xp or 0),
+        tostring(build_stock_text(node_row)),
         tostring(node_row.cooldown_seconds),
-        tostring(node_row.is_active)
+        tostring(node_row.is_active),
+        tostring(node_row.required_skill_key or "none"),
+        tostring(node_row.skill_xp or 0)
     )
 
     if #requirement_parts > 0 then
@@ -269,10 +294,12 @@ local function build_node_info_lines(node_row)
 
     lines[#lines + 1] = string.format("Node %s :", tostring(node_row.key))
     lines[#lines + 1] = string.format(
-        "item=%s qty=%s-%s cooldown=%ss skill=%s xp=%s proximity=%s",
+        "item=%s qty=%s-%s stock=%s restock=%s cooldown=%ss skill=%s xp=%s proximity=%s",
         tostring(node_row.result_item_key),
         tostring(node_row.min_quantity),
         tostring(node_row.max_quantity),
+        tostring(build_stock_text(node_row)),
+        tostring(build_restock_text(node_row)),
         tostring(node_row.cooldown_seconds),
         tostring(node_row.required_skill_key or "none"),
         tostring(node_row.skill_xp or 0),
@@ -344,6 +371,14 @@ GRGatheringBridge.Gather = function(character_id, player, node_key, callback)
     return GRGathering.Server.Service:Gather(character_id, player, node_key, callback)
 end
 
+GRGatheringBridge.RestockNode = function(node_key, quantity, callback)
+    if GRGathering.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRGathering.Server.Service:RestockNode(node_key, quantity, callback)
+end
+
 Package.Export("GRGatheringBridge", GRGatheringBridge)
 
 if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.SendMessage) == "function" then
@@ -361,6 +396,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         if command_name ~= "gathernodes"
             and command_name ~= "gatherinfo"
             and command_name ~= "gather"
+            and command_name ~= "restocknode"
         then
             return
         end
@@ -398,6 +434,64 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 for _, node_row in ipairs(node_rows) do
                     Chat.SendMessage(player, build_node_line(node_row))
                 end
+            end)
+
+            return false
+        end
+
+        if command_name == "restocknode" then
+            local node_key = nil
+            local quantity_text = nil
+            local quantity = nil
+
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /restocknode <node_key> [quantity]")
+                return false
+            end
+
+            node_key, quantity_text = payload:match("^(%S+)%s*(.*)$")
+            node_key = trim_string(node_key)
+            quantity_text = trim_string(quantity_text)
+
+            if node_key == nil then
+                Chat.SendMessage(player, "Usage : /restocknode <node_key> [quantity]")
+                return false
+            end
+
+            if quantity_text ~= nil then
+                quantity = normalize_positive_integer(quantity_text)
+
+                if quantity == nil or quantity > 1000 then
+                    Chat.SendMessage(player, "Restock impossible : quantite invalide.")
+                    return false
+                end
+            end
+
+            GRGathering.Server.Service:RestockNode(node_key, quantity, function(is_success, result, error)
+                if not is_success then
+                    if error == "stock-disabled" then
+                        Chat.SendMessage(player, "Restock impossible : stock desactive pour ce node.")
+                        return
+                    end
+
+                    if error == "quantity-required" then
+                        Chat.SendMessage(player, "Restock impossible : quantite invalide.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Restock impossible : erreur node.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Stock node mis a jour : %s stock=%s/%s.",
+                        tostring(node_key),
+                        tostring(result.stock_quantity),
+                        tostring(result.max_stock)
+                    )
+                )
             end)
 
             return false
@@ -449,6 +543,11 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 if error == "node-inactive" then
                     Chat.SendMessage(player, "Recolte impossible : node inactif.")
+                    return
+                end
+
+                if error == "node-exhausted" then
+                    Chat.SendMessage(player, "Recolte impossible : node epuise.")
                     return
                 end
 
@@ -505,6 +604,16 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 if error == "inventory-unavailable" then
                     Chat.SendMessage(player, "Recolte impossible : inventaire indisponible.")
+                    return
+                end
+
+                if error == "stock-insufficient" or error == "stock-update-failed" then
+                    Chat.SendMessage(player, "Recolte impossible : stock insuffisant.")
+                    return
+                end
+
+                if error == "stock-compensation-failed" then
+                    Chat.SendMessage(player, "Recolte impossible : erreur stock.")
                     return
                 end
 

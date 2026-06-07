@@ -30,6 +30,7 @@ local EXTERNAL_CHAT_COMMANDS = {
     gathernodes = true,
     gatherinfo = true,
     gather = true,
+    restocknode = true,
     economybalance = true,
     economytransactions = true,
     economysalary = true,

@@ -18,6 +18,11 @@ local SELECT_NODES_QUERY = [[
         required_item_key,
         required_item_quantity,
         required_skill_level,
+        stock_enabled,
+        stock_quantity,
+        max_stock,
+        restock_seconds,
+        last_restock_at,
         skill_xp,
         cooldown_seconds,
         position_x,
@@ -46,6 +51,11 @@ local SELECT_NODE_QUERY = [[
         required_item_key,
         required_item_quantity,
         required_skill_level,
+        stock_enabled,
+        stock_quantity,
+        max_stock,
+        restock_seconds,
+        last_restock_at,
         skill_xp,
         cooldown_seconds,
         position_x,
@@ -101,6 +111,169 @@ local UPSERT_COOLDOWN_QUERY = [[
         last_gathered_at,
         EXTRACT(EPOCH FROM last_gathered_at) AS last_gathered_epoch,
         gather_count,
+        updated_at
+]]
+
+local DECREASE_NODE_STOCK_QUERY = [[
+    UPDATE gathering_nodes
+    SET
+        stock_quantity = stock_quantity - :0,
+        updated_at = NOW()
+    WHERE key = :1
+        AND stock_enabled = TRUE
+        AND stock_quantity IS NOT NULL
+        AND stock_quantity >= :0
+    RETURNING
+        id,
+        key,
+        name,
+        description,
+        node_type,
+        result_item_key,
+        min_quantity,
+        max_quantity,
+        required_skill_key,
+        required_item_key,
+        required_item_quantity,
+        required_skill_level,
+        stock_enabled,
+        stock_quantity,
+        max_stock,
+        restock_seconds,
+        last_restock_at,
+        skill_xp,
+        cooldown_seconds,
+        position_x,
+        position_y,
+        position_z,
+        radius,
+        requires_proximity,
+        is_active,
+        created_at,
+        updated_at
+]]
+
+local INCREASE_NODE_STOCK_QUERY = [[
+    UPDATE gathering_nodes
+    SET
+        stock_quantity = CASE
+            WHEN max_stock IS NULL THEN COALESCE(stock_quantity, 0) + :0
+            ELSE LEAST(max_stock, COALESCE(stock_quantity, 0) + :0)
+        END,
+        updated_at = NOW()
+    WHERE key = :1
+        AND stock_enabled = TRUE
+    RETURNING
+        id,
+        key,
+        name,
+        description,
+        node_type,
+        result_item_key,
+        min_quantity,
+        max_quantity,
+        required_skill_key,
+        required_item_key,
+        required_item_quantity,
+        required_skill_level,
+        stock_enabled,
+        stock_quantity,
+        max_stock,
+        restock_seconds,
+        last_restock_at,
+        skill_xp,
+        cooldown_seconds,
+        position_x,
+        position_y,
+        position_z,
+        radius,
+        requires_proximity,
+        is_active,
+        created_at,
+        updated_at
+]]
+
+local SET_NODE_STOCK_TO_MAX_QUERY = [[
+    UPDATE gathering_nodes
+    SET
+        stock_quantity = max_stock,
+        last_restock_at = NOW(),
+        updated_at = NOW()
+    WHERE key = :0
+        AND stock_enabled = TRUE
+        AND max_stock IS NOT NULL
+    RETURNING
+        id,
+        key,
+        name,
+        description,
+        node_type,
+        result_item_key,
+        min_quantity,
+        max_quantity,
+        required_skill_key,
+        required_item_key,
+        required_item_quantity,
+        required_skill_level,
+        stock_enabled,
+        stock_quantity,
+        max_stock,
+        restock_seconds,
+        last_restock_at,
+        skill_xp,
+        cooldown_seconds,
+        position_x,
+        position_y,
+        position_z,
+        radius,
+        requires_proximity,
+        is_active,
+        created_at,
+        updated_at
+]]
+
+local MAYBE_RESTOCK_NODE_QUERY = [[
+    UPDATE gathering_nodes
+    SET
+        stock_quantity = max_stock,
+        last_restock_at = NOW(),
+        updated_at = NOW()
+    WHERE key = :0
+        AND stock_enabled = TRUE
+        AND max_stock IS NOT NULL
+        AND restock_seconds IS NOT NULL
+        AND restock_seconds > 0
+        AND (
+            last_restock_at IS NULL
+            OR last_restock_at + (restock_seconds * INTERVAL '1 second') <= NOW()
+        )
+    RETURNING
+        id,
+        key,
+        name,
+        description,
+        node_type,
+        result_item_key,
+        min_quantity,
+        max_quantity,
+        required_skill_key,
+        required_item_key,
+        required_item_quantity,
+        required_skill_level,
+        stock_enabled,
+        stock_quantity,
+        max_stock,
+        restock_seconds,
+        last_restock_at,
+        skill_xp,
+        cooldown_seconds,
+        position_x,
+        position_y,
+        position_z,
+        radius,
+        requires_proximity,
+        is_active,
+        created_at,
         updated_at
 ]]
 
@@ -260,6 +433,11 @@ local function normalize_node_row(row)
         required_item_key = normalize_item_key(row.required_item_key),
         required_item_quantity = normalize_positive_integer(row.required_item_quantity) or 1,
         required_skill_level = normalize_positive_integer(row.required_skill_level),
+        stock_enabled = normalize_boolean(row.stock_enabled, false),
+        stock_quantity = normalize_non_negative_integer(row.stock_quantity),
+        max_stock = normalize_non_negative_integer(row.max_stock),
+        restock_seconds = normalize_positive_integer(row.restock_seconds),
+        last_restock_at = row.last_restock_at,
         skill_xp = normalize_non_negative_integer(row.skill_xp) or 0,
         cooldown_seconds = normalize_positive_integer(row.cooldown_seconds),
         position_x = normalize_number(row.position_x),
@@ -481,6 +659,252 @@ function GatheringRepository:UpsertCooldown(character_id, node_key, callback)
             callback(true, normalized_rows[1], nil)
         end, normalized_character_id, normalized_node_key)
     end, "gathering-cooldown-upsert")
+end
+
+function GatheringRepository:DecreaseNodeStock(node_key, quantity, callback)
+    local normalized_node_key = normalize_node_key(node_key)
+    local normalized_quantity = normalize_positive_integer(quantity)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_node_key == nil then
+        callback(false, nil, "node-key-required")
+        return true
+    end
+
+    if normalized_quantity == nil then
+        callback(false, nil, "quantity-required")
+        return true
+    end
+
+    return self:GetNode(normalized_node_key, function(is_node_success, node_row, node_error)
+        if not is_node_success then
+            callback(false, nil, node_error)
+            return
+        end
+
+        if node_row == nil then
+            callback(false, nil, "node-not-found")
+            return
+        end
+
+        if node_row.stock_enabled ~= true then
+            callback(true, node_row, nil)
+            return
+        end
+
+        if type(node_row.stock_quantity) ~= "number" or node_row.stock_quantity < 0 then
+            callback(false, nil, "stock-invalid")
+            return
+        end
+
+        if node_row.stock_quantity < normalized_quantity then
+            callback(false, nil, "stock-insufficient")
+            return
+        end
+
+        self:Connect(function(is_connected, database_or_error, error)
+            if not is_connected then
+                callback(false, nil, error)
+                return
+            end
+
+            database_or_error:SelectAsync(DECREASE_NODE_STOCK_QUERY, function(rows, select_error)
+                local normalized_rows = nil
+
+                if select_error ~= nil then
+                    callback(false, nil, select_error)
+                    return
+                end
+
+                normalized_rows = normalize_rows(rows, normalize_node_row)
+
+                if normalized_rows[1] == nil then
+                    callback(false, nil, "stock-insufficient")
+                    return
+                end
+
+                callback(true, normalized_rows[1], nil)
+            end, normalized_quantity, normalized_node_key)
+        end, "gathering-stock-decrease")
+    end)
+end
+
+function GatheringRepository:IncreaseNodeStock(node_key, quantity, callback)
+    local normalized_node_key = normalize_node_key(node_key)
+    local normalized_quantity = normalize_positive_integer(quantity)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_node_key == nil then
+        callback(false, nil, "node-key-required")
+        return true
+    end
+
+    if normalized_quantity == nil then
+        callback(false, nil, "quantity-required")
+        return true
+    end
+
+    return self:GetNode(normalized_node_key, function(is_node_success, node_row, node_error)
+        if not is_node_success then
+            callback(false, nil, node_error)
+            return
+        end
+
+        if node_row == nil then
+            callback(false, nil, "node-not-found")
+            return
+        end
+
+        if node_row.stock_enabled ~= true then
+            callback(false, nil, "stock-disabled")
+            return
+        end
+
+        if node_row.max_stock ~= nil and type(node_row.max_stock) ~= "number" then
+            callback(false, nil, "stock-invalid")
+            return
+        end
+
+        self:Connect(function(is_connected, database_or_error, error)
+            if not is_connected then
+                callback(false, nil, error)
+                return
+            end
+
+            database_or_error:SelectAsync(INCREASE_NODE_STOCK_QUERY, function(rows, select_error)
+                local normalized_rows = nil
+
+                if select_error ~= nil then
+                    callback(false, nil, select_error)
+                    return
+                end
+
+                normalized_rows = normalize_rows(rows, normalize_node_row)
+
+                if normalized_rows[1] == nil then
+                    callback(false, nil, "stock-update-failed")
+                    return
+                end
+
+                callback(true, normalized_rows[1], nil)
+            end, normalized_quantity, normalized_node_key)
+        end, "gathering-stock-increase")
+    end)
+end
+
+function GatheringRepository:RestockNode(node_key, quantity, callback)
+    local normalized_node_key = normalize_node_key(node_key)
+    local normalized_quantity = normalize_positive_integer(quantity)
+    local has_quantity = quantity ~= nil
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_node_key == nil then
+        callback(false, nil, "node-key-required")
+        return true
+    end
+
+    if has_quantity and normalized_quantity == nil then
+        callback(false, nil, "quantity-required")
+        return true
+    end
+
+    return self:GetNode(normalized_node_key, function(is_node_success, node_row, node_error)
+        if not is_node_success then
+            callback(false, nil, node_error)
+            return
+        end
+
+        if node_row == nil then
+            callback(false, nil, "node-not-found")
+            return
+        end
+
+        if node_row.stock_enabled ~= true then
+            callback(false, nil, "stock-disabled")
+            return
+        end
+
+        if has_quantity then
+            return self:IncreaseNodeStock(normalized_node_key, normalized_quantity, callback)
+        end
+
+        if node_row.max_stock == nil then
+            callback(false, nil, "max-stock-missing")
+            return
+        end
+
+        self:Connect(function(is_connected, database_or_error, error)
+            if not is_connected then
+                callback(false, nil, error)
+                return
+            end
+
+            database_or_error:SelectAsync(SET_NODE_STOCK_TO_MAX_QUERY, function(rows, select_error)
+                local normalized_rows = nil
+
+                if select_error ~= nil then
+                    callback(false, nil, select_error)
+                    return
+                end
+
+                normalized_rows = normalize_rows(rows, normalize_node_row)
+
+                if normalized_rows[1] == nil then
+                    callback(false, nil, "stock-update-failed")
+                    return
+                end
+
+                callback(true, normalized_rows[1], nil)
+            end, normalized_node_key)
+        end, "gathering-stock-restock")
+    end)
+end
+
+function GatheringRepository:MaybeRestockNode(node_key, callback)
+    local normalized_node_key = normalize_node_key(node_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_node_key == nil then
+        callback(false, nil, "node-key-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(MAYBE_RESTOCK_NODE_QUERY, function(rows, select_error)
+            local normalized_rows = nil
+
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            normalized_rows = normalize_rows(rows, normalize_node_row)
+
+            if normalized_rows[1] ~= nil then
+                callback(true, normalized_rows[1], nil)
+                return
+            end
+
+            self:GetNode(normalized_node_key, callback)
+        end, normalized_node_key)
+    end, "gathering-stock-maybe-restock")
 end
 
 GRGathering.Server.GatheringRepositoryClass = GatheringRepository
