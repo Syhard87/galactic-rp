@@ -4,6 +4,9 @@ GRContracts.Server = GRContracts.Server or {}
 local ContractService = {}
 ContractService.__index = ContractService
 
+local MAX_REWARD_MONEY = 1000000
+local MAX_DELIVERY_QUANTITY = 1000
+
 local ALLOWED_CONTRACT_TYPES = {
     crafting = true,
     delivery = true,
@@ -58,7 +61,7 @@ end
 
 local function normalize_reward_money(value)
     if type(value) == "number" then
-        if value < 0 or value > 100000 or value % 1 ~= 0 then
+        if value < 0 or value > MAX_REWARD_MONEY or value % 1 ~= 0 then
             return nil
         end
 
@@ -68,7 +71,7 @@ local function normalize_reward_money(value)
     if type(value) == "string" and value:match("^%d+$") ~= nil then
         local parsed_value = tonumber(value)
 
-        if parsed_value ~= nil and parsed_value >= 0 and parsed_value <= 100000 then
+        if parsed_value ~= nil and parsed_value >= 0 and parsed_value <= MAX_REWARD_MONEY then
             return math.floor(parsed_value)
         end
     end
@@ -130,6 +133,20 @@ local function normalize_payment_status(payment_status)
     return normalized_payment_status
 end
 
+local function normalize_item_key(item_key)
+    local normalized_item_key = trim_string(item_key)
+
+    if normalized_item_key == nil then
+        return nil
+    end
+
+    if normalized_item_key:match("^[a-z0-9_]+$") == nil then
+        return nil
+    end
+
+    return string.lower(normalized_item_key)
+end
+
 local function build_contract_title(contract_type)
     return CONTRACT_TYPE_TITLES[contract_type] or contract_type
 end
@@ -152,6 +169,26 @@ local function resolve_economy_bridge()
     end
 
     return GREconomyBridge
+end
+
+local function resolve_inventory_bridge()
+    if type(GRInventoryBridge) ~= "table" then
+        return nil
+    end
+
+    if type(GRInventoryBridge.ListInventory) ~= "function" then
+        return nil
+    end
+
+    if type(GRInventoryBridge.RemoveItem) ~= "function" then
+        return nil
+    end
+
+    if type(GRInventoryBridge.AddItem) ~= "function" then
+        return nil
+    end
+
+    return GRInventoryBridge
 end
 
 local function resolve_contract_role(contract_row, character_id)
@@ -179,6 +216,18 @@ local function resolve_contract_role(contract_row, character_id)
     end
 
     return "unknown"
+end
+
+local function has_required_items(inventory_rows, required_item_key, required_item_quantity)
+    local total_quantity = 0
+
+    for _, inventory_row in ipairs(inventory_rows or {}) do
+        if inventory_row.item_key == required_item_key then
+            total_quantity = total_quantity + (tonumber(inventory_row.quantity) or 0)
+        end
+    end
+
+    return total_quantity >= required_item_quantity, total_quantity
 end
 
 function ContractService.Create(repository)
@@ -230,6 +279,9 @@ function ContractService:CreateContract(character_id, contract_type, reward_mone
         description = normalized_description,
         reward_money = normalized_reward_money,
         deadline_at = nil,
+        required_item_key = nil,
+        required_item_quantity = 0,
+        consume_required_items = true,
     }, function(is_success, contract_row, error)
         if not is_success then
             callback(false, nil, error)
@@ -241,6 +293,75 @@ function ContractService:CreateContract(character_id, contract_type, reward_mone
             tostring(contract_row and contract_row.id),
             tostring(normalized_character_id),
             tostring(normalized_contract_type),
+            tostring(normalized_reward_money)
+        )
+
+        callback(true, contract_row, nil)
+    end)
+end
+
+function ContractService:CreateDeliveryContract(creator_character_id, item_key, quantity, reward_money, description, callback)
+    local normalized_character_id = normalize_positive_integer(creator_character_id)
+    local normalized_item_key = normalize_item_key(item_key)
+    local normalized_quantity = normalize_positive_integer(quantity)
+    local normalized_reward_money = normalize_reward_money(reward_money)
+    local normalized_description = normalize_description(description)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if normalized_item_key == nil then
+        callback(false, nil, "item-key-invalid")
+        return true
+    end
+
+    if normalized_quantity == nil or normalized_quantity > MAX_DELIVERY_QUANTITY then
+        callback(false, nil, "quantity-invalid")
+        return true
+    end
+
+    if normalized_reward_money == nil then
+        callback(false, nil, "reward-money-invalid")
+        return true
+    end
+
+    if normalized_description == nil then
+        callback(false, nil, "description-invalid")
+        return true
+    end
+
+    return self.repository:CreateContract({
+        creator_character_id = normalized_character_id,
+        type = "delivery",
+        title = build_contract_title("delivery"),
+        description = normalized_description,
+        reward_money = normalized_reward_money,
+        deadline_at = nil,
+        required_item_key = normalized_item_key,
+        required_item_quantity = normalized_quantity,
+        consume_required_items = true,
+    }, function(is_success, contract_row, error)
+        if not is_success then
+            callback(false, nil, error)
+            return
+        end
+
+        Console.Log(
+            "[gr_contracts][service] Delivery contract created id=%s creator_character_id=%s item=%s quantity=%s reward_money=%s.",
+            tostring(contract_row and contract_row.id),
+            tostring(normalized_character_id),
+            tostring(normalized_item_key),
+            tostring(normalized_quantity),
             tostring(normalized_reward_money)
         )
 
@@ -411,131 +532,248 @@ function ContractService:CompleteContract(character_id, contract_id, callback)
             return
         end
 
-        self.repository:CompleteContract(normalized_contract_id, normalized_character_id, function(is_complete_success, completed_row, complete_error)
-            if not is_complete_success then
-                callback(false, nil, complete_error)
-                return
-            end
+        local required_item_key = normalize_item_key(contract_row.required_item_key)
+        local required_item_quantity = normalize_positive_integer(contract_row.required_item_quantity)
+        local should_consume_required_items = contract_row.consume_required_items ~= false
+        local inventory_bridge = nil
 
-            if completed_row == nil then
-                callback(false, nil, "contract-complete-forbidden")
-                return
-            end
+        local function continue_after_requirements()
+            self.repository:CompleteContract(normalized_contract_id, normalized_character_id, function(is_complete_success, completed_row, complete_error)
+                if not is_complete_success then
+                    if required_item_key ~= nil and required_item_quantity ~= nil and should_consume_required_items and inventory_bridge ~= nil then
+                        inventory_bridge.AddItem(normalized_character_id, required_item_key, required_item_quantity, nil, function(is_compensation_success)
+                            if not is_compensation_success then
+                                callback(false, contract_row, "inventory-compensation-failed")
+                                return
+                            end
 
-            local reward_money = normalize_reward_money(completed_row.reward_money) or 0
+                            callback(false, contract_row, complete_error or "contract-complete-failed")
+                        end)
+                        return
+                    end
 
-            local function finish_success(payment_status, money_result)
-                local enriched_row = {}
-
-                for key, value in pairs(completed_row) do
-                    enriched_row[key] = value
+                    callback(false, nil, complete_error)
+                    return
                 end
 
-                enriched_row.payment_status = payment_status
-                enriched_row.money_result = money_result
+                if completed_row == nil then
+                    if required_item_key ~= nil and required_item_quantity ~= nil and should_consume_required_items and inventory_bridge ~= nil then
+                        inventory_bridge.AddItem(normalized_character_id, required_item_key, required_item_quantity, nil, function(is_compensation_success)
+                            if not is_compensation_success then
+                                callback(false, contract_row, "inventory-compensation-failed")
+                                return
+                            end
 
-                Console.Log(
-                    "[gr_contracts][service] Contract completed id=%s assignee_character_id=%s.",
-                    tostring(enriched_row.id),
-                    tostring(normalized_character_id)
-                )
-
-                callback(true, enriched_row, nil)
-            end
-
-            local function mark_payment_and_finish(payment_status, money_result)
-                self.repository:MarkContractPayment(normalized_contract_id, payment_status, function(is_mark_success, marked_row, mark_error)
-                    if not is_mark_success then
-                        Console.Log(
-                            "[gr_contracts][service] Contract payment tracking failed contract_id=%s payment_status=%s reason=%s.",
-                            tostring(normalized_contract_id),
-                            tostring(payment_status),
-                            tostring(mark_error)
-                        )
-                        finish_success(payment_status, money_result)
+                            callback(false, contract_row, "contract-complete-forbidden")
+                        end)
                         return
                     end
 
-                    if marked_row ~= nil then
-                        completed_row = marked_row
+                    callback(false, nil, "contract-complete-forbidden")
+                    return
+                end
+
+                local reward_money = normalize_reward_money(completed_row.reward_money) or 0
+
+                local function finish_success(payment_status, money_result)
+                    local enriched_row = {}
+
+                    for key, value in pairs(completed_row) do
+                        enriched_row[key] = value
                     end
 
-                    finish_success(payment_status, money_result)
-                end)
-            end
-
-            if reward_money <= 0 then
-                Console.Log(
-                    "[gr_contracts][service] Contract payment unavailable reason=%s contract_id=%s.",
-                    "reward-money-non-positive",
-                    tostring(normalized_contract_id)
-                )
-                mark_payment_and_finish("unavailable", {
-                    money_bank = nil,
-                    amount = reward_money,
-                })
-                return
-            end
-
-            local economy_bridge = resolve_economy_bridge()
-
-            if economy_bridge == nil then
-                Console.Log(
-                    "[gr_contracts][service] Contract payment unavailable reason=%s contract_id=%s.",
-                    "economy-bridge-unavailable",
-                    tostring(normalized_contract_id)
-                )
-                mark_payment_and_finish("unavailable", nil)
-                return
-            end
-
-            local payment_reason = string.format("contract:%s", tostring(normalized_contract_id))
-            local payment_metadata = {
-                contract_id = normalized_contract_id,
-                contract_type = completed_row.type,
-                source = "gr-contracts",
-            }
-
-            Console.Log(
-                "[gr_contracts][service] Contract payment requested through economy contract_id=%s assignee_character_id=%s amount=%s.",
-                tostring(normalized_contract_id),
-                tostring(normalized_character_id),
-                tostring(reward_money)
-            )
-
-            economy_bridge.AddMoney(
-                normalized_character_id,
-                "bank",
-                reward_money,
-                payment_reason,
-                payment_metadata,
-                function(is_credit_success, money_result, credit_error)
-                    if not is_credit_success or money_result == nil then
-                        Console.Log(
-                            "[gr_contracts][service] Contract payment failed through economy contract_id=%s assignee_character_id=%s amount=%s reason=%s.",
-                            tostring(normalized_contract_id),
-                            tostring(normalized_character_id),
-                            tostring(reward_money),
-                            tostring(credit_error or "economy-credit-failed")
-                        )
-                        mark_payment_and_finish("failed", nil)
-                        return
-                    end
+                    enriched_row.payment_status = payment_status
+                    enriched_row.money_result = money_result
 
                     Console.Log(
-                        "[gr_contracts][service] Contract payment completed through economy contract_id=%s assignee_character_id=%s amount=%s.",
-                        tostring(normalized_contract_id),
-                        tostring(normalized_character_id),
-                        tostring(reward_money)
+                        "[gr_contracts][service] Contract completed id=%s assignee_character_id=%s.",
+                        tostring(enriched_row.id),
+                        tostring(normalized_character_id)
                     )
 
-                    mark_payment_and_finish("paid", {
-                        balance = money_result.balance,
-                        transaction = money_result.transaction,
+                    callback(true, enriched_row, nil)
+                end
+
+                local function mark_payment_and_finish(payment_status, money_result)
+                    self.repository:MarkContractPayment(normalized_contract_id, payment_status, function(is_mark_success, marked_row, mark_error)
+                        if not is_mark_success then
+                            Console.Log(
+                                "[gr_contracts][service] Contract payment tracking failed contract_id=%s payment_status=%s reason=%s.",
+                                tostring(normalized_contract_id),
+                                tostring(payment_status),
+                                tostring(mark_error)
+                            )
+                            finish_success(payment_status, money_result)
+                            return
+                        end
+
+                        if marked_row ~= nil then
+                            completed_row = marked_row
+                        end
+
+                        finish_success(payment_status, money_result)
+                    end)
+                end
+
+                local function fail_with_payment_compensation(error_code)
+                    if required_item_key == nil or required_item_quantity == nil or not should_consume_required_items or inventory_bridge == nil then
+                        callback(false, completed_row, error_code)
+                        return
+                    end
+
+                    inventory_bridge.AddItem(normalized_character_id, required_item_key, required_item_quantity, nil, function(is_compensation_success)
+                        if not is_compensation_success then
+                            Console.Log(
+                                "[gr_contracts][service] Contract item compensation failed contract_id=%s assignee_character_id=%s item_key=%s quantity=%s.",
+                                tostring(normalized_contract_id),
+                                tostring(normalized_character_id),
+                                tostring(required_item_key),
+                                tostring(required_item_quantity)
+                            )
+                            callback(false, completed_row, "inventory-compensation-failed")
+                            return
+                        end
+
+                        callback(false, completed_row, error_code)
+                    end)
+                end
+
+                if reward_money <= 0 then
+                    Console.Log(
+                        "[gr_contracts][service] Contract payment unavailable reason=%s contract_id=%s.",
+                        "reward-money-non-positive",
+                        tostring(normalized_contract_id)
+                    )
+                    mark_payment_and_finish("unavailable", {
+                        money_bank = nil,
                         amount = reward_money,
                     })
+                    return
                 end
-            )
+
+                local economy_bridge = resolve_economy_bridge()
+
+                if economy_bridge == nil then
+                    Console.Log(
+                        "[gr_contracts][service] Contract payment failed reason=%s contract_id=%s.",
+                        "economy-bridge-unavailable",
+                        tostring(normalized_contract_id)
+                    )
+                    self.repository:MarkContractPayment(normalized_contract_id, "failed", function()
+                        fail_with_payment_compensation("payment-failed")
+                    end)
+                    return
+                end
+
+                local payment_reason = string.format("contract:%s", tostring(normalized_contract_id))
+                local payment_metadata = {
+                    contract_id = normalized_contract_id,
+                    contract_type = completed_row.type,
+                    source = "gr-contracts",
+                    required_item_key = required_item_key,
+                    required_item_quantity = required_item_quantity,
+                }
+
+                Console.Log(
+                    "[gr_contracts][service] Contract payment requested through economy contract_id=%s assignee_character_id=%s amount=%s.",
+                    tostring(normalized_contract_id),
+                    tostring(normalized_character_id),
+                    tostring(reward_money)
+                )
+
+                economy_bridge.AddMoney(
+                    normalized_character_id,
+                    "bank",
+                    reward_money,
+                    payment_reason,
+                    payment_metadata,
+                    function(is_credit_success, money_result, credit_error)
+                        if not is_credit_success or money_result == nil then
+                            Console.Log(
+                                "[gr_contracts][service] Contract payment failed through economy contract_id=%s assignee_character_id=%s amount=%s reason=%s.",
+                                tostring(normalized_contract_id),
+                                tostring(normalized_character_id),
+                                tostring(reward_money),
+                                tostring(credit_error or "economy-credit-failed")
+                            )
+
+                            self.repository:MarkContractPayment(normalized_contract_id, "failed", function()
+                                fail_with_payment_compensation("payment-failed")
+                            end)
+                            return
+                        end
+
+                        Console.Log(
+                            "[gr_contracts][service] Contract payment completed through economy contract_id=%s assignee_character_id=%s amount=%s.",
+                            tostring(normalized_contract_id),
+                            tostring(normalized_character_id),
+                            tostring(reward_money)
+                        )
+
+                        mark_payment_and_finish("paid", {
+                            balance = money_result.balance,
+                            transaction = money_result.transaction,
+                            amount = reward_money,
+                        })
+                    end
+                )
+            end)
+        end
+
+        if required_item_key == nil or required_item_quantity == nil or required_item_quantity < 1 or not should_consume_required_items then
+            continue_after_requirements()
+            return
+        end
+
+        inventory_bridge = resolve_inventory_bridge()
+
+        if inventory_bridge == nil then
+            callback(false, contract_row, "inventory-check-unavailable")
+            return
+        end
+
+        inventory_bridge.ListInventory(normalized_character_id, function(is_list_success, inventory_rows, list_error)
+            if not is_list_success then
+                Console.Log(
+                    "[gr_contracts][service] Contract inventory check failed contract_id=%s assignee_character_id=%s reason=%s.",
+                    tostring(normalized_contract_id),
+                    tostring(normalized_character_id),
+                    tostring(list_error or "inventory-list-failed")
+                )
+                callback(false, contract_row, "inventory-check-unavailable")
+                return
+            end
+
+            local has_items, available_quantity = has_required_items(inventory_rows, required_item_key, required_item_quantity)
+
+            if not has_items then
+                local error_row = {}
+
+                for key, value in pairs(contract_row) do
+                    error_row[key] = value
+                end
+
+                error_row.available_item_quantity = available_quantity
+                callback(false, error_row, "required-item-missing")
+                return
+            end
+
+            inventory_bridge.RemoveItem(normalized_character_id, required_item_key, required_item_quantity, function(is_remove_success, _, remove_error)
+                if not is_remove_success then
+                    Console.Log(
+                        "[gr_contracts][service] Contract inventory remove failed contract_id=%s assignee_character_id=%s item_key=%s quantity=%s reason=%s.",
+                        tostring(normalized_contract_id),
+                        tostring(normalized_character_id),
+                        tostring(required_item_key),
+                        tostring(required_item_quantity),
+                        tostring(remove_error or "inventory-remove-failed")
+                    )
+                    callback(false, contract_row, "inventory-remove-failed")
+                    return
+                end
+
+                continue_after_requirements()
+            end)
         end)
     end)
 end

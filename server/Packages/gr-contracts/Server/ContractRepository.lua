@@ -4,6 +4,27 @@ GRContracts.Server = GRContracts.Server or {}
 local ContractRepository = {}
 ContractRepository.__index = ContractRepository
 
+local CONTRACT_SELECT_COLUMNS = [[
+        id,
+        creator_character_id,
+        assignee_character_id,
+        type,
+        title,
+        description,
+        reward_money,
+        required_item_key,
+        required_item_quantity,
+        consume_required_items,
+        status,
+        payment_status,
+        created_at,
+        accepted_at,
+        completed_at,
+        cancelled_at,
+        paid_at,
+        deadline_at
+]]
+
 local INSERT_CONTRACT_QUERY = [[
     INSERT INTO contracts (
         creator_character_id,
@@ -11,6 +32,9 @@ local INSERT_CONTRACT_QUERY = [[
         title,
         description,
         reward_money,
+        required_item_key,
+        required_item_quantity,
+        consume_required_items,
         status,
         deadline_at
     )
@@ -20,44 +44,19 @@ local INSERT_CONTRACT_QUERY = [[
         :2,
         :3,
         :4,
+        :5,
+        :6,
+        :7,
         'open',
-        :5
+        :8
     )
     RETURNING
-        id,
-        creator_character_id,
-        assignee_character_id,
-        type,
-        title,
-        description,
-        reward_money,
-        status,
-        payment_status,
-        created_at,
-        accepted_at,
-        completed_at,
-        cancelled_at,
-        paid_at,
-        deadline_at
+]] .. CONTRACT_SELECT_COLUMNS .. [[
 ]]
 
 local SELECT_OPEN_CONTRACTS_QUERY = [[
     SELECT
-        id,
-        creator_character_id,
-        assignee_character_id,
-        type,
-        title,
-        description,
-        reward_money,
-        status,
-        payment_status,
-        created_at,
-        accepted_at,
-        completed_at,
-        cancelled_at,
-        paid_at,
-        deadline_at
+]] .. CONTRACT_SELECT_COLUMNS .. [[
     FROM contracts
     WHERE status = 'open'
     ORDER BY id ASC
@@ -65,21 +64,7 @@ local SELECT_OPEN_CONTRACTS_QUERY = [[
 
 local SELECT_CONTRACTS_FOR_CHARACTER_QUERY = [[
     SELECT
-        id,
-        creator_character_id,
-        assignee_character_id,
-        type,
-        title,
-        description,
-        reward_money,
-        status,
-        payment_status,
-        created_at,
-        accepted_at,
-        completed_at,
-        cancelled_at,
-        paid_at,
-        deadline_at
+]] .. CONTRACT_SELECT_COLUMNS .. [[
     FROM contracts
     WHERE creator_character_id = :0 OR assignee_character_id = :1
     ORDER BY id ASC
@@ -87,21 +72,7 @@ local SELECT_CONTRACTS_FOR_CHARACTER_QUERY = [[
 
 local SELECT_CONTRACT_BY_ID_QUERY = [[
     SELECT
-        id,
-        creator_character_id,
-        assignee_character_id,
-        type,
-        title,
-        description,
-        reward_money,
-        status,
-        payment_status,
-        created_at,
-        accepted_at,
-        completed_at,
-        cancelled_at,
-        paid_at,
-        deadline_at
+]] .. CONTRACT_SELECT_COLUMNS .. [[
     FROM contracts
     WHERE id = :0
     LIMIT 1
@@ -115,21 +86,7 @@ local ACCEPT_CONTRACT_QUERY = [[
         accepted_at = NOW()
     WHERE id = :0 AND status = 'open'
     RETURNING
-        id,
-        creator_character_id,
-        assignee_character_id,
-        type,
-        title,
-        description,
-        reward_money,
-        status,
-        payment_status,
-        created_at,
-        accepted_at,
-        completed_at,
-        cancelled_at,
-        paid_at,
-        deadline_at
+]] .. CONTRACT_SELECT_COLUMNS .. [[
 ]]
 
 local COMPLETE_CONTRACT_QUERY = [[
@@ -139,21 +96,7 @@ local COMPLETE_CONTRACT_QUERY = [[
         completed_at = NOW()
     WHERE id = :0 AND assignee_character_id = :1 AND status = 'accepted'
     RETURNING
-        id,
-        creator_character_id,
-        assignee_character_id,
-        type,
-        title,
-        description,
-        reward_money,
-        status,
-        payment_status,
-        created_at,
-        accepted_at,
-        completed_at,
-        cancelled_at,
-        paid_at,
-        deadline_at
+]] .. CONTRACT_SELECT_COLUMNS .. [[
 ]]
 
 local CANCEL_CONTRACT_QUERY = [[
@@ -163,21 +106,7 @@ local CANCEL_CONTRACT_QUERY = [[
         cancelled_at = NOW()
     WHERE id = :0 AND creator_character_id = :1 AND status = 'open'
     RETURNING
-        id,
-        creator_character_id,
-        assignee_character_id,
-        type,
-        title,
-        description,
-        reward_money,
-        status,
-        payment_status,
-        created_at,
-        accepted_at,
-        completed_at,
-        cancelled_at,
-        paid_at,
-        deadline_at
+]] .. CONTRACT_SELECT_COLUMNS .. [[
 ]]
 
 local UPDATE_CONTRACT_PAYMENT_STATUS_QUERY = [[
@@ -190,21 +119,7 @@ local UPDATE_CONTRACT_PAYMENT_STATUS_QUERY = [[
         END
     WHERE id = :0
     RETURNING
-        id,
-        creator_character_id,
-        assignee_character_id,
-        type,
-        title,
-        description,
-        reward_money,
-        status,
-        payment_status,
-        created_at,
-        accepted_at,
-        completed_at,
-        cancelled_at,
-        paid_at,
-        deadline_at
+]] .. CONTRACT_SELECT_COLUMNS .. [[
 ]]
 
 local function trim_string(value)
@@ -259,6 +174,42 @@ local function normalize_non_negative_integer(value, fallback)
     end
 
     return fallback
+end
+
+local function normalize_boolean(value, fallback)
+    if type(value) == "boolean" then
+        return value
+    end
+
+    local string_value = trim_string(value)
+
+    if string_value ~= nil then
+        local lowered_value = string.lower(string_value)
+
+        if lowered_value == "true" or lowered_value == "t" or lowered_value == "1" then
+            return true
+        end
+
+        if lowered_value == "false" or lowered_value == "f" or lowered_value == "0" then
+            return false
+        end
+    end
+
+    return fallback
+end
+
+local function normalize_item_key(item_key)
+    local normalized_item_key = trim_string(item_key)
+
+    if normalized_item_key == nil then
+        return nil
+    end
+
+    if normalized_item_key:match("^[a-z0-9_]+$") == nil then
+        return nil
+    end
+
+    return string.lower(normalized_item_key)
 end
 
 local function normalize_contract_type(contract_type)
@@ -342,6 +293,9 @@ local function normalize_contract_row(row)
         title = trim_string(row.title) or contract_type,
         description = trim_string(row.description) or "",
         reward_money = normalize_non_negative_integer(row.reward_money, 0),
+        required_item_key = normalize_item_key(row.required_item_key),
+        required_item_quantity = normalize_non_negative_integer(row.required_item_quantity, 0),
+        consume_required_items = normalize_boolean(row.consume_required_items, true),
         status = normalize_contract_status(row.status),
         payment_status = normalize_payment_status(row.payment_status),
         created_at = row.created_at,
@@ -414,6 +368,9 @@ function ContractRepository:CreateContract(contract, callback)
     local normalized_title = trim_string(contract and contract.title)
     local normalized_description = trim_string(contract and contract.description)
     local normalized_reward_money = normalize_non_negative_integer(contract and contract.reward_money, nil)
+    local normalized_required_item_key = normalize_item_key(contract and contract.required_item_key)
+    local normalized_required_item_quantity = normalize_non_negative_integer(contract and contract.required_item_quantity, 0)
+    local normalized_consume_required_items = normalize_boolean(contract and contract.consume_required_items, true)
     local normalized_deadline_at = contract ~= nil and contract.deadline_at or nil
 
     if type(callback) ~= "function" then
@@ -445,6 +402,11 @@ function ContractRepository:CreateContract(contract, callback)
         return true
     end
 
+    if normalized_required_item_key == nil and normalized_required_item_quantity > 0 then
+        callback(false, nil, "required-item-key-invalid")
+        return true
+    end
+
     return self:Connect(function(is_connected, database_or_error, error)
         if not is_connected then
             callback(false, nil, error)
@@ -469,6 +431,9 @@ function ContractRepository:CreateContract(contract, callback)
             normalized_title,
             normalized_description,
             normalized_reward_money,
+            normalized_required_item_key,
+            normalized_required_item_quantity,
+            normalized_consume_required_items,
             normalized_deadline_at
         )
     end, "contracts-create")

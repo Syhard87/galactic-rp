@@ -19,6 +19,7 @@ local EXTERNAL_CHAT_COMMANDS = {
     contracts = true,
     mycontracts = true,
     createcontract = true,
+    createdeliverycontract = true,
     acceptcontract = true,
     completecontract = true,
     cancelcontract = true,

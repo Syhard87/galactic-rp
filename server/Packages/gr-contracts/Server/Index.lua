@@ -226,53 +226,70 @@ local function resolve_active_character_id(player_or_platform_id)
     return active_character.id
 end
 
+local function format_contract_item_requirement(contract_row)
+    local required_item_key = trim_string(contract_row and contract_row.required_item_key)
+    local required_item_quantity = normalize_positive_integer(contract_row and contract_row.required_item_quantity)
+
+    if required_item_key == nil or required_item_quantity == nil then
+        return "item=aucun"
+    end
+
+    return string.format("item=%s x%s", tostring(required_item_key), tostring(required_item_quantity))
+end
+
 local function build_contract_line(contract_row)
     local payment_status = trim_string(contract_row and contract_row.payment_status)
+    local item_requirement = format_contract_item_requirement(contract_row)
 
     if payment_status ~= nil then
         return string.format(
-            "- #%s %s reward=%s status=%s payment=%s desc=%s",
+            "- #%s %s reward=%s status=%s payment=%s %s desc=%s",
             tostring(contract_row.id),
             tostring(contract_row.type),
             tostring(contract_row.reward_money),
             tostring(contract_row.status),
             tostring(payment_status),
+            tostring(item_requirement),
             tostring(contract_row.description)
         )
     end
 
     return string.format(
-        "- #%s %s reward=%s status=%s desc=%s",
+        "- #%s %s reward=%s status=%s %s desc=%s",
         tostring(contract_row.id),
         tostring(contract_row.type),
         tostring(contract_row.reward_money),
         tostring(contract_row.status),
+        tostring(item_requirement),
         tostring(contract_row.description)
     )
 end
 
 local function build_my_contract_line(contract_row)
     local payment_status = trim_string(contract_row and contract_row.payment_status)
+    local item_requirement = format_contract_item_requirement(contract_row)
 
     if payment_status ~= nil then
         return string.format(
-            "- #%s %s reward=%s status=%s payment=%s role=%s",
+            "- #%s %s reward=%s status=%s payment=%s role=%s %s",
             tostring(contract_row.id),
             tostring(contract_row.type),
             tostring(contract_row.reward_money),
             tostring(contract_row.status),
             tostring(payment_status),
-            tostring(contract_row.role or "unknown")
+            tostring(contract_row.role or "unknown"),
+            tostring(item_requirement)
         )
     end
 
     return string.format(
-        "- #%s %s reward=%s status=%s role=%s",
+        "- #%s %s reward=%s status=%s role=%s %s",
         tostring(contract_row.id),
         tostring(contract_row.type),
         tostring(contract_row.reward_money),
         tostring(contract_row.status),
-        tostring(contract_row.role or "unknown")
+        tostring(contract_row.role or "unknown"),
+        tostring(item_requirement)
     )
 end
 
@@ -299,6 +316,21 @@ GRContractsBridge.CreateContract = function(character_id, contract_type, reward_
     end
 
     return GRContracts.Server.Service:CreateContract(character_id, contract_type, reward_money, description, callback)
+end
+
+GRContractsBridge.CreateDeliveryContract = function(character_id, item_key, quantity, reward_money, description, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:CreateDeliveryContract(
+        character_id,
+        item_key,
+        quantity,
+        reward_money,
+        description,
+        callback
+    )
 end
 
 GRContractsBridge.ListOpenContracts = function(callback)
@@ -358,6 +390,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         if command_name ~= "contracts"
             and command_name ~= "mycontracts"
             and command_name ~= "createcontract"
+            and command_name ~= "createdeliverycontract"
             and command_name ~= "acceptcontract"
             and command_name ~= "completecontract"
             and command_name ~= "cancelcontract"
@@ -480,6 +513,66 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             return false
         end
 
+        if command_name == "createdeliverycontract" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /createdeliverycontract <item_key> <quantity> <reward_money> <description>")
+                return false
+            end
+
+            local item_key, quantity_text, reward_money_text, description = payload:match("^(%S+)%s+(%S+)%s+([+-]?%d+)%s+(.+)$")
+
+            if item_key == nil then
+                Chat.SendMessage(player, "Usage : /createdeliverycontract <item_key> <quantity> <reward_money> <description>")
+                return false
+            end
+
+            GRContracts.Server.Service:CreateDeliveryContract(
+                active_character_id,
+                item_key,
+                quantity_text,
+                reward_money_text,
+                description,
+                function(is_success, contract_row, error)
+                    if not is_success then
+                        if error == "item-key-invalid" then
+                            Chat.SendMessage(player, "Item requis invalide.")
+                            return
+                        end
+
+                        if error == "quantity-invalid" then
+                            Chat.SendMessage(player, "Quantite invalide.")
+                            return
+                        end
+
+                        if error == "reward-money-invalid" then
+                            Chat.SendMessage(player, "Montant invalide.")
+                            return
+                        end
+
+                        if error == "description-invalid" then
+                            Chat.SendMessage(player, "Description invalide.")
+                            return
+                        end
+
+                        Chat.SendMessage(player, "Impossible de creer le contrat de livraison.")
+                        return
+                    end
+
+                    Chat.SendMessage(
+                        player,
+                        string.format(
+                            "Contrat cree : #%s delivery reward=%s %s",
+                            tostring(contract_row.id),
+                            tostring(contract_row.reward_money),
+                            tostring(format_contract_item_requirement(contract_row))
+                        )
+                    )
+                end
+            )
+
+            return false
+        end
+
         if payload == nil then
             if command_name == "acceptcontract" then
                 Chat.SendMessage(player, "Usage : /acceptcontract <contract_id>")
@@ -540,6 +633,28 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         return
                     end
 
+                    if error == "required-item-missing" then
+                        Chat.SendMessage(
+                            player,
+                            string.format(
+                                "Contrat impossible : item requis manquant %s x%s.",
+                                tostring(contract_row and contract_row.required_item_key or "inconnu"),
+                                tostring(contract_row and contract_row.required_item_quantity or "?")
+                            )
+                        )
+                        return
+                    end
+
+                    if error == "inventory-check-unavailable" or error == "inventory-remove-failed" then
+                        Chat.SendMessage(player, "Contrat impossible : inventaire indisponible.")
+                        return
+                    end
+
+                    if error == "payment-failed" or error == "inventory-compensation-failed" then
+                        Chat.SendMessage(player, "Contrat impossible : paiement echoue, compensation item tentee.")
+                        return
+                    end
+
                     Chat.SendMessage(player, "Impossible de terminer ce contrat.")
                     return
                 end
@@ -558,9 +673,9 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 Chat.SendMessage(
                     player,
                     string.format(
-                        "Contrat termine : #%s reward=%s paiement=%s",
+                        "Contrat termine : #%s %s paiement=%s.",
                         tostring(contract_row.id),
-                        tostring(contract_row.reward_money),
+                        tostring(format_contract_item_requirement(contract_row)),
                         tostring(payment_message)
                     )
                 )
