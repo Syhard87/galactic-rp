@@ -21,6 +21,8 @@ local CONTRACT_SELECT_COLUMNS = [[
         picked_up_at,
         delivery_location_key,
         requires_delivery_location,
+        source_route_key,
+        job_source,
         status,
         payment_status,
         created_at,
@@ -144,6 +146,8 @@ local INSERT_CONTRACT_QUERY = [[
         pickup_status,
         delivery_location_key,
         requires_delivery_location,
+        source_route_key,
+        job_source,
         status,
         deadline_at
     )
@@ -161,8 +165,10 @@ local INSERT_CONTRACT_QUERY = [[
         :10,
         :11,
         :12,
+        :13,
+        :14,
         'open',
-        :13
+        :15
     )
     RETURNING
 ]] .. CONTRACT_SELECT_COLUMNS .. [[
@@ -459,6 +465,25 @@ local function normalize_pickup_status(pickup_status)
     return normalized_pickup_status
 end
 
+local function normalize_job_source(job_source)
+    local normalized_job_source = trim_string(job_source)
+
+    if normalized_job_source == nil then
+        return nil
+    end
+
+    normalized_job_source = string.lower(normalized_job_source)
+
+    if normalized_job_source ~= "manual"
+        and normalized_job_source ~= "route_template"
+        and normalized_job_source ~= "job_board"
+    then
+        return nil
+    end
+
+    return normalized_job_source
+end
+
 local function normalize_contract_row(row)
     local contract_id = nil
     local creator_character_id = nil
@@ -493,6 +518,8 @@ local function normalize_contract_row(row)
         picked_up_at = row.picked_up_at,
         delivery_location_key = normalize_location_key(row.delivery_location_key),
         requires_delivery_location = normalize_boolean(row.requires_delivery_location, false),
+        source_route_key = normalize_route_key(row.source_route_key),
+        job_source = normalize_job_source(row.job_source),
         status = normalize_contract_status(row.status),
         payment_status = normalize_payment_status(row.payment_status),
         created_at = row.created_at,
@@ -663,6 +690,8 @@ function ContractRepository:CreateContract(contract, callback)
     local normalized_pickup_status = normalize_pickup_status(contract and contract.pickup_status)
     local normalized_delivery_location_key = normalize_location_key(contract and contract.delivery_location_key)
     local normalized_requires_delivery_location = normalize_boolean(contract and contract.requires_delivery_location, false)
+    local normalized_source_route_key = normalize_route_key(contract and contract.source_route_key)
+    local normalized_job_source = normalize_job_source(contract and contract.job_source)
     local normalized_deadline_at = contract ~= nil and contract.deadline_at or nil
 
     if type(callback) ~= "function" then
@@ -709,6 +738,11 @@ function ContractRepository:CreateContract(contract, callback)
         return true
     end
 
+    if normalized_source_route_key == nil and (normalized_job_source == "route_template" or normalized_job_source == "job_board") then
+        callback(false, nil, "source-route-key-invalid")
+        return true
+    end
+
     return self:Connect(function(is_connected, database_or_error, error)
         if not is_connected then
             callback(false, nil, error)
@@ -741,6 +775,8 @@ function ContractRepository:CreateContract(contract, callback)
             normalized_pickup_status,
             normalized_delivery_location_key,
             normalized_requires_delivery_location,
+            normalized_source_route_key,
+            normalized_job_source,
             normalized_deadline_at
         )
     end, "contracts-create")

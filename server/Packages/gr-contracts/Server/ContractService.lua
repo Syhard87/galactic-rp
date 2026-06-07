@@ -8,6 +8,7 @@ local MAX_REWARD_MONEY = 1000000
 local MAX_DELIVERY_QUANTITY = 1000
 local DEFAULT_DELIVERY_LOCATION_RADIUS = 500
 local MAX_DELIVERY_LOCATION_RADIUS = 5000
+local MAX_ACTIVE_JOB_CONTRACTS = 3
 
 local ALLOWED_CONTRACT_TYPES = {
     crafting = true,
@@ -154,6 +155,25 @@ local function normalize_pickup_status(pickup_status)
     return normalized_pickup_status
 end
 
+local function normalize_job_source(job_source)
+    local normalized_job_source = trim_string(job_source)
+
+    if normalized_job_source == nil then
+        return nil
+    end
+
+    normalized_job_source = string.lower(normalized_job_source)
+
+    if normalized_job_source ~= "manual"
+        and normalized_job_source ~= "route_template"
+        and normalized_job_source ~= "job_board"
+    then
+        return nil
+    end
+
+    return normalized_job_source
+end
+
 local function normalize_item_key(item_key)
     local normalized_item_key = trim_string(item_key)
 
@@ -275,6 +295,26 @@ local function build_route_contract_description(route_template)
     end
 
     return string.format("[route:%s] %s", tostring(route_key), tostring(route_description))
+end
+
+local function is_active_job_contract(contract_row, character_id)
+    if type(contract_row) ~= "table" then
+        return false
+    end
+
+    if normalize_positive_integer(contract_row.assignee_character_id) ~= normalize_positive_integer(character_id) then
+        return false
+    end
+
+    if trim_string(contract_row.status) ~= "accepted" then
+        return false
+    end
+
+    if normalize_job_source(contract_row.job_source) == "job_board" then
+        return true
+    end
+
+    return contract_row.requires_pickup_location == true
 end
 
 local function callback_repository_missing(callback)
@@ -408,6 +448,8 @@ function ContractService:CreateContract(character_id, contract_type, reward_mone
         required_item_key = nil,
         required_item_quantity = 0,
         consume_required_items = true,
+        source_route_key = nil,
+        job_source = "manual",
     }, function(is_success, contract_row, error)
         if not is_success then
             callback(false, nil, error)
@@ -481,6 +523,8 @@ function ContractService:CreateDeliveryContract(creator_character_id, item_key, 
         pickup_status = "none",
         delivery_location_key = nil,
         requires_delivery_location = false,
+        source_route_key = nil,
+        job_source = "manual",
     }, function(is_success, contract_row, error)
         if not is_success then
             callback(false, nil, error)
@@ -577,6 +621,8 @@ function ContractService:CreateDeliveryContractAt(creator_character_id, item_key
             pickup_status = "none",
             delivery_location_key = normalized_location_key,
             requires_delivery_location = true,
+            source_route_key = nil,
+            job_source = "manual",
         }, function(is_success, contract_row, error)
             if not is_success then
                 callback(false, nil, error)
@@ -598,7 +644,7 @@ function ContractService:CreateDeliveryContractAt(creator_character_id, item_key
     end)
 end
 
-function ContractService:CreateHaulContract(creator_character_id, item_key, quantity, reward_money, pickup_location_key, delivery_location_key, description, callback)
+function ContractService:CreateHaulContract(creator_character_id, item_key, quantity, reward_money, pickup_location_key, delivery_location_key, description, options_or_callback, callback)
     local normalized_character_id = normalize_positive_integer(creator_character_id)
     local normalized_item_key = normalize_item_key(item_key)
     local normalized_quantity = normalize_positive_integer(quantity)
@@ -606,6 +652,18 @@ function ContractService:CreateHaulContract(creator_character_id, item_key, quan
     local normalized_pickup_location_key = normalize_location_key(pickup_location_key)
     local normalized_delivery_location_key = normalize_location_key(delivery_location_key)
     local normalized_description = normalize_description(description)
+    local options = nil
+    local normalized_source_route_key = nil
+    local normalized_job_source = "manual"
+
+    if type(options_or_callback) == "function" and callback == nil then
+        callback = options_or_callback
+    elseif type(options_or_callback) == "table" then
+        options = options_or_callback
+    end
+
+    normalized_source_route_key = normalize_route_key(options and options.source_route_key)
+    normalized_job_source = normalize_job_source(options and options.job_source) or "manual"
 
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -647,6 +705,11 @@ function ContractService:CreateHaulContract(creator_character_id, item_key, quan
 
     if normalized_description == nil then
         callback(false, nil, "description-invalid")
+        return true
+    end
+
+    if normalized_source_route_key == nil and normalized_job_source ~= "manual" then
+        callback(false, nil, "source-route-key-invalid")
         return true
     end
 
@@ -697,6 +760,8 @@ function ContractService:CreateHaulContract(creator_character_id, item_key, quan
                 pickup_status = "pending",
                 delivery_location_key = normalized_delivery_location_key,
                 requires_delivery_location = true,
+                source_route_key = normalized_source_route_key,
+                job_source = normalized_job_source,
             }, function(is_success, contract_row, error)
                 if not is_success then
                     callback(false, nil, error)
@@ -766,6 +831,10 @@ function ContractService:CreateHaulContractFromRoute(creator_character_id, route
             route_template.pickup_location_key,
             route_template.delivery_location_key,
             build_route_contract_description(route_template),
+            {
+                source_route_key = route_template.key,
+                job_source = "route_template",
+            },
             function(is_create_success, contract_row, create_error)
                 if not is_create_success then
                     callback(false, route_template, create_error)
@@ -850,6 +919,121 @@ function ContractService:GetRouteTemplate(route_key, callback)
         end
 
         callback(true, route_template, nil)
+    end)
+end
+
+function ContractService:ListJobBoardRoutes(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    return self:ListRouteTemplates(callback)
+end
+
+function ContractService:GetJobBoardRoute(route_key, callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    return self:GetRouteTemplate(route_key, callback)
+end
+
+function ContractService:TakeJobFromRoute(character_id, route_key, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_route_key = normalize_route_key(route_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "invalid-character")
+        return true
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "route-not-found")
+        return true
+    end
+
+    return self.repository:ListContractsForCharacter(normalized_character_id, function(is_list_success, contract_rows, list_error)
+        local active_job_count = 0
+
+        if not is_list_success then
+            callback(false, nil, list_error or "database-error")
+            return
+        end
+
+        for _, contract_row in ipairs(contract_rows or {}) do
+            if is_active_job_contract(contract_row, normalized_character_id) then
+                active_job_count = active_job_count + 1
+            end
+        end
+
+        if active_job_count >= MAX_ACTIVE_JOB_CONTRACTS then
+            callback(false, nil, "active-job-limit-reached")
+            return
+        end
+
+        self:GetRouteTemplate(normalized_route_key, function(is_route_success, route_template, route_error)
+            if not is_route_success then
+                callback(false, nil, route_error or "database-error")
+                return
+            end
+
+            if route_template == nil then
+                callback(false, nil, "route-not-found")
+                return
+            end
+
+            if route_template.is_active ~= true then
+                callback(false, route_template, "route-inactive")
+                return
+            end
+
+            self:CreateHaulContract(
+                normalized_character_id,
+                route_template.item_key,
+                route_template.item_quantity,
+                route_template.reward_money,
+                route_template.pickup_location_key,
+                route_template.delivery_location_key,
+                build_route_contract_description(route_template),
+                {
+                    source_route_key = route_template.key,
+                    job_source = "job_board",
+                },
+                function(is_create_success, contract_row, create_error)
+                    if not is_create_success then
+                        callback(false, route_template, create_error or "contract-create-failed")
+                        return
+                    end
+
+                    if contract_row == nil or normalize_positive_integer(contract_row.id) == nil then
+                        callback(false, route_template, "contract-create-failed")
+                        return
+                    end
+
+                    self.repository:AcceptContract(contract_row.id, normalized_character_id, function(is_accept_success, accepted_row, accept_error)
+                        if not is_accept_success or accepted_row == nil then
+                            self.repository:CancelContract(contract_row.id, normalized_character_id, function()
+                                callback(false, contract_row, "contract-assign-failed")
+                            end)
+                            return
+                        end
+
+                        accepted_row.route_key = route_template.key
+                        accepted_row.route_name = route_template.name
+
+                        callback(true, accepted_row, nil)
+                    end)
+                end
+            )
+        end)
     end)
 end
 
