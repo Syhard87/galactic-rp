@@ -8,6 +8,6 @@ force_no_map_package = false
 auto_cleanup = true
 load_level_entities = false
 compatibility_version = "1.25"
-packages_requirements = ["gr-core", "gr-database", "gr-characters", "gr-economy"]
+packages_requirements = ["gr-core", "gr-database", "gr-characters", "gr-economy", "gr-inventory"]
 assets_requirements = []
 compatible_game_modes = []
