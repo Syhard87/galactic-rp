@@ -248,6 +248,38 @@ local function format_contract_destination(contract_row)
     return string.format("destination=%s", tostring(delivery_location_key))
 end
 
+local function format_coordinate_value(value)
+    if type(value) ~= "number" then
+        return "NULL"
+    end
+
+    return string.format("%.1f", value)
+end
+
+local function format_radius_value(value)
+    if type(value) ~= "number" then
+        return "NULL"
+    end
+
+    if value % 1 == 0 then
+        return string.format("%d", value)
+    end
+
+    return string.format("%.1f", value)
+end
+
+local function build_delivery_location_info_line(delivery_location)
+    return string.format(
+        "Point %s : x=%s y=%s z=%s radius=%s active=%s.",
+        tostring(delivery_location.key),
+        tostring(format_coordinate_value(delivery_location.position_x)),
+        tostring(format_coordinate_value(delivery_location.position_y)),
+        tostring(format_coordinate_value(delivery_location.position_z)),
+        tostring(format_radius_value(delivery_location.radius)),
+        tostring(delivery_location.is_active)
+    )
+end
+
 local function build_contract_line(contract_row)
     local payment_status = trim_string(contract_row and contract_row.payment_status)
     local item_requirement = format_contract_item_requirement(contract_row)
@@ -422,6 +454,22 @@ GRContractsBridge.GetDeliveryLocation = function(location_key, callback)
     return GRContracts.Server.Service:GetDeliveryLocation(location_key, callback)
 end
 
+GRContractsBridge.GetDeliveryLocationInfo = function(location_key, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetDeliveryLocationInfo(location_key, callback)
+end
+
+GRContractsBridge.SetDeliveryLocationHere = function(player, location_key, radius, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:SetDeliveryLocationHere(player, location_key, radius, callback)
+end
+
 Package.Export("GRContractsBridge", GRContractsBridge)
 
 if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.SendMessage) == "function" then
@@ -442,6 +490,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "createdeliverycontract"
             and command_name ~= "createdeliverycontractat"
             and command_name ~= "deliverylocations"
+            and command_name ~= "deliverylocationinfo"
+            and command_name ~= "setdeliverylocationhere"
             and command_name ~= "acceptcontract"
             and command_name ~= "completecontract"
             and command_name ~= "cancelcontract"
@@ -519,6 +569,88 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         )
                     )
                 end
+            end)
+
+            return false
+        end
+
+        if command_name == "deliverylocationinfo" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /deliverylocationinfo <location_key>")
+                return false
+            end
+
+            GRContracts.Server.Service:GetDeliveryLocationInfo(payload, function(is_success, delivery_location, error)
+                if not is_success then
+                    if error == "location-not-found" or error == "delivery-location-key-required" then
+                        Chat.SendMessage(player, "Point de livraison introuvable.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Point de livraison introuvable.")
+                    return
+                end
+
+                Chat.SendMessage(player, build_delivery_location_info_line(delivery_location))
+            end)
+
+            return false
+        end
+
+        if command_name == "setdeliverylocationhere" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /setdeliverylocationhere <location_key> [radius]")
+                return false
+            end
+
+            local location_key, radius_text = payload:match("^(%S+)%s*(.*)$")
+
+            if location_key == nil then
+                Chat.SendMessage(player, "Usage : /setdeliverylocationhere <location_key> [radius]")
+                return false
+            end
+
+            if trim_string(radius_text) == nil then
+                radius_text = nil
+            end
+
+            GRContracts.Server.Service:SetDeliveryLocationHere(player, location_key, radius_text, function(is_success, delivery_location, error)
+                if not is_success then
+                    if error == "location-not-found" or error == "delivery-location-key-required" then
+                        Chat.SendMessage(player, "Point de livraison introuvable.")
+                        return
+                    end
+
+                    if error == "location-inactive" then
+                        Chat.SendMessage(player, "Point de livraison inactif.")
+                        return
+                    end
+
+                    if error == "player-position-unavailable" then
+                        Chat.SendMessage(player, "Position joueur indisponible.")
+                        return
+                    end
+
+                    if error == "invalid-radius" or error == "delivery-location-radius-invalid" then
+                        Chat.SendMessage(player, "Radius invalide.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Impossible de mettre a jour le point de livraison.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Point de livraison mis a jour : %s x=%s y=%s z=%s radius=%s.",
+                        tostring(delivery_location.key),
+                        tostring(format_coordinate_value(delivery_location.position_x)),
+                        tostring(format_coordinate_value(delivery_location.position_y)),
+                        tostring(format_coordinate_value(delivery_location.position_z)),
+                        tostring(format_radius_value(delivery_location.radius))
+                    )
+                )
             end)
 
             return false

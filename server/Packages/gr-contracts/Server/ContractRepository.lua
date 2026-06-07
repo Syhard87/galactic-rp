@@ -64,6 +64,30 @@ local SELECT_DELIVERY_LOCATION_BY_KEY_QUERY = [[
     LIMIT 1
 ]]
 
+local UPDATE_DELIVERY_LOCATION_POSITION_QUERY = [[
+    UPDATE contract_delivery_locations
+    SET
+        position_x = :1,
+        position_y = :2,
+        position_z = :3,
+        radius = :4,
+        updated_at = NOW()
+    WHERE key = :0 AND is_active = true
+    RETURNING
+        id,
+        key,
+        name,
+        description,
+        location_type,
+        position_x,
+        position_y,
+        position_z,
+        radius,
+        is_active,
+        created_at,
+        updated_at
+]]
+
 local INSERT_CONTRACT_QUERY = [[
     INSERT INTO contracts (
         creator_character_id,
@@ -624,6 +648,52 @@ function ContractRepository:GetDeliveryLocation(location_key, callback)
             callback(true, delivery_locations[1], nil)
         end, normalized_location_key)
     end, "contracts-get-delivery-location")
+end
+
+function ContractRepository:UpdateDeliveryLocationPosition(location_key, position_x, position_y, position_z, radius, callback)
+    local normalized_location_key = normalize_location_key(location_key)
+    local normalized_position_x = normalize_number(position_x, nil)
+    local normalized_position_y = normalize_number(position_y, nil)
+    local normalized_position_z = normalize_number(position_z, nil)
+    local normalized_radius = normalize_number(radius, nil)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "delivery-location-key-required")
+        return true
+    end
+
+    if normalized_position_x == nil or normalized_position_y == nil or normalized_position_z == nil then
+        callback(false, nil, "delivery-location-position-required")
+        return true
+    end
+
+    if normalized_radius == nil or normalized_radius <= 0 then
+        callback(false, nil, "delivery-location-radius-invalid")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(UPDATE_DELIVERY_LOCATION_POSITION_QUERY, function(rows, update_error)
+            local delivery_locations = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            delivery_locations = normalize_delivery_location_rows(rows)
+            callback(true, delivery_locations[1], nil)
+        end, normalized_location_key, normalized_position_x, normalized_position_y, normalized_position_z, normalized_radius)
+    end, "contracts-update-delivery-location-position")
 end
 
 function ContractRepository:ListOpenContracts(callback)

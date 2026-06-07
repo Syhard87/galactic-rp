@@ -6,6 +6,8 @@ ContractService.__index = ContractService
 
 local MAX_REWARD_MONEY = 1000000
 local MAX_DELIVERY_QUANTITY = 1000
+local DEFAULT_DELIVERY_LOCATION_RADIUS = 500
+local MAX_DELIVERY_LOCATION_RADIUS = 5000
 
 local ALLOWED_CONTRACT_TYPES = {
     crafting = true,
@@ -568,6 +570,127 @@ function ContractService:GetDeliveryLocation(location_key, callback)
     end
 
     return self.repository:GetDeliveryLocation(location_key, callback)
+end
+
+function ContractService:GetDeliveryLocationInfo(location_key, callback)
+    local normalized_location_key = normalize_location_key(location_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "location-not-found")
+        return true
+    end
+
+    return self.repository:GetDeliveryLocation(normalized_location_key, function(is_success, delivery_location, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        if delivery_location == nil then
+            callback(false, nil, "location-not-found")
+            return
+        end
+
+        callback(true, delivery_location, nil)
+    end)
+end
+
+function ContractService:SetDeliveryLocationHere(player, location_key, radius, callback)
+    local normalized_location_key = normalize_location_key(location_key)
+    local normalized_radius = nil
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "location-not-found")
+        return true
+    end
+
+    if radius ~= nil then
+        normalized_radius = normalize_number(radius)
+
+        if normalized_radius == nil or normalized_radius <= 0 or normalized_radius > MAX_DELIVERY_LOCATION_RADIUS then
+            callback(false, nil, "invalid-radius")
+            return true
+        end
+    end
+
+    local controlled_character = get_controlled_character(player)
+
+    if controlled_character == nil then
+        callback(false, nil, "player-position-unavailable")
+        return true
+    end
+
+    local player_location = get_entity_location(controlled_character)
+
+    if player_location == nil then
+        callback(false, nil, "player-position-unavailable")
+        return true
+    end
+
+    return self.repository:GetDeliveryLocation(normalized_location_key, function(is_get_success, delivery_location, get_error)
+        local effective_radius = normalized_radius
+
+        if not is_get_success then
+            callback(false, nil, get_error or "database-error")
+            return
+        end
+
+        if delivery_location == nil then
+            callback(false, nil, "location-not-found")
+            return
+        end
+
+        if delivery_location.is_active ~= true then
+            callback(false, nil, "location-inactive")
+            return
+        end
+
+        if effective_radius == nil then
+            effective_radius = normalize_number(delivery_location.radius) or DEFAULT_DELIVERY_LOCATION_RADIUS
+        end
+
+        if effective_radius <= 0 or effective_radius > MAX_DELIVERY_LOCATION_RADIUS then
+            callback(false, nil, "invalid-radius")
+            return
+        end
+
+        self.repository:UpdateDeliveryLocationPosition(
+            normalized_location_key,
+            player_location.x,
+            player_location.y,
+            player_location.z,
+            effective_radius,
+            function(is_update_success, updated_delivery_location, update_error)
+                if not is_update_success then
+                    callback(false, nil, update_error or "database-error")
+                    return
+                end
+
+                if updated_delivery_location == nil then
+                    callback(false, nil, "database-error")
+                    return
+                end
+
+                callback(true, updated_delivery_location, nil)
+            end
+        )
+    end)
 end
 
 function ContractService:ListOpenContracts(callback)
