@@ -237,30 +237,44 @@ local function format_contract_item_requirement(contract_row)
     return string.format("item=%s x%s", tostring(required_item_key), tostring(required_item_quantity))
 end
 
+local function format_contract_destination(contract_row)
+    local delivery_location_key = trim_string(contract_row and contract_row.delivery_location_key)
+    local requires_delivery_location = contract_row ~= nil and contract_row.requires_delivery_location == true
+
+    if delivery_location_key == nil or not requires_delivery_location then
+        return "destination=aucune"
+    end
+
+    return string.format("destination=%s", tostring(delivery_location_key))
+end
+
 local function build_contract_line(contract_row)
     local payment_status = trim_string(contract_row and contract_row.payment_status)
     local item_requirement = format_contract_item_requirement(contract_row)
+    local destination = format_contract_destination(contract_row)
 
     if payment_status ~= nil then
         return string.format(
-            "- #%s %s reward=%s status=%s payment=%s %s desc=%s",
+            "- #%s %s reward=%s status=%s payment=%s %s %s desc=%s",
             tostring(contract_row.id),
             tostring(contract_row.type),
             tostring(contract_row.reward_money),
             tostring(contract_row.status),
             tostring(payment_status),
             tostring(item_requirement),
+            tostring(destination),
             tostring(contract_row.description)
         )
     end
 
     return string.format(
-        "- #%s %s reward=%s status=%s %s desc=%s",
+        "- #%s %s reward=%s status=%s %s %s desc=%s",
         tostring(contract_row.id),
         tostring(contract_row.type),
         tostring(contract_row.reward_money),
         tostring(contract_row.status),
         tostring(item_requirement),
+        tostring(destination),
         tostring(contract_row.description)
     )
 end
@@ -268,28 +282,31 @@ end
 local function build_my_contract_line(contract_row)
     local payment_status = trim_string(contract_row and contract_row.payment_status)
     local item_requirement = format_contract_item_requirement(contract_row)
+    local destination = format_contract_destination(contract_row)
 
     if payment_status ~= nil then
         return string.format(
-            "- #%s %s reward=%s status=%s payment=%s role=%s %s",
+            "- #%s %s reward=%s status=%s payment=%s role=%s %s %s",
             tostring(contract_row.id),
             tostring(contract_row.type),
             tostring(contract_row.reward_money),
             tostring(contract_row.status),
             tostring(payment_status),
             tostring(contract_row.role or "unknown"),
-            tostring(item_requirement)
+            tostring(item_requirement),
+            tostring(destination)
         )
     end
 
     return string.format(
-        "- #%s %s reward=%s status=%s role=%s %s",
+        "- #%s %s reward=%s status=%s role=%s %s %s",
         tostring(contract_row.id),
         tostring(contract_row.type),
         tostring(contract_row.reward_money),
         tostring(contract_row.status),
         tostring(contract_row.role or "unknown"),
-        tostring(item_requirement)
+        tostring(item_requirement),
+        tostring(destination)
     )
 end
 
@@ -328,6 +345,22 @@ GRContractsBridge.CreateDeliveryContract = function(character_id, item_key, quan
         item_key,
         quantity,
         reward_money,
+        description,
+        callback
+    )
+end
+
+GRContractsBridge.CreateDeliveryContractAt = function(character_id, item_key, quantity, reward_money, location_key, description, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:CreateDeliveryContractAt(
+        character_id,
+        item_key,
+        quantity,
+        reward_money,
+        location_key,
         description,
         callback
     )
@@ -373,6 +406,22 @@ GRContractsBridge.CancelContract = function(character_id, contract_id, callback)
     return GRContracts.Server.Service:CancelContract(character_id, contract_id, callback)
 end
 
+GRContractsBridge.ListDeliveryLocations = function(callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:ListDeliveryLocations(callback)
+end
+
+GRContractsBridge.GetDeliveryLocation = function(location_key, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetDeliveryLocation(location_key, callback)
+end
+
 Package.Export("GRContractsBridge", GRContractsBridge)
 
 if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.SendMessage) == "function" then
@@ -391,6 +440,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "mycontracts"
             and command_name ~= "createcontract"
             and command_name ~= "createdeliverycontract"
+            and command_name ~= "createdeliverycontractat"
+            and command_name ~= "deliverylocations"
             and command_name ~= "acceptcontract"
             and command_name ~= "completecontract"
             and command_name ~= "cancelcontract"
@@ -437,6 +488,36 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 for _, contract_row in ipairs(contract_rows) do
                     Chat.SendMessage(player, build_contract_line(contract_row))
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "deliverylocations" then
+            GRContracts.Server.Service:ListDeliveryLocations(function(is_success, delivery_locations, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Points de livraison indisponibles.")
+                    return
+                end
+
+                if type(delivery_locations) ~= "table" or #delivery_locations == 0 then
+                    Chat.SendMessage(player, "Aucun point de livraison.")
+                    return
+                end
+
+                Chat.SendMessage(player, "Points de livraison :")
+
+                for _, delivery_location in ipairs(delivery_locations) do
+                    Chat.SendMessage(
+                        player,
+                        string.format(
+                            "- %s radius=%s active=%s",
+                            tostring(delivery_location.key),
+                            tostring(delivery_location.radius),
+                            tostring(delivery_location.is_active)
+                        )
+                    )
                 end
             end)
 
@@ -573,6 +654,78 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             return false
         end
 
+        if command_name == "createdeliverycontractat" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /createdeliverycontractat <item_key> <quantity> <reward_money> <location_key> <description>")
+                return false
+            end
+
+            local item_key, quantity_text, reward_money_text, location_key, description = payload:match("^(%S+)%s+(%S+)%s+([+-]?%d+)%s+(%S+)%s+(.+)$")
+
+            if item_key == nil then
+                Chat.SendMessage(player, "Usage : /createdeliverycontractat <item_key> <quantity> <reward_money> <location_key> <description>")
+                return false
+            end
+
+            GRContracts.Server.Service:CreateDeliveryContractAt(
+                active_character_id,
+                item_key,
+                quantity_text,
+                reward_money_text,
+                location_key,
+                description,
+                function(is_success, contract_row, error)
+                    if not is_success then
+                        if error == "item-key-invalid" then
+                            Chat.SendMessage(player, "Item requis invalide.")
+                            return
+                        end
+
+                        if error == "quantity-invalid" then
+                            Chat.SendMessage(player, "Quantite invalide.")
+                            return
+                        end
+
+                        if error == "reward-money-invalid" then
+                            Chat.SendMessage(player, "Montant invalide.")
+                            return
+                        end
+
+                        if error == "delivery-location-key-invalid" or error == "delivery-location-not-found" then
+                            Chat.SendMessage(player, "Point de livraison introuvable.")
+                            return
+                        end
+
+                        if error == "delivery-location-inactive" then
+                            Chat.SendMessage(player, "Point de livraison inactif.")
+                            return
+                        end
+
+                        if error == "description-invalid" then
+                            Chat.SendMessage(player, "Description invalide.")
+                            return
+                        end
+
+                        Chat.SendMessage(player, "Impossible de creer le contrat de livraison.")
+                        return
+                    end
+
+                    Chat.SendMessage(
+                        player,
+                        string.format(
+                            "Contrat livraison cree : #%s %s reward=%s destination=%s.",
+                            tostring(contract_row.id),
+                            tostring(format_contract_item_requirement(contract_row)),
+                            tostring(contract_row.reward_money),
+                            tostring(contract_row.delivery_location_key or "aucune")
+                        )
+                    )
+                end
+            )
+
+            return false
+        end
+
         if payload == nil then
             if command_name == "acceptcontract" then
                 Chat.SendMessage(player, "Usage : /acceptcontract <contract_id>")
@@ -616,7 +769,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         end
 
         if command_name == "completecontract" then
-            GRContracts.Server.Service:CompleteContract(active_character_id, contract_id, function(is_success, contract_row, error)
+            GRContracts.Server.Service:CompleteContract(active_character_id, contract_id, player, function(is_success, contract_row, error)
                 if not is_success then
                     if error == "contract-not-found" then
                         Chat.SendMessage(player, "Contrat introuvable.")
@@ -642,6 +795,31 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                                 tostring(contract_row and contract_row.required_item_quantity or "?")
                             )
                         )
+                        return
+                    end
+
+                    if error == "delivery-location-not-found" then
+                        Chat.SendMessage(player, "Contrat impossible : point de livraison introuvable.")
+                        return
+                    end
+
+                    if error == "delivery-location-inactive" then
+                        Chat.SendMessage(player, "Contrat impossible : point de livraison inactif.")
+                        return
+                    end
+
+                    if error == "delivery-location-position-missing" then
+                        Chat.SendMessage(player, "Contrat impossible : position destination manquante.")
+                        return
+                    end
+
+                    if error == "player-position-unavailable" then
+                        Chat.SendMessage(player, "Contrat impossible : position joueur indisponible.")
+                        return
+                    end
+
+                    if error == "too-far-from-delivery-location" then
+                        Chat.SendMessage(player, "Contrat impossible : vous etes trop loin du point de livraison.")
                         return
                     end
 
@@ -673,8 +851,9 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 Chat.SendMessage(
                     player,
                     string.format(
-                        "Contrat termine : #%s %s paiement=%s.",
+                        "Contrat termine : #%s livraison=%s %s paiement=%s.",
                         tostring(contract_row.id),
+                        tostring(contract_row.delivery_location_key or "aucune"),
                         tostring(format_contract_item_requirement(contract_row)),
                         tostring(payment_message)
                     )

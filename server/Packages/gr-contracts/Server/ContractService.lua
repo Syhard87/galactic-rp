@@ -147,6 +147,86 @@ local function normalize_item_key(item_key)
     return string.lower(normalized_item_key)
 end
 
+local function normalize_location_key(location_key)
+    local normalized_location_key = trim_string(location_key)
+
+    if normalized_location_key == nil then
+        return nil
+    end
+
+    if normalized_location_key:match("^[a-z0-9_]+$") == nil then
+        return nil
+    end
+
+    return string.lower(normalized_location_key)
+end
+
+local function normalize_number(value)
+    if type(value) == "number" then
+        if value ~= value or value == math.huge or value == -math.huge then
+            return nil
+        end
+
+        return value
+    end
+
+    if type(value) == "string" then
+        local parsed_value = tonumber(value)
+
+        if parsed_value ~= nil and parsed_value == parsed_value and parsed_value ~= math.huge and parsed_value ~= -math.huge then
+            return parsed_value
+        end
+    end
+
+    return nil
+end
+
+local function get_controlled_character(player)
+    if type(player) ~= "table" and type(player) ~= "userdata" then
+        return nil
+    end
+
+    if type(player.GetControlledCharacter) ~= "function" then
+        return nil
+    end
+
+    return player:GetControlledCharacter()
+end
+
+local function get_entity_location(entity)
+    if entity == nil or type(entity.GetLocation) ~= "function" then
+        return nil
+    end
+
+    local location = entity:GetLocation()
+
+    if location == nil then
+        return nil
+    end
+
+    if type(location.X) ~= "number" or type(location.Y) ~= "number" or type(location.Z) ~= "number" then
+        return nil
+    end
+
+    return {
+        x = location.X,
+        y = location.Y,
+        z = location.Z,
+    }
+end
+
+local function get_distance_squared(first_location, second_location)
+    if type(first_location) ~= "table" or type(second_location) ~= "table" then
+        return nil
+    end
+
+    local delta_x = first_location.x - second_location.x
+    local delta_y = first_location.y - second_location.y
+    local delta_z = first_location.z - second_location.z
+
+    return (delta_x * delta_x) + (delta_y * delta_y) + (delta_z * delta_z)
+end
+
 local function build_contract_title(contract_type)
     return CONTRACT_TYPE_TITLES[contract_type] or contract_type
 end
@@ -350,6 +430,8 @@ function ContractService:CreateDeliveryContract(creator_character_id, item_key, 
         required_item_key = normalized_item_key,
         required_item_quantity = normalized_quantity,
         consume_required_items = true,
+        delivery_location_key = nil,
+        requires_delivery_location = false,
     }, function(is_success, contract_row, error)
         if not is_success then
             callback(false, nil, error)
@@ -367,6 +449,125 @@ function ContractService:CreateDeliveryContract(creator_character_id, item_key, 
 
         callback(true, contract_row, nil)
     end)
+end
+
+function ContractService:CreateDeliveryContractAt(creator_character_id, item_key, quantity, reward_money, location_key, description, callback)
+    local normalized_character_id = normalize_positive_integer(creator_character_id)
+    local normalized_item_key = normalize_item_key(item_key)
+    local normalized_quantity = normalize_positive_integer(quantity)
+    local normalized_reward_money = normalize_reward_money(reward_money)
+    local normalized_location_key = normalize_location_key(location_key)
+    local normalized_description = normalize_description(description)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if normalized_item_key == nil then
+        callback(false, nil, "item-key-invalid")
+        return true
+    end
+
+    if normalized_quantity == nil or normalized_quantity > MAX_DELIVERY_QUANTITY then
+        callback(false, nil, "quantity-invalid")
+        return true
+    end
+
+    if normalized_reward_money == nil then
+        callback(false, nil, "reward-money-invalid")
+        return true
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "delivery-location-key-invalid")
+        return true
+    end
+
+    if normalized_description == nil then
+        callback(false, nil, "description-invalid")
+        return true
+    end
+
+    return self.repository:GetDeliveryLocation(normalized_location_key, function(is_location_success, delivery_location, location_error)
+        if not is_location_success then
+            callback(false, nil, location_error or "delivery-location-not-found")
+            return
+        end
+
+        if delivery_location == nil then
+            callback(false, nil, "delivery-location-not-found")
+            return
+        end
+
+        if delivery_location.is_active ~= true then
+            callback(false, nil, "delivery-location-inactive")
+            return
+        end
+
+        self.repository:CreateContract({
+            creator_character_id = normalized_character_id,
+            type = "delivery",
+            title = build_contract_title("delivery"),
+            description = normalized_description,
+            reward_money = normalized_reward_money,
+            deadline_at = nil,
+            required_item_key = normalized_item_key,
+            required_item_quantity = normalized_quantity,
+            consume_required_items = true,
+            delivery_location_key = normalized_location_key,
+            requires_delivery_location = true,
+        }, function(is_success, contract_row, error)
+            if not is_success then
+                callback(false, nil, error)
+                return
+            end
+
+            Console.Log(
+                "[gr_contracts][service] Delivery contract with location created id=%s creator_character_id=%s item=%s quantity=%s reward_money=%s location=%s.",
+                tostring(contract_row and contract_row.id),
+                tostring(normalized_character_id),
+                tostring(normalized_item_key),
+                tostring(normalized_quantity),
+                tostring(normalized_reward_money),
+                tostring(normalized_location_key)
+            )
+
+            callback(true, contract_row, nil)
+        end)
+    end)
+end
+
+function ContractService:ListDeliveryLocations(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self.repository:ListDeliveryLocations(callback)
+end
+
+function ContractService:GetDeliveryLocation(location_key, callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self.repository:GetDeliveryLocation(location_key, callback)
 end
 
 function ContractService:ListOpenContracts(callback)
@@ -480,9 +681,62 @@ function ContractService:AcceptContract(character_id, contract_id, callback)
     end)
 end
 
-function ContractService:CompleteContract(character_id, contract_id, callback)
+function ContractService:ValidateDeliveryLocationProximity(player, delivery_location)
+    if type(delivery_location) ~= "table" then
+        return false, "delivery-location-not-found"
+    end
+
+    if delivery_location.is_active ~= true then
+        return false, "delivery-location-inactive"
+    end
+
+    local position_x = normalize_number(delivery_location.position_x)
+    local position_y = normalize_number(delivery_location.position_y)
+    local position_z = normalize_number(delivery_location.position_z)
+    local radius = normalize_number(delivery_location.radius)
+
+    if position_x == nil or position_y == nil or position_z == nil or radius == nil or radius <= 0 then
+        return false, "delivery-location-position-missing"
+    end
+
+    local controlled_character = get_controlled_character(player)
+
+    if controlled_character == nil then
+        return false, "player-position-unavailable"
+    end
+
+    local player_location = get_entity_location(controlled_character)
+
+    if player_location == nil then
+        return false, "player-position-unavailable"
+    end
+
+    local distance_squared = get_distance_squared(player_location, {
+        x = position_x,
+        y = position_y,
+        z = position_z,
+    })
+
+    if distance_squared == nil then
+        return false, "player-position-unavailable"
+    end
+
+    if distance_squared > (radius * radius) then
+        return false, "too-far-from-delivery-location"
+    end
+
+    return true, nil
+end
+
+function ContractService:CompleteContract(character_id, contract_id, player_or_callback, callback)
     local normalized_character_id = normalize_positive_integer(character_id)
     local normalized_contract_id = normalize_contract_id(contract_id)
+    local player = player_or_callback
+
+    if type(player_or_callback) == "function" and callback == nil then
+        callback = player_or_callback
+        player = nil
+    end
 
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -536,6 +790,8 @@ function ContractService:CompleteContract(character_id, contract_id, callback)
         local required_item_quantity = normalize_positive_integer(contract_row.required_item_quantity)
         local should_consume_required_items = contract_row.consume_required_items ~= false
         local inventory_bridge = nil
+        local delivery_location_key = normalize_location_key(contract_row.delivery_location_key)
+        local requires_delivery_location = contract_row.requires_delivery_location == true
 
         local function continue_after_requirements()
             self.repository:CompleteContract(normalized_contract_id, normalized_character_id, function(is_complete_success, completed_row, complete_error)
@@ -720,60 +976,93 @@ function ContractService:CompleteContract(character_id, contract_id, callback)
             end)
         end
 
-        if required_item_key == nil or required_item_quantity == nil or required_item_quantity < 1 or not should_consume_required_items then
-            continue_after_requirements()
-            return
-        end
+        local function continue_after_delivery_location()
+            if required_item_key == nil or required_item_quantity == nil or required_item_quantity < 1 or not should_consume_required_items then
+                continue_after_requirements()
+                return
+            end
 
-        inventory_bridge = resolve_inventory_bridge()
+            inventory_bridge = resolve_inventory_bridge()
 
-        if inventory_bridge == nil then
-            callback(false, contract_row, "inventory-check-unavailable")
-            return
-        end
-
-        inventory_bridge.ListInventory(normalized_character_id, function(is_list_success, inventory_rows, list_error)
-            if not is_list_success then
-                Console.Log(
-                    "[gr_contracts][service] Contract inventory check failed contract_id=%s assignee_character_id=%s reason=%s.",
-                    tostring(normalized_contract_id),
-                    tostring(normalized_character_id),
-                    tostring(list_error or "inventory-list-failed")
-                )
+            if inventory_bridge == nil then
                 callback(false, contract_row, "inventory-check-unavailable")
                 return
             end
 
-            local has_items, available_quantity = has_required_items(inventory_rows, required_item_key, required_item_quantity)
-
-            if not has_items then
-                local error_row = {}
-
-                for key, value in pairs(contract_row) do
-                    error_row[key] = value
-                end
-
-                error_row.available_item_quantity = available_quantity
-                callback(false, error_row, "required-item-missing")
-                return
-            end
-
-            inventory_bridge.RemoveItem(normalized_character_id, required_item_key, required_item_quantity, function(is_remove_success, _, remove_error)
-                if not is_remove_success then
+            inventory_bridge.ListInventory(normalized_character_id, function(is_list_success, inventory_rows, list_error)
+                if not is_list_success then
                     Console.Log(
-                        "[gr_contracts][service] Contract inventory remove failed contract_id=%s assignee_character_id=%s item_key=%s quantity=%s reason=%s.",
+                        "[gr_contracts][service] Contract inventory check failed contract_id=%s assignee_character_id=%s reason=%s.",
                         tostring(normalized_contract_id),
                         tostring(normalized_character_id),
-                        tostring(required_item_key),
-                        tostring(required_item_quantity),
-                        tostring(remove_error or "inventory-remove-failed")
+                        tostring(list_error or "inventory-list-failed")
                     )
-                    callback(false, contract_row, "inventory-remove-failed")
+                    callback(false, contract_row, "inventory-check-unavailable")
                     return
                 end
 
-                continue_after_requirements()
+                local has_items, available_quantity = has_required_items(inventory_rows, required_item_key, required_item_quantity)
+
+                if not has_items then
+                    local error_row = {}
+
+                    for key, value in pairs(contract_row) do
+                        error_row[key] = value
+                    end
+
+                    error_row.available_item_quantity = available_quantity
+                    callback(false, error_row, "required-item-missing")
+                    return
+                end
+
+                inventory_bridge.RemoveItem(normalized_character_id, required_item_key, required_item_quantity, function(is_remove_success, _, remove_error)
+                    if not is_remove_success then
+                        Console.Log(
+                            "[gr_contracts][service] Contract inventory remove failed contract_id=%s assignee_character_id=%s item_key=%s quantity=%s reason=%s.",
+                            tostring(normalized_contract_id),
+                            tostring(normalized_character_id),
+                            tostring(required_item_key),
+                            tostring(required_item_quantity),
+                            tostring(remove_error or "inventory-remove-failed")
+                        )
+                        callback(false, contract_row, "inventory-remove-failed")
+                        return
+                    end
+
+                    continue_after_requirements()
+                end)
             end)
+        end
+
+        if not requires_delivery_location then
+            continue_after_delivery_location()
+            return
+        end
+
+        if delivery_location_key == nil then
+            callback(false, contract_row, "delivery-location-not-found")
+            return
+        end
+
+        self.repository:GetDeliveryLocation(delivery_location_key, function(is_location_success, delivery_location, location_error)
+            if not is_location_success then
+                callback(false, contract_row, location_error or "delivery-location-not-found")
+                return
+            end
+
+            if delivery_location == nil then
+                callback(false, contract_row, "delivery-location-not-found")
+                return
+            end
+
+            local is_near_delivery_location, proximity_error = self:ValidateDeliveryLocationProximity(player, delivery_location)
+
+            if not is_near_delivery_location then
+                callback(false, contract_row, proximity_error)
+                return
+            end
+
+            continue_after_delivery_location()
         end)
     end)
 end

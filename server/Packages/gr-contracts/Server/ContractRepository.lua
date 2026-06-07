@@ -15,6 +15,8 @@ local CONTRACT_SELECT_COLUMNS = [[
         required_item_key,
         required_item_quantity,
         consume_required_items,
+        delivery_location_key,
+        requires_delivery_location,
         status,
         payment_status,
         created_at,
@@ -23,6 +25,43 @@ local CONTRACT_SELECT_COLUMNS = [[
         cancelled_at,
         paid_at,
         deadline_at
+]]
+
+local SELECT_DELIVERY_LOCATIONS_QUERY = [[
+    SELECT
+        id,
+        key,
+        name,
+        description,
+        location_type,
+        position_x,
+        position_y,
+        position_z,
+        radius,
+        is_active,
+        created_at,
+        updated_at
+    FROM contract_delivery_locations
+    ORDER BY key ASC
+]]
+
+local SELECT_DELIVERY_LOCATION_BY_KEY_QUERY = [[
+    SELECT
+        id,
+        key,
+        name,
+        description,
+        location_type,
+        position_x,
+        position_y,
+        position_z,
+        radius,
+        is_active,
+        created_at,
+        updated_at
+    FROM contract_delivery_locations
+    WHERE key = :0
+    LIMIT 1
 ]]
 
 local INSERT_CONTRACT_QUERY = [[
@@ -35,6 +74,8 @@ local INSERT_CONTRACT_QUERY = [[
         required_item_key,
         required_item_quantity,
         consume_required_items,
+        delivery_location_key,
+        requires_delivery_location,
         status,
         deadline_at
     )
@@ -47,8 +88,10 @@ local INSERT_CONTRACT_QUERY = [[
         :5,
         :6,
         :7,
+        :8,
+        :9,
         'open',
-        :8
+        :10
     )
     RETURNING
 ]] .. CONTRACT_SELECT_COLUMNS .. [[
@@ -176,6 +219,26 @@ local function normalize_non_negative_integer(value, fallback)
     return fallback
 end
 
+local function normalize_number(value, fallback)
+    if type(value) == "number" then
+        if value ~= value or value == math.huge or value == -math.huge then
+            return fallback
+        end
+
+        return value
+    end
+
+    if type(value) == "string" then
+        local parsed_value = tonumber(value)
+
+        if parsed_value ~= nil and parsed_value == parsed_value and parsed_value ~= math.huge and parsed_value ~= -math.huge then
+            return parsed_value
+        end
+    end
+
+    return fallback
+end
+
 local function normalize_boolean(value, fallback)
     if type(value) == "boolean" then
         return value
@@ -210,6 +273,20 @@ local function normalize_item_key(item_key)
     end
 
     return string.lower(normalized_item_key)
+end
+
+local function normalize_location_key(location_key)
+    local normalized_location_key = trim_string(location_key)
+
+    if normalized_location_key == nil then
+        return nil
+    end
+
+    if normalized_location_key:match("^[a-z0-9_]+$") == nil then
+        return nil
+    end
+
+    return string.lower(normalized_location_key)
 end
 
 local function normalize_contract_type(contract_type)
@@ -296,6 +373,8 @@ local function normalize_contract_row(row)
         required_item_key = normalize_item_key(row.required_item_key),
         required_item_quantity = normalize_non_negative_integer(row.required_item_quantity, 0),
         consume_required_items = normalize_boolean(row.consume_required_items, true),
+        delivery_location_key = normalize_location_key(row.delivery_location_key),
+        requires_delivery_location = normalize_boolean(row.requires_delivery_location, false),
         status = normalize_contract_status(row.status),
         payment_status = normalize_payment_status(row.payment_status),
         created_at = row.created_at,
@@ -305,6 +384,51 @@ local function normalize_contract_row(row)
         paid_at = row.paid_at,
         deadline_at = row.deadline_at,
     }
+end
+
+local function normalize_delivery_location_row(row)
+    local location_id = nil
+    local location_key = nil
+
+    if type(row) ~= "table" then
+        return nil
+    end
+
+    location_id = normalize_positive_integer(row.id)
+    location_key = normalize_location_key(row.key)
+
+    if location_id == nil or location_key == nil then
+        return nil
+    end
+
+    return {
+        id = location_id,
+        key = location_key,
+        name = trim_string(row.name) or location_key,
+        description = trim_string(row.description) or "",
+        location_type = trim_string(row.location_type) or "delivery",
+        position_x = normalize_number(row.position_x, nil),
+        position_y = normalize_number(row.position_y, nil),
+        position_z = normalize_number(row.position_z, nil),
+        radius = normalize_number(row.radius, 500.0) or 500.0,
+        is_active = normalize_boolean(row.is_active, true),
+        created_at = row.created_at,
+        updated_at = row.updated_at,
+    }
+end
+
+local function normalize_delivery_location_rows(rows)
+    local normalized_rows = {}
+
+    for _, row in ipairs(rows or {}) do
+        local normalized_row = normalize_delivery_location_row(row)
+
+        if normalized_row ~= nil then
+            normalized_rows[#normalized_rows + 1] = normalized_row
+        end
+    end
+
+    return normalized_rows
 end
 
 local function normalize_rows(rows)
@@ -371,6 +495,8 @@ function ContractRepository:CreateContract(contract, callback)
     local normalized_required_item_key = normalize_item_key(contract and contract.required_item_key)
     local normalized_required_item_quantity = normalize_non_negative_integer(contract and contract.required_item_quantity, 0)
     local normalized_consume_required_items = normalize_boolean(contract and contract.consume_required_items, true)
+    local normalized_delivery_location_key = normalize_location_key(contract and contract.delivery_location_key)
+    local normalized_requires_delivery_location = normalize_boolean(contract and contract.requires_delivery_location, false)
     local normalized_deadline_at = contract ~= nil and contract.deadline_at or nil
 
     if type(callback) ~= "function" then
@@ -407,6 +533,11 @@ function ContractRepository:CreateContract(contract, callback)
         return true
     end
 
+    if normalized_requires_delivery_location and normalized_delivery_location_key == nil then
+        callback(false, nil, "delivery-location-key-invalid")
+        return true
+    end
+
     return self:Connect(function(is_connected, database_or_error, error)
         if not is_connected then
             callback(false, nil, error)
@@ -434,9 +565,65 @@ function ContractRepository:CreateContract(contract, callback)
             normalized_required_item_key,
             normalized_required_item_quantity,
             normalized_consume_required_items,
+            normalized_delivery_location_key,
+            normalized_requires_delivery_location,
             normalized_deadline_at
         )
     end, "contracts-create")
+end
+
+function ContractRepository:ListDeliveryLocations(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_DELIVERY_LOCATIONS_QUERY, function(rows, select_error)
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            callback(true, normalize_delivery_location_rows(rows), nil)
+        end)
+    end, "contracts-list-delivery-locations")
+end
+
+function ContractRepository:GetDeliveryLocation(location_key, callback)
+    local normalized_location_key = normalize_location_key(location_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "delivery-location-key-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_DELIVERY_LOCATION_BY_KEY_QUERY, function(rows, select_error)
+            local delivery_locations = nil
+
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            delivery_locations = normalize_delivery_location_rows(rows)
+            callback(true, delivery_locations[1], nil)
+        end, normalized_location_key)
+    end, "contracts-get-delivery-location")
 end
 
 function ContractRepository:ListOpenContracts(callback)
