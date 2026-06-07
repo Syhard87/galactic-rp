@@ -250,6 +250,48 @@ local function build_restock_text(node_row)
     return string.format("%ss", tostring(node_row.restock_seconds))
 end
 
+local function get_node_row(node_info)
+    if type(node_info) ~= "table" then
+        return {}
+    end
+
+    if type(node_info.node) == "table" then
+        return node_info.node
+    end
+
+    return node_info
+end
+
+local function format_chance_percent(value)
+    local numeric_value = tonumber(value)
+
+    if numeric_value == nil then
+        return "0"
+    end
+
+    if numeric_value % 1 == 0 then
+        return tostring(math.floor(numeric_value))
+    end
+
+    return string.format("%.2f", numeric_value):gsub("0+$", ""):gsub("%.$", "")
+end
+
+local function build_reward_summary_text(reward_results)
+    local parts = {}
+
+    for _, reward_result in ipairs(reward_results or {}) do
+        if trim_string(reward_result.item_key) ~= nil then
+            parts[#parts + 1] = string.format(
+                "%s x%s",
+                tostring(reward_result.item_key),
+                tostring(reward_result.quantity)
+            )
+        end
+    end
+
+    return table.concat(parts, ", ")
+end
+
 local function build_node_line(node_row)
     local requirement_parts = {}
 
@@ -288,9 +330,11 @@ local function build_node_line(node_row)
     return line
 end
 
-local function build_node_info_lines(node_row)
+local function build_node_info_lines(node_info)
     local lines = {}
     local requirement_text = "aucun"
+    local node_row = get_node_row(node_info)
+    local reward_rows = type(node_info) == "table" and node_info.rewards or nil
 
     lines[#lines + 1] = string.format("Node %s :", tostring(node_row.key))
     lines[#lines + 1] = string.format(
@@ -332,6 +376,28 @@ local function build_node_info_lines(node_row)
     end
 
     lines[#lines + 1] = string.format("requires: %s", requirement_text)
+
+    if type(reward_rows) == "table" and #reward_rows > 0 then
+        lines[#lines + 1] = "Rewards:"
+
+        for _, reward_row in ipairs(reward_rows) do
+            lines[#lines + 1] = string.format(
+                "- %s %s qty=%s-%s chance=%s%%",
+                tostring(reward_row.reward_type),
+                tostring(reward_row.item_key),
+                tostring(reward_row.min_quantity),
+                tostring(reward_row.max_quantity),
+                tostring(format_chance_percent(reward_row.chance_percent))
+            )
+        end
+    else
+        lines[#lines + 1] = string.format(
+            "Rewards: legacy %s qty=%s-%s",
+            tostring(node_row.result_item_key),
+            tostring(node_row.min_quantity),
+            tostring(node_row.max_quantity)
+        )
+    end
 
     return lines
 end
@@ -508,7 +574,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         end
 
         if command_name == "gatherinfo" then
-            GRGathering.Server.Service:GetNodeInfo(payload, function(is_success, node_row, error)
+            GRGathering.Server.Service:GetNodeInfo(payload, function(is_success, node_info, error)
                 if not is_success then
                     if error == "node-not-found" or error == "node-key-required" then
                         Chat.SendMessage(player, "Node introuvable.")
@@ -519,7 +585,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     return
                 end
 
-                for _, line in ipairs(build_node_info_lines(node_row)) do
+                for _, line in ipairs(build_node_info_lines(node_info)) do
                     Chat.SendMessage(player, line)
                 end
             end)
@@ -617,6 +683,11 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     return
                 end
 
+                if error == "no-reward-generated" then
+                    Chat.SendMessage(player, "Recolte impossible : aucune recompense generee.")
+                    return
+                end
+
                 if error == "player-position-unavailable" or error == "node-position-invalid" then
                     Chat.SendMessage(player, "Recolte impossible : position indisponible.")
                     return
@@ -635,9 +706,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 Chat.SendMessage(
                     player,
                     string.format(
-                        "Recolte effectuee : %s x%s, xp=%s+%s.",
-                        tostring(result.node and result.node.result_item_key or payload),
-                        tostring(result.quantity or 0),
+                        "Recolte effectuee : %s, xp=%s+%s.",
+                        tostring(build_reward_summary_text(result.rewards)),
                         tostring(result.skill.skill_key),
                         tostring(result.skill.amount or 0)
                     )
@@ -648,9 +718,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             Chat.SendMessage(
                 player,
                 string.format(
-                    "Recolte effectuee : %s x%s.",
-                    tostring(type(result) == "table" and result.node and result.node.result_item_key or payload),
-                    tostring(type(result) == "table" and result.quantity or 0)
+                    "Recolte effectuee : %s.",
+                    tostring(type(result) == "table" and build_reward_summary_text(result.rewards) or payload)
                 )
             )
         end)

@@ -114,6 +114,30 @@ local UPSERT_COOLDOWN_QUERY = [[
         updated_at
 ]]
 
+local SELECT_NODE_REWARDS_QUERY = [[
+    SELECT
+        id,
+        node_key,
+        item_key,
+        reward_type,
+        min_quantity,
+        max_quantity,
+        chance_percent,
+        is_active,
+        created_at,
+        updated_at
+    FROM gathering_node_rewards
+    WHERE node_key = :0
+        AND is_active = TRUE
+    ORDER BY
+        CASE reward_type
+            WHEN 'primary' THEN 0
+            ELSE 1
+        END ASC,
+        item_key ASC,
+        id ASC
+]]
+
 local DECREASE_NODE_STOCK_QUERY = [[
     UPDATE gathering_nodes
     SET
@@ -381,6 +405,16 @@ local function normalize_positive_number(value)
     return normalized_value
 end
 
+local function normalize_chance_percent(value)
+    local normalized_value = normalize_number(value)
+
+    if normalized_value == nil or normalized_value < 0 or normalized_value > 100 then
+        return nil
+    end
+
+    return normalized_value
+end
+
 local function normalize_node_key(node_key)
     return trim_string(node_key)
 end
@@ -472,6 +506,69 @@ local function normalize_cooldown_row(row)
         last_gathered_at = row.last_gathered_at,
         last_gathered_epoch = tonumber(row.last_gathered_epoch) or 0,
         gather_count = normalize_non_negative_integer(row.gather_count) or 0,
+        updated_at = row.updated_at,
+    }
+end
+
+local function normalize_reward_type(reward_type)
+    local normalized_reward_type = trim_string(reward_type)
+
+    if normalized_reward_type == nil then
+        return nil
+    end
+
+    normalized_reward_type = string.lower(normalized_reward_type)
+
+    if normalized_reward_type ~= "primary" and normalized_reward_type ~= "bonus" then
+        return nil
+    end
+
+    return normalized_reward_type
+end
+
+local function normalize_reward_row(row)
+    local reward_id = nil
+    local node_key = nil
+    local item_key = nil
+    local reward_type = nil
+    local min_quantity = nil
+    local max_quantity = nil
+    local chance_percent = nil
+
+    if type(row) ~= "table" then
+        return nil
+    end
+
+    reward_id = normalize_positive_integer(row.id)
+    node_key = normalize_node_key(row.node_key)
+    item_key = normalize_item_key(row.item_key)
+    reward_type = normalize_reward_type(row.reward_type)
+    min_quantity = normalize_positive_integer(row.min_quantity)
+    max_quantity = normalize_positive_integer(row.max_quantity)
+    chance_percent = normalize_chance_percent(row.chance_percent)
+
+    if reward_id == nil
+        or node_key == nil
+        or item_key == nil
+        or reward_type == nil
+        or min_quantity == nil
+        or max_quantity == nil
+        or max_quantity < min_quantity
+        or chance_percent == nil
+    then
+        return nil
+    end
+
+    return {
+        id = reward_id,
+        node_key = node_key,
+        item_key = item_key,
+        reward_type = reward_type,
+        min_quantity = min_quantity,
+        max_quantity = max_quantity,
+        chance_percent = chance_percent,
+        is_active = normalize_boolean(row.is_active, false),
+        created_at = row.created_at,
         updated_at = row.updated_at,
     }
 end
@@ -621,6 +718,35 @@ function GatheringRepository:GetCooldown(character_id, node_key, callback)
             callback(true, normalized_rows[1], nil)
         end, normalized_character_id, normalized_node_key)
     end, "gathering-cooldown-get")
+end
+
+function GatheringRepository:ListNodeRewards(node_key, callback)
+    local normalized_node_key = normalize_node_key(node_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_node_key == nil then
+        callback(false, nil, "node-key-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_NODE_REWARDS_QUERY, function(rows, select_error)
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            callback(true, normalize_rows(rows, normalize_reward_row), nil)
+        end, normalized_node_key)
+    end, "gathering-node-rewards-list")
 end
 
 function GatheringRepository:UpsertCooldown(character_id, node_key, callback)

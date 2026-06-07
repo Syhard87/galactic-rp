@@ -170,3 +170,27 @@ SET
     requires_proximity = EXCLUDED.requires_proximity,
     is_active = EXCLUDED.is_active,
     updated_at = NOW();
+
+INSERT INTO gathering_node_rewards (
+    node_key,
+    item_key,
+    reward_type,
+    min_quantity,
+    max_quantity,
+    chance_percent,
+    is_active
+)
+VALUES
+    ('scrap_field', 'scrap', 'primary', 1, 3, 100, TRUE),
+    ('scrap_field', 'electronic_component', 'bonus', 1, 1, 20, TRUE),
+    ('electronic_wreck', 'electronic_component', 'primary', 1, 2, 100, TRUE),
+    ('electronic_wreck', 'scrap', 'bonus', 1, 2, 35, TRUE),
+    ('water_source', 'water_bottle', 'primary', 1, 2, 100, TRUE),
+    ('medical_cache', 'medkit_basic', 'primary', 1, 1, 100, TRUE)
+ON CONFLICT (node_key, item_key, reward_type) DO UPDATE
+SET
+    min_quantity = EXCLUDED.min_quantity,
+    max_quantity = EXCLUDED.max_quantity,
+    chance_percent = EXCLUDED.chance_percent,
+    is_active = EXCLUDED.is_active,
+    updated_at = NOW();

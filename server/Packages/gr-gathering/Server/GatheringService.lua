@@ -185,6 +185,53 @@ local function normalize_stock_quantity(value)
     return normalize_non_negative_integer(value)
 end
 
+local function roll_chance_percent(chance_percent)
+    local normalized_chance_percent = tonumber(chance_percent)
+
+    if normalized_chance_percent == nil or normalized_chance_percent <= 0 then
+        return false
+    end
+
+    if normalized_chance_percent >= 100 then
+        return true
+    end
+
+    return math.random(1, 10000) <= math.floor((normalized_chance_percent * 100) + 0.5)
+end
+
+local function clone_reward_result(item_key, quantity, reward_type, chance_percent)
+    return {
+        item_key = item_key,
+        quantity = quantity,
+        reward_type = reward_type,
+        chance_percent = chance_percent,
+    }
+end
+
+local function build_reward_summary_text(reward_results)
+    local parts = {}
+
+    for _, reward_result in ipairs(reward_results or {}) do
+        if trim_string(reward_result.item_key) ~= nil and normalize_positive_integer(reward_result.quantity) ~= nil then
+            parts[#parts + 1] = string.format(
+                "%s x%s",
+                tostring(reward_result.item_key),
+                tostring(reward_result.quantity)
+            )
+        end
+    end
+
+    return table.concat(parts, ", ")
+end
+
+local function build_node_info_payload(node_row, reward_rows)
+    return {
+        node = node_row,
+        rewards = reward_rows or {},
+        uses_legacy_rewards = type(reward_rows) ~= "table" or #reward_rows < 1,
+    }
+end
+
 function GatheringService.Create(repository)
     local self = setmetatable({}, GatheringService)
 
@@ -232,7 +279,14 @@ function GatheringService:GetNodeInfo(node_key, callback)
             return
         end
 
-        callback(true, node_row, nil)
+        self.repository:ListNodeRewards(normalized_node_key, function(is_rewards_success, reward_rows, reward_error)
+            if not is_rewards_success then
+                callback(false, nil, "database-error")
+                return
+            end
+
+            callback(true, build_node_info_payload(node_row, reward_rows), nil)
+        end)
     end)
 end
 
@@ -465,6 +519,152 @@ function GatheringService:ResolveGatherQuantity(node)
     return quantity, nil
 end
 
+function GatheringService:GenerateRewardResults(node, reward_rows)
+    local generated_rewards = {}
+    local primary_rewards = {}
+
+    if type(node) ~= "table" then
+        return nil, "node-not-found"
+    end
+
+    if type(reward_rows) ~= "table" or #reward_rows < 1 then
+        local quantity, quantity_error = self:ResolveGatherQuantity(node)
+
+        if quantity == nil then
+            return nil, quantity_error or "database-error"
+        end
+
+        if trim_string(node.result_item_key) == nil then
+            return nil, "database-error"
+        end
+
+        return {
+            clone_reward_result(node.result_item_key, quantity, "legacy", 100),
+        }, nil
+    end
+
+    for _, reward_row in ipairs(reward_rows) do
+        if reward_row.reward_type == "primary" then
+            primary_rewards[#primary_rewards + 1] = reward_row
+        end
+
+        if roll_chance_percent(reward_row.chance_percent) then
+            generated_rewards[#generated_rewards + 1] = clone_reward_result(
+                reward_row.item_key,
+                math.random(reward_row.min_quantity, reward_row.max_quantity),
+                reward_row.reward_type,
+                reward_row.chance_percent
+            )
+        end
+    end
+
+    if #generated_rewards < 1 and #primary_rewards > 0 then
+        generated_rewards[1] = clone_reward_result(
+            primary_rewards[1].item_key,
+            math.random(primary_rewards[1].min_quantity, primary_rewards[1].max_quantity),
+            primary_rewards[1].reward_type,
+            primary_rewards[1].chance_percent
+        )
+    end
+
+    if #generated_rewards < 1 then
+        return nil, "no-reward-generated"
+    end
+
+    return generated_rewards, nil
+end
+
+function GatheringService:CollapseRewardResults(reward_results)
+    local collapsed_rewards = {}
+    local reward_by_item_key = {}
+
+    for _, reward_result in ipairs(reward_results or {}) do
+        local item_key = trim_string(reward_result.item_key)
+        local quantity = normalize_positive_integer(reward_result.quantity)
+
+        if item_key ~= nil and quantity ~= nil then
+            if reward_by_item_key[item_key] == nil then
+                reward_by_item_key[item_key] = clone_reward_result(
+                    item_key,
+                    quantity,
+                    reward_result.reward_type,
+                    reward_result.chance_percent
+                )
+                collapsed_rewards[#collapsed_rewards + 1] = reward_by_item_key[item_key]
+            else
+                reward_by_item_key[item_key].quantity = reward_by_item_key[item_key].quantity + quantity
+            end
+        end
+    end
+
+    return collapsed_rewards
+end
+
+function GatheringService:ApplyStockLimit(node, reward_results)
+    local total_quantity = 0
+    local available_stock = nil
+
+    if type(node) ~= "table" then
+        return nil, nil, "node-not-found"
+    end
+
+    for _, reward_result in ipairs(reward_results or {}) do
+        total_quantity = total_quantity + (normalize_positive_integer(reward_result.quantity) or 0)
+    end
+
+    if total_quantity < 1 then
+        return nil, nil, "no-reward-generated"
+    end
+
+    if node.stock_enabled ~= true then
+        return reward_results, total_quantity, nil
+    end
+
+    available_stock = normalize_stock_quantity(node.stock_quantity)
+
+    if available_stock == nil then
+        return nil, nil, "stock-invalid"
+    end
+
+    if available_stock < 1 then
+        return nil, nil, "node-exhausted"
+    end
+
+    if total_quantity > available_stock then
+        local quantity_to_trim = total_quantity - available_stock
+
+        for reward_index = #reward_results, 1, -1 do
+            local reward_result = reward_results[reward_index]
+            local quantity = normalize_positive_integer(reward_result.quantity)
+
+            if quantity ~= nil and quantity_to_trim > 0 then
+                local reduction = math.min(quantity, quantity_to_trim)
+
+                quantity = quantity - reduction
+                quantity_to_trim = quantity_to_trim - reduction
+
+                if quantity < 1 then
+                    table.remove(reward_results, reward_index)
+                else
+                    reward_result.quantity = quantity
+                end
+            end
+        end
+    end
+
+    total_quantity = 0
+
+    for _, reward_result in ipairs(reward_results or {}) do
+        total_quantity = total_quantity + (normalize_positive_integer(reward_result.quantity) or 0)
+    end
+
+    if total_quantity < 1 then
+        return nil, nil, "node-exhausted"
+    end
+
+    return reward_results, total_quantity, nil
+end
+
 function GatheringService:Gather(character_id, player, node_key, callback)
     local normalized_character_id = normalize_character_id(character_id)
     local normalized_node_key = normalize_node_key(node_key)
@@ -514,11 +714,7 @@ function GatheringService:Gather(character_id, player, node_key, callback)
                 return
             end
 
-            if effective_node.result_item_key == nil
-                or effective_node.min_quantity == nil
-                or effective_node.max_quantity == nil
-                or effective_node.cooldown_seconds == nil
-            then
+            if effective_node.cooldown_seconds == nil then
                 callback(false, nil, "database-error")
                 return
             end
@@ -569,82 +765,152 @@ function GatheringService:Gather(character_id, player, node_key, callback)
                         return
                     end
 
-                    local quantity, quantity_error = self:ResolveGatherQuantity(effective_node)
+                    self.repository:ListNodeRewards(normalized_node_key, function(is_rewards_success, reward_rows, rewards_error)
+                        local generated_rewards = nil
+                        local consumed_quantity = 0
+                        local metadata_json = nil
 
-                    if quantity == nil then
-                        callback(false, {
-                            node = effective_node,
-                        }, quantity_error or "database-error")
-                        return
-                    end
+                        if not is_rewards_success then
+                            callback(false, {
+                                node = effective_node,
+                            }, "database-error")
+                            return
+                        end
 
-                    local metadata_json = encode_metadata_json({
-                        source = "gathering",
-                        node_key = normalized_node_key,
-                    })
+                        generated_rewards, rewards_error = self:GenerateRewardResults(effective_node, reward_rows)
 
-                    local function continue_with_inventory(stock_result)
-                        GRInventoryBridge.AddItem(
-                            normalized_character_id,
-                            effective_node.result_item_key,
-                            quantity,
-                            metadata_json,
-                            function(is_inventory_success, inventory_result, inventory_error)
-                                local function rollback_stock(final_error, rollback_reason)
-                                    if effective_node.stock_enabled ~= true then
-                                        callback(false, {
-                                            node = stock_result or effective_node,
-                                            quantity = quantity,
-                                            inventory_error = inventory_error,
-                                        }, final_error)
-                                        return
-                                    end
+                        if generated_rewards == nil then
+                            callback(false, {
+                                node = effective_node,
+                                rewards = reward_rows,
+                            }, rewards_error or "database-error")
+                            return
+                        end
 
-                                    self.repository:IncreaseNodeStock(normalized_node_key, quantity, function(is_restore_success, restored_node, restore_error)
-                                        if not is_restore_success then
-                                            Console.Log(
-                                                "[gr_gathering][service] Stock rollback failed node_key=%s quantity=%s reason=%s.",
-                                                tostring(normalized_node_key),
-                                                tostring(quantity),
-                                                tostring(restore_error or rollback_reason or "stock-compensation-failed")
-                                            )
+                        generated_rewards = self:CollapseRewardResults(generated_rewards)
+                        generated_rewards, consumed_quantity, rewards_error = self:ApplyStockLimit(effective_node, generated_rewards)
 
-                                            callback(false, {
-                                                node = stock_result or effective_node,
-                                                quantity = quantity,
-                                                inventory_error = inventory_error,
-                                                rollback_error = restore_error,
-                                            }, "stock-compensation-failed")
-                                            return
-                                        end
+                        if generated_rewards == nil or consumed_quantity == nil then
+                            callback(false, {
+                                node = effective_node,
+                                rewards = reward_rows,
+                            }, rewards_error or "database-error")
+                            return
+                        end
 
-                                        callback(false, {
-                                            node = restored_node,
-                                            quantity = quantity,
-                                            inventory_error = inventory_error,
-                                        }, final_error)
-                                    end)
-                                end
+                        metadata_json = encode_metadata_json({
+                            source = "gathering",
+                            node_key = normalized_node_key,
+                        })
 
-                                if not is_inventory_success then
-                                    rollback_stock("inventory-failed", "inventory-add-failed")
+                        local function rollback_stock(stock_source_node, final_error, rollback_reason, failure_context)
+                            local base_context = failure_context or {}
+
+                            base_context.node = stock_source_node or effective_node
+                            base_context.rewards = generated_rewards
+                            base_context.quantity = consumed_quantity
+
+                            if effective_node.stock_enabled ~= true then
+                                callback(false, base_context, final_error)
+                                return
+                            end
+
+                            self.repository:IncreaseNodeStock(normalized_node_key, consumed_quantity, function(is_restore_success, restored_node, restore_error)
+                                if not is_restore_success then
+                                    Console.Log(
+                                        "[gr_gathering][service] Stock rollback failed node_key=%s quantity=%s reason=%s.",
+                                        tostring(normalized_node_key),
+                                        tostring(consumed_quantity),
+                                        tostring(restore_error or rollback_reason or "stock-compensation-failed")
+                                    )
+
+                                    base_context.rollback_error = restore_error
+                                    callback(false, base_context, "stock-compensation-failed")
                                     return
                                 end
 
+                                base_context.node = restored_node
+                                callback(false, base_context, final_error)
+                            end)
+                        end
+
+                        local function rollback_inventory_rewards(added_rewards, stock_source_node, final_error, rollback_reason, failure_context)
+                            local added_reward_count = type(added_rewards) == "table" and #added_rewards or 0
+
+                            if added_reward_count < 1 then
+                                rollback_stock(stock_source_node, final_error, rollback_reason, failure_context)
+                                return
+                            end
+
+                            if type(GRInventoryBridge) ~= "table" or type(GRInventoryBridge.RemoveItem) ~= "function" then
+                                local rollback_context = failure_context or {}
+
+                                rollback_context.inventory_rollback_error = "inventory-rollback-unavailable"
+                                rollback_stock(stock_source_node, final_error, rollback_reason, rollback_context)
+                                return
+                            end
+
+                            local rollback_index = added_reward_count
+
+                            local function rollback_next()
+                                local reward_result = added_rewards[rollback_index]
+
+                                if reward_result == nil then
+                                    rollback_stock(stock_source_node, final_error, rollback_reason, failure_context)
+                                    return
+                                end
+
+                                GRInventoryBridge.RemoveItem(
+                                    normalized_character_id,
+                                    reward_result.item_key,
+                                    reward_result.quantity,
+                                    function(is_rollback_success, rollback_result, rollback_error)
+                                        if not is_rollback_success then
+                                            local rollback_context = failure_context or {}
+
+                                            rollback_context.inventory_rollback_error = rollback_error or "inventory-rollback-failed"
+
+                                            Console.Log(
+                                                "[gr_gathering][service] Inventory rollback failed character_id=%s node_key=%s item_key=%s quantity=%s reason=%s.",
+                                                tostring(normalized_character_id),
+                                                tostring(normalized_node_key),
+                                                tostring(reward_result.item_key),
+                                                tostring(reward_result.quantity),
+                                                tostring(rollback_context.inventory_rollback_error)
+                                            )
+
+                                            rollback_stock(stock_source_node, final_error, rollback_reason, rollback_context)
+                                            return
+                                        end
+
+                                        rollback_index = rollback_index - 1
+                                        rollback_next()
+                                    end
+                                )
+                            end
+
+                            rollback_next()
+                        end
+
+                        local function add_inventory_rewards(stock_result)
+                            local added_rewards = {}
+                            local reward_index = 1
+
+                            local function finalize_after_inventory()
                                 self.repository:UpsertCooldown(normalized_character_id, normalized_node_key, function(is_upsert_success, updated_cooldown, upsert_error)
                                     local function finalize_success(skill_result, skill_error)
                                         Console.Log(
-                                            "[gr_gathering][service] Gathering completed character_id=%s node_key=%s item_key=%s quantity=%s.",
+                                            "[gr_gathering][service] Gathering completed character_id=%s node_key=%s rewards=%s.",
                                             tostring(normalized_character_id),
                                             tostring(normalized_node_key),
-                                            tostring(effective_node.result_item_key),
-                                            tostring(quantity)
+                                            tostring(build_reward_summary_text(generated_rewards))
                                         )
 
                                         callback(true, {
                                             node = stock_result or effective_node,
-                                            quantity = quantity,
-                                            inventory = inventory_result,
+                                            rewards = generated_rewards,
+                                            quantity = consumed_quantity,
+                                            inventory = added_rewards,
                                             cooldown = updated_cooldown,
                                             skill = skill_result,
                                             skill_error = skill_error,
@@ -652,38 +918,14 @@ function GatheringService:Gather(character_id, player, node_key, callback)
                                     end
 
                                     if not is_upsert_success or updated_cooldown == nil then
-                                        if type(GRInventoryBridge) ~= "table" or type(GRInventoryBridge.RemoveItem) ~= "function" then
-                                            Console.Log(
-                                                "[gr_gathering][service] Cooldown update failed without inventory rollback character_id=%s node_key=%s item_key=%s quantity=%s reason=%s.",
-                                                tostring(normalized_character_id),
-                                                tostring(normalized_node_key),
-                                                tostring(effective_node.result_item_key),
-                                                tostring(quantity),
-                                                tostring(upsert_error or "cooldown-upsert-failed")
-                                            )
-
-                                            rollback_stock("database-error", "cooldown-upsert-failed")
-                                            return
-                                        end
-
-                                        GRInventoryBridge.RemoveItem(
-                                            normalized_character_id,
-                                            effective_node.result_item_key,
-                                            quantity,
-                                            function(is_rollback_success, rollback_result, rollback_error)
-                                                if not is_rollback_success then
-                                                    Console.Log(
-                                                        "[gr_gathering][service] Inventory rollback failed character_id=%s node_key=%s item_key=%s quantity=%s reason=%s.",
-                                                        tostring(normalized_character_id),
-                                                        tostring(normalized_node_key),
-                                                        tostring(effective_node.result_item_key),
-                                                        tostring(quantity),
-                                                        tostring(rollback_error or upsert_error or "rollback-failed")
-                                                    )
-                                                end
-
-                                                rollback_stock("database-error", "cooldown-upsert-failed")
-                                            end
+                                        rollback_inventory_rewards(
+                                            added_rewards,
+                                            stock_result,
+                                            "database-error",
+                                            "cooldown-upsert-failed",
+                                            {
+                                                upsert_error = upsert_error,
+                                            }
                                         )
                                         return
                                     end
@@ -738,25 +980,68 @@ function GatheringService:Gather(character_id, player, node_key, callback)
                                     )
                                 end)
                             end
-                        )
-                    end
 
-                    if effective_node.stock_enabled == true then
-                        self.repository:DecreaseNodeStock(normalized_node_key, quantity, function(is_stock_success, stock_result, stock_error)
-                            if not is_stock_success or stock_result == nil then
-                                callback(false, {
-                                    node = effective_node,
-                                    quantity = quantity,
-                                }, stock_error or "stock-update-failed")
-                                return
+                            local function add_next_reward()
+                                local reward_result = generated_rewards[reward_index]
+
+                                if reward_result == nil then
+                                    finalize_after_inventory()
+                                    return
+                                end
+
+                                GRInventoryBridge.AddItem(
+                                    normalized_character_id,
+                                    reward_result.item_key,
+                                    reward_result.quantity,
+                                    metadata_json,
+                                    function(is_inventory_success, inventory_result, inventory_error)
+                                        if not is_inventory_success then
+                                            rollback_inventory_rewards(
+                                                added_rewards,
+                                                stock_result,
+                                                "inventory-failed",
+                                                "inventory-add-failed",
+                                                {
+                                                    inventory_error = inventory_error,
+                                                    failed_reward = reward_result,
+                                                }
+                                            )
+                                            return
+                                        end
+
+                                        added_rewards[#added_rewards + 1] = {
+                                            item_key = reward_result.item_key,
+                                            quantity = reward_result.quantity,
+                                            inventory = inventory_result,
+                                        }
+
+                                        reward_index = reward_index + 1
+                                        add_next_reward()
+                                    end
+                                )
                             end
 
-                            continue_with_inventory(stock_result)
-                        end)
-                        return
-                    end
+                            add_next_reward()
+                        end
 
-                    continue_with_inventory(effective_node)
+                        if effective_node.stock_enabled == true then
+                            self.repository:DecreaseNodeStock(normalized_node_key, consumed_quantity, function(is_stock_success, stock_result, stock_error)
+                                if not is_stock_success or stock_result == nil then
+                                    callback(false, {
+                                        node = effective_node,
+                                        rewards = generated_rewards,
+                                        quantity = consumed_quantity,
+                                    }, stock_error or "stock-update-failed")
+                                    return
+                                end
+
+                                add_inventory_rewards(stock_result)
+                            end)
+                            return
+                        end
+
+                        add_inventory_rewards(effective_node)
+                    end)
                 end)
             end)
         end)
