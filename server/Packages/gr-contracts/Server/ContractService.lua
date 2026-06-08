@@ -174,6 +174,20 @@ local function normalize_job_source(job_source)
     return normalized_job_source
 end
 
+local function normalize_cancel_reason(reason, fallback)
+    local normalized_reason = trim_string(reason)
+
+    if normalized_reason == nil then
+        return fallback
+    end
+
+    if #normalized_reason > 255 then
+        normalized_reason = normalized_reason:sub(1, 255)
+    end
+
+    return normalized_reason
+end
+
 local function normalize_item_key(item_key)
     local normalized_item_key = trim_string(item_key)
 
@@ -394,6 +408,21 @@ local function has_required_items(inventory_rows, required_item_key, required_it
     end
 
     return total_quantity >= required_item_quantity, total_quantity
+end
+
+local function is_contract_terminal(contract_row)
+    local contract_status = trim_string(contract_row and contract_row.status)
+    local payment_status = normalize_payment_status(contract_row and contract_row.payment_status)
+
+    if contract_status == "completed" or contract_status == "cancelled" then
+        return true
+    end
+
+    if payment_status == "paid" then
+        return true
+    end
+
+    return false
 end
 
 function ContractService.Create(repository)
@@ -1843,9 +1872,174 @@ function ContractService:CompleteContract(character_id, contract_id, player_or_c
     end)
 end
 
-function ContractService:CancelContract(character_id, contract_id, callback)
+function ContractService:AbandonContract(character_id, contract_id, callback)
     local normalized_character_id = normalize_positive_integer(character_id)
     local normalized_contract_id = normalize_contract_id(contract_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-invalid")
+        return true
+    end
+
+    return self.repository:GetContractById(normalized_contract_id, function(is_get_success, contract_row, get_error)
+        if not is_get_success then
+            callback(false, nil, get_error or "database-error")
+            return
+        end
+
+        if contract_row == nil then
+            callback(false, nil, "contract-not-found")
+            return
+        end
+
+        if is_contract_terminal(contract_row) then
+            callback(false, contract_row, "contract-terminal")
+            return
+        end
+
+        if contract_row.status ~= "accepted"
+            or normalize_positive_integer(contract_row.assignee_character_id) ~= normalized_character_id
+        then
+            callback(false, contract_row, "not-assigned-to-character")
+            return
+        end
+
+        local required_item_key = normalize_item_key(contract_row.required_item_key)
+        local required_item_quantity = normalize_positive_integer(contract_row.required_item_quantity)
+        local pickup_status = normalize_pickup_status(contract_row.pickup_status)
+        local should_remove_cargo = pickup_status == "picked_up"
+            and required_item_key ~= nil
+            and required_item_quantity ~= nil
+            and required_item_quantity > 0
+        local inventory_bridge = nil
+
+        local function mark_abandoned()
+            self.repository:MarkContractAbandoned(
+                normalized_contract_id,
+                normalized_character_id,
+                normalize_cancel_reason("abandoned", "abandoned"),
+                function(is_mark_success, abandoned_row, mark_error)
+                    if not is_mark_success then
+                        if should_remove_cargo and inventory_bridge ~= nil then
+                            inventory_bridge.AddItem(
+                                normalized_character_id,
+                                required_item_key,
+                                required_item_quantity,
+                                {
+                                    source = "contract_abandon_compensation",
+                                    contract_id = normalized_contract_id,
+                                },
+                                function(is_compensation_success)
+                                    if not is_compensation_success then
+                                        callback(false, contract_row, "inventory-compensation-failed")
+                                        return
+                                    end
+
+                                    callback(false, contract_row, mark_error or "database-error")
+                                end
+                            )
+                            return
+                        end
+
+                        callback(false, contract_row, mark_error or "database-error")
+                        return
+                    end
+
+                    if abandoned_row == nil then
+                        if should_remove_cargo and inventory_bridge ~= nil then
+                            inventory_bridge.AddItem(
+                                normalized_character_id,
+                                required_item_key,
+                                required_item_quantity,
+                                {
+                                    source = "contract_abandon_compensation",
+                                    contract_id = normalized_contract_id,
+                                },
+                                function(is_compensation_success)
+                                    if not is_compensation_success then
+                                        callback(false, contract_row, "inventory-compensation-failed")
+                                        return
+                                    end
+
+                                    callback(false, contract_row, "contract-terminal")
+                                end
+                            )
+                            return
+                        end
+
+                        callback(false, contract_row, "contract-terminal")
+                        return
+                    end
+
+                    Console.Log(
+                        "[gr_contracts][service] Contract abandoned id=%s assignee_character_id=%s.",
+                        tostring(abandoned_row.id),
+                        tostring(normalized_character_id)
+                    )
+
+                    callback(true, abandoned_row, nil)
+                end
+            )
+        end
+
+        if not should_remove_cargo then
+            mark_abandoned()
+            return
+        end
+
+        inventory_bridge = resolve_inventory_bridge()
+
+        if inventory_bridge == nil then
+            callback(false, contract_row, "inventory-unavailable")
+            return
+        end
+
+        inventory_bridge.RemoveItem(
+            normalized_character_id,
+            required_item_key,
+            required_item_quantity,
+            function(is_remove_success, _, remove_error)
+                if not is_remove_success then
+                    Console.Log(
+                        "[gr_contracts][service] Contract abandon cargo remove failed contract_id=%s assignee_character_id=%s item_key=%s quantity=%s reason=%s.",
+                        tostring(normalized_contract_id),
+                        tostring(normalized_character_id),
+                        tostring(required_item_key),
+                        tostring(required_item_quantity),
+                        tostring(remove_error or "inventory-remove-failed")
+                    )
+                    callback(false, contract_row, "cargo-remove-failed")
+                    return
+                end
+
+                mark_abandoned()
+            end
+        )
+    end)
+end
+
+function ContractService:CancelContract(character_id, contract_id, reason_or_callback, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_contract_id = normalize_contract_id(contract_id)
+    local reason = reason_or_callback
+
+    if type(reason_or_callback) == "function" and callback == nil then
+        callback = reason_or_callback
+        reason = nil
+    end
 
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -1876,32 +2070,36 @@ function ContractService:CancelContract(character_id, contract_id, callback)
             return
         end
 
-        if contract_row.status ~= "open"
-            or normalize_positive_integer(contract_row.creator_character_id) ~= normalized_character_id
-        then
-            callback(false, nil, "contract-cancel-forbidden")
+        if is_contract_terminal(contract_row) then
+            callback(false, contract_row, "contract-terminal")
             return
         end
 
-        self.repository:CancelContract(normalized_contract_id, normalized_character_id, function(is_cancel_success, cancelled_row, cancel_error)
-            if not is_cancel_success then
-                callback(false, nil, cancel_error)
-                return
+        self.repository:MarkContractCancelled(
+            normalized_contract_id,
+            normalized_character_id,
+            normalize_cancel_reason(reason, "admin-cancel"),
+            function(is_cancel_success, cancelled_row, cancel_error)
+                if not is_cancel_success then
+                    callback(false, nil, cancel_error)
+                    return
+                end
+
+                if cancelled_row == nil then
+                    callback(false, contract_row, "contract-terminal")
+                    return
+                end
+
+                Console.Log(
+                    "[gr_contracts][service] Contract cancelled id=%s actor_character_id=%s reason=%s.",
+                    tostring(cancelled_row.id),
+                    tostring(normalized_character_id),
+                    tostring(cancelled_row.cancel_reason or reason or "admin-cancel")
+                )
+
+                callback(true, cancelled_row, nil)
             end
-
-            if cancelled_row == nil then
-                callback(false, nil, "contract-cancel-forbidden")
-                return
-            end
-
-            Console.Log(
-                "[gr_contracts][service] Contract cancelled id=%s creator_character_id=%s.",
-                tostring(cancelled_row.id),
-                tostring(normalized_character_id)
-            )
-
-            callback(true, cancelled_row, nil)
-        end)
+        )
     end)
 end
 

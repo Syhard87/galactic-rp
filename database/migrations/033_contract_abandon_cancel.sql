@@ -1,0 +1,9 @@
+BEGIN;
+
+ALTER TABLE contracts
+ADD COLUMN IF NOT EXISTS cancelled_by_character_id BIGINT REFERENCES characters(id) ON DELETE SET NULL;
+
+ALTER TABLE contracts
+ADD COLUMN IF NOT EXISTS cancel_reason VARCHAR(255);
+
+COMMIT;

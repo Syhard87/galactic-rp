@@ -33,6 +33,7 @@ local EXTERNAL_CHAT_COMMANDS = {
     setdeliverylocationhere = true,
     acceptcontract = true,
     pickupcontract = true,
+    abandoncontract = true,
     completecontract = true,
     cancelcontract = true,
     shops = true,

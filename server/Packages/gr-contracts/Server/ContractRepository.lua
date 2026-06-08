@@ -29,6 +29,8 @@ local CONTRACT_SELECT_COLUMNS = [[
         accepted_at,
         completed_at,
         cancelled_at,
+        cancelled_by_character_id,
+        cancel_reason,
         paid_at,
         deadline_at
 ]]
@@ -233,8 +235,40 @@ local CANCEL_CONTRACT_QUERY = [[
     UPDATE contracts
     SET
         status = 'cancelled',
-        cancelled_at = NOW()
+        cancelled_at = NOW(),
+        cancelled_by_character_id = :2,
+        cancel_reason = :3
     WHERE id = :0 AND creator_character_id = :1 AND status = 'open'
+    RETURNING
+]] .. CONTRACT_SELECT_COLUMNS .. [[
+]]
+
+local MARK_CONTRACT_ABANDONED_QUERY = [[
+    UPDATE contracts
+    SET
+        status = 'cancelled',
+        cancelled_at = NOW(),
+        cancelled_by_character_id = :1,
+        cancel_reason = :2
+    WHERE id = :0
+      AND assignee_character_id = :1
+      AND status = 'accepted'
+      AND COALESCE(payment_status, 'pending') <> 'paid'
+    RETURNING
+]] .. CONTRACT_SELECT_COLUMNS .. [[
+]]
+
+local MARK_CONTRACT_CANCELLED_QUERY = [[
+    UPDATE contracts
+    SET
+        status = 'cancelled',
+        cancelled_at = NOW(),
+        cancelled_by_character_id = :1,
+        cancel_reason = :2
+    WHERE id = :0
+      AND status <> 'completed'
+      AND status <> 'cancelled'
+      AND COALESCE(payment_status, 'pending') <> 'paid'
     RETURNING
 ]] .. CONTRACT_SELECT_COLUMNS .. [[
 ]]
@@ -526,6 +560,8 @@ local function normalize_contract_row(row)
         accepted_at = row.accepted_at,
         completed_at = row.completed_at,
         cancelled_at = row.cancelled_at,
+        cancelled_by_character_id = normalize_positive_integer(row.cancelled_by_character_id),
+        cancel_reason = trim_string(row.cancel_reason),
         paid_at = row.paid_at,
         deadline_at = row.deadline_at,
     }
@@ -1127,9 +1163,15 @@ function ContractRepository:MarkContractPickedUp(contract_id, callback)
     end, "contracts-mark-picked-up")
 end
 
-function ContractRepository:CancelContract(contract_id, character_id, callback)
+function ContractRepository:CancelContract(contract_id, character_id, reason, callback)
     local normalized_contract_id = normalize_positive_integer(contract_id)
     local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_reason = trim_string(reason)
+
+    if type(reason) == "function" and callback == nil then
+        callback = reason
+        normalized_reason = nil
+    end
 
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -1161,8 +1203,86 @@ function ContractRepository:CancelContract(contract_id, character_id, callback)
 
             contract_rows = normalize_rows(rows)
             callback(true, contract_rows[1], nil)
-        end, normalized_contract_id, normalized_character_id)
+        end, normalized_contract_id, normalized_character_id, normalized_character_id, normalized_reason)
     end, "contracts-cancel")
+end
+
+function ContractRepository:MarkContractAbandoned(contract_id, character_id, reason, callback)
+    local normalized_contract_id = normalize_positive_integer(contract_id)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_reason = trim_string(reason)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-required")
+        return true
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(MARK_CONTRACT_ABANDONED_QUERY, function(rows, update_error)
+            local contract_rows = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            contract_rows = normalize_rows(rows)
+            callback(true, contract_rows[1], nil)
+        end, normalized_contract_id, normalized_character_id, normalized_reason)
+    end, "contracts-abandon")
+end
+
+function ContractRepository:MarkContractCancelled(contract_id, character_id, reason, callback)
+    local normalized_contract_id = normalize_positive_integer(contract_id)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_reason = trim_string(reason)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-required")
+        return true
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(MARK_CONTRACT_CANCELLED_QUERY, function(rows, update_error)
+            local contract_rows = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            contract_rows = normalize_rows(rows)
+            callback(true, contract_rows[1], nil)
+        end, normalized_contract_id, normalized_character_id, normalized_reason)
+    end, "contracts-mark-cancelled")
 end
 
 function ContractRepository:MarkContractPayment(contract_id, payment_status, callback)

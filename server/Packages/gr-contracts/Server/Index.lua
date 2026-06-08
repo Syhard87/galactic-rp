@@ -611,12 +611,20 @@ GRContractsBridge.PickupContract = function(character_id, player, contract_id, c
     return GRContracts.Server.Service:PickupContract(character_id, player, contract_id, callback)
 end
 
-GRContractsBridge.CancelContract = function(character_id, contract_id, callback)
+GRContractsBridge.AbandonContract = function(character_id, contract_id, callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
     end
 
-    return GRContracts.Server.Service:CancelContract(character_id, contract_id, callback)
+    return GRContracts.Server.Service:AbandonContract(character_id, contract_id, callback)
+end
+
+GRContractsBridge.CancelContract = function(character_id, contract_id, reason, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:CancelContract(character_id, contract_id, reason, callback)
 end
 
 GRContractsBridge.ListDeliveryLocations = function(callback)
@@ -722,6 +730,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "setdeliverylocationhere"
             and command_name ~= "acceptcontract"
             and command_name ~= "pickupcontract"
+            and command_name ~= "abandoncontract"
             and command_name ~= "completecontract"
             and command_name ~= "cancelcontract"
         then
@@ -1387,11 +1396,55 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 Chat.SendMessage(player, "Usage : /acceptcontract <contract_id>")
             elseif command_name == "pickupcontract" then
                 Chat.SendMessage(player, "Usage : /pickupcontract <contract_id>")
+            elseif command_name == "abandoncontract" then
+                Chat.SendMessage(player, "Usage : /abandoncontract <contract_id>")
             elseif command_name == "completecontract" then
                 Chat.SendMessage(player, "Usage : /completecontract <contract_id>")
             else
-                Chat.SendMessage(player, "Usage : /cancelcontract <contract_id>")
+                Chat.SendMessage(player, "Usage : /cancelcontract <contract_id> [reason]")
             end
+
+            return false
+        end
+
+        if command_name == "cancelcontract" then
+            local contract_id_text, cancel_reason = payload:match("^(%S+)%s*(.*)$")
+            local contract_id = normalize_positive_integer(contract_id_text)
+
+            if contract_id == nil then
+                Chat.SendMessage(player, "Annulation impossible : contrat introuvable.")
+                return false
+            end
+
+            if trim_string(cancel_reason) == nil then
+                cancel_reason = nil
+            end
+
+            GRContracts.Server.Service:CancelContract(active_character_id, contract_id, cancel_reason, function(is_success, contract_row, error)
+                if not is_success then
+                    if error == "contract-not-found" then
+                        Chat.SendMessage(player, "Annulation impossible : contrat introuvable.")
+                        return
+                    end
+
+                    if error == "contract-terminal" then
+                        Chat.SendMessage(player, "Annulation impossible : contrat deja termine.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Impossible d'annuler ce contrat.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Contrat annule : #%s reason=%s.",
+                        tostring(contract_row.id),
+                        tostring(contract_row.cancel_reason or cancel_reason or "admin-cancel")
+                    )
+                )
+            end)
 
             return false
         end
@@ -1399,6 +1452,11 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         local contract_id = normalize_positive_integer(payload)
 
         if contract_id == nil then
+            if command_name == "abandoncontract" then
+                Chat.SendMessage(player, "Abandon impossible : contrat introuvable.")
+                return false
+            end
+
             Chat.SendMessage(player, "Contrat introuvable.")
             return false
         end
@@ -1464,6 +1522,39 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         tostring(contract_row.pickup_location_key or "aucun")
                     )
                 )
+            end)
+
+            return false
+        end
+
+        if command_name == "abandoncontract" then
+            GRContracts.Server.Service:AbandonContract(active_character_id, contract_id, function(is_success, contract_row, error)
+                if not is_success then
+                    if error == "contract-not-found" then
+                        Chat.SendMessage(player, "Abandon impossible : contrat introuvable.")
+                        return
+                    end
+
+                    if error == "not-assigned-to-character" then
+                        Chat.SendMessage(player, "Abandon impossible : contrat non assigne a vous.")
+                        return
+                    end
+
+                    if error == "contract-terminal" then
+                        Chat.SendMessage(player, "Abandon impossible : contrat deja termine.")
+                        return
+                    end
+
+                    if error == "cargo-remove-failed" or error == "inventory-unavailable" then
+                        Chat.SendMessage(player, "Abandon impossible : cargaison impossible a retirer.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Abandon impossible.")
+                    return
+                end
+
+                Chat.SendMessage(player, string.format("Contrat abandonne : #%s.", tostring(contract_row.id)))
             end)
 
             return false
@@ -1592,25 +1683,6 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
             return false
         end
-
-        GRContracts.Server.Service:CancelContract(active_character_id, contract_id, function(is_success, contract_row, error)
-            if not is_success then
-                if error == "contract-not-found" then
-                    Chat.SendMessage(player, "Contrat introuvable.")
-                    return
-                end
-
-                if error == "contract-cancel-forbidden" then
-                    Chat.SendMessage(player, "Vous ne pouvez pas annuler ce contrat.")
-                    return
-                end
-
-                Chat.SendMessage(player, "Impossible d'annuler ce contrat.")
-                return
-            end
-
-            Chat.SendMessage(player, string.format("Contrat annule : #%s", tostring(contract_row.id)))
-        end)
 
         return false
     end)
