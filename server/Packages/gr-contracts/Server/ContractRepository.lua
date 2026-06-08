@@ -24,6 +24,9 @@ local CONTRACT_SELECT_COLUMNS = [[
         deadline_seconds,
         expires_at,
         expired_at,
+        cargo_cleanup_status,
+        cargo_cleaned_at,
+        cargo_cleanup_error,
         source_route_key,
         job_source,
         status,
@@ -212,6 +215,14 @@ local SELECT_CONTRACT_BY_ID_QUERY = [[
     LIMIT 1
 ]]
 
+local SELECT_EXPIRED_CONTRACTS_QUERY = [[
+    SELECT
+]] .. CONTRACT_SELECT_COLUMNS .. [[
+    FROM contracts
+    WHERE status = 'expired'
+    ORDER BY id DESC
+]]
+
 local ACCEPT_CONTRACT_QUERY = [[
     UPDATE contracts
     SET
@@ -289,7 +300,13 @@ local MARK_CONTRACT_EXPIRED_QUERY = [[
     UPDATE contracts
     SET
         status = 'expired',
-        expired_at = NOW()
+        expired_at = NOW(),
+        cargo_cleanup_status = CASE
+            WHEN pickup_status = 'picked_up' THEN 'pending'
+            ELSE 'not_required'
+        END,
+        cargo_cleaned_at = NULL,
+        cargo_cleanup_error = NULL
     WHERE id = :0
       AND status IN ('open', 'accepted')
       AND expires_at IS NOT NULL
@@ -303,11 +320,34 @@ local MARK_EXPIRED_CONTRACTS_QUERY = [[
     UPDATE contracts
     SET
         status = 'expired',
-        expired_at = NOW()
+        expired_at = NOW(),
+        cargo_cleanup_status = CASE
+            WHEN pickup_status = 'picked_up' THEN 'pending'
+            ELSE 'not_required'
+        END,
+        cargo_cleaned_at = NULL,
+        cargo_cleanup_error = NULL
     WHERE status IN ('open', 'accepted')
       AND expires_at IS NOT NULL
       AND expires_at < NOW()
       AND COALESCE(payment_status, 'pending') <> 'paid'
+    RETURNING
+]] .. CONTRACT_SELECT_COLUMNS .. [[
+]]
+
+local UPDATE_CARGO_CLEANUP_STATUS_QUERY = [[
+    UPDATE contracts
+    SET
+        cargo_cleanup_status = :1,
+        cargo_cleaned_at = CASE
+            WHEN :1 = 'cleaned' THEN NOW()
+            ELSE cargo_cleaned_at
+        END,
+        cargo_cleanup_error = CASE
+            WHEN :1 = 'failed' THEN :2
+            ELSE NULL
+        END
+    WHERE id = :0
     RETURNING
 ]] .. CONTRACT_SELECT_COLUMNS .. [[
 ]]
@@ -558,6 +598,27 @@ local function normalize_job_source(job_source)
     return normalized_job_source
 end
 
+local function normalize_cargo_cleanup_status(cargo_cleanup_status)
+    local normalized_cargo_cleanup_status = trim_string(cargo_cleanup_status)
+
+    if normalized_cargo_cleanup_status == nil then
+        return "none"
+    end
+
+    normalized_cargo_cleanup_status = string.lower(normalized_cargo_cleanup_status)
+
+    if normalized_cargo_cleanup_status ~= "none"
+        and normalized_cargo_cleanup_status ~= "not_required"
+        and normalized_cargo_cleanup_status ~= "pending"
+        and normalized_cargo_cleanup_status ~= "cleaned"
+        and normalized_cargo_cleanup_status ~= "failed"
+    then
+        return "none"
+    end
+
+    return normalized_cargo_cleanup_status
+end
+
 local function normalize_contract_row(row)
     local contract_id = nil
     local creator_character_id = nil
@@ -595,6 +656,9 @@ local function normalize_contract_row(row)
         deadline_seconds = normalize_positive_integer(row.deadline_seconds),
         expires_at = row.expires_at,
         expired_at = row.expired_at,
+        cargo_cleanup_status = normalize_cargo_cleanup_status(row.cargo_cleanup_status),
+        cargo_cleaned_at = row.cargo_cleaned_at,
+        cargo_cleanup_error = trim_string(row.cargo_cleanup_error),
         source_route_key = normalize_route_key(row.source_route_key),
         job_source = normalize_job_source(row.job_source),
         status = normalize_contract_status(row.status),
@@ -1074,6 +1138,28 @@ function ContractRepository:ListContractsForCharacter(character_id, callback)
     end, "contracts-list-character")
 end
 
+function ContractRepository:ListExpiredContracts(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_EXPIRED_CONTRACTS_QUERY, function(rows, select_error)
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            callback(true, normalize_rows(rows), nil)
+        end)
+    end, "contracts-list-expired")
+end
+
 function ContractRepository:GetContractById(contract_id, callback)
     local normalized_contract_id = normalize_positive_integer(contract_id)
 
@@ -1391,6 +1477,40 @@ function ContractRepository:MarkExpiredContracts(callback)
             callback(true, #contract_rows, contract_rows, nil)
         end)
     end, "contracts-mark-expired-batch")
+end
+
+function ContractRepository:UpdateCargoCleanupStatus(contract_id, cargo_cleanup_status, error_message, callback)
+    local normalized_contract_id = normalize_positive_integer(contract_id)
+    local normalized_cargo_cleanup_status = normalize_cargo_cleanup_status(cargo_cleanup_status)
+    local normalized_error_message = trim_string(error_message)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(UPDATE_CARGO_CLEANUP_STATUS_QUERY, function(rows, update_error)
+            local contract_rows = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            contract_rows = normalize_rows(rows)
+            callback(true, contract_rows[1], nil)
+        end, normalized_contract_id, normalized_cargo_cleanup_status, normalized_error_message)
+    end, "contracts-update-cargo-cleanup-status")
 end
 
 function ContractRepository:MarkContractPayment(contract_id, payment_status, callback)

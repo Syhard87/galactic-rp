@@ -280,6 +280,16 @@ local function format_contract_route_source(contract_row)
     return string.format("route=%s source=%s", tostring(source_route_key), tostring(job_source))
 end
 
+local function format_contract_cargo_cleanup(contract_row)
+    local cargo_cleanup_status = trim_string(contract_row and contract_row.cargo_cleanup_status)
+
+    if trim_string(contract_row and contract_row.status) ~= "expired" or cargo_cleanup_status == nil then
+        return nil
+    end
+
+    return string.format("cargo_cleanup=%s", tostring(cargo_cleanup_status))
+end
+
 local function format_deadline_value(deadline_seconds)
     local normalized_deadline_seconds = normalize_positive_integer(deadline_seconds)
 
@@ -411,11 +421,12 @@ local function build_contract_line(contract_row)
     local destination = format_contract_destination(contract_row)
     local route_source = format_contract_route_source(contract_row)
     local deadline_value = format_deadline_value(contract_row and contract_row.deadline_seconds)
+    local cargo_cleanup = format_contract_cargo_cleanup(contract_row)
 
     if payment_status ~= nil then
         if route_source ~= nil then
             return string.format(
-                "- #%s %s reward=%s status=%s payment=%s %s %s %s %s %s %s desc=%s",
+                "- #%s %s reward=%s status=%s payment=%s %s %s %s %s %s %s %s desc=%s",
                 tostring(contract_row.id),
                 tostring(contract_row.type),
                 tostring(contract_row.reward_money),
@@ -426,13 +437,14 @@ local function build_contract_line(contract_row)
                 tostring(pickup_status),
                 tostring(destination),
                 tostring(deadline_value or ""),
+                tostring(cargo_cleanup or ""),
                 tostring(route_source),
                 tostring(contract_row.description)
             )
         end
 
         return string.format(
-            "- #%s %s reward=%s status=%s payment=%s %s %s %s %s %s desc=%s",
+            "- #%s %s reward=%s status=%s payment=%s %s %s %s %s %s %s desc=%s",
             tostring(contract_row.id),
             tostring(contract_row.type),
             tostring(contract_row.reward_money),
@@ -443,13 +455,14 @@ local function build_contract_line(contract_row)
             tostring(pickup_status),
             tostring(destination),
             tostring(deadline_value or ""),
+            tostring(cargo_cleanup or ""),
             tostring(contract_row.description)
         )
     end
 
     if route_source ~= nil then
         return string.format(
-            "- #%s %s reward=%s status=%s %s %s %s %s %s %s desc=%s",
+            "- #%s %s reward=%s status=%s %s %s %s %s %s %s %s desc=%s",
             tostring(contract_row.id),
             tostring(contract_row.type),
             tostring(contract_row.reward_money),
@@ -459,13 +472,14 @@ local function build_contract_line(contract_row)
             tostring(pickup_status),
             tostring(destination),
             tostring(deadline_value or ""),
+            tostring(cargo_cleanup or ""),
             tostring(route_source),
             tostring(contract_row.description)
         )
     end
 
     return string.format(
-        "- #%s %s reward=%s status=%s %s %s %s %s %s desc=%s",
+        "- #%s %s reward=%s status=%s %s %s %s %s %s %s desc=%s",
         tostring(contract_row.id),
         tostring(contract_row.type),
         tostring(contract_row.reward_money),
@@ -475,6 +489,7 @@ local function build_contract_line(contract_row)
         tostring(pickup_status),
         tostring(destination),
         tostring(deadline_value or ""),
+        tostring(cargo_cleanup or ""),
         tostring(contract_row.description)
     )
 end
@@ -487,11 +502,12 @@ local function build_my_contract_line(contract_row)
     local destination = format_contract_destination(contract_row)
     local route_source = format_contract_route_source(contract_row)
     local deadline_value = format_deadline_value(contract_row and contract_row.deadline_seconds)
+    local cargo_cleanup = format_contract_cargo_cleanup(contract_row)
 
     if payment_status ~= nil then
         if route_source ~= nil then
             return string.format(
-                "- #%s %s reward=%s status=%s payment=%s role=%s %s %s %s %s %s %s",
+                "- #%s %s reward=%s status=%s payment=%s role=%s %s %s %s %s %s %s %s",
                 tostring(contract_row.id),
                 tostring(contract_row.type),
                 tostring(contract_row.reward_money),
@@ -503,12 +519,13 @@ local function build_my_contract_line(contract_row)
                 tostring(pickup_status),
                 tostring(destination),
                 tostring(deadline_value or ""),
+                tostring(cargo_cleanup or ""),
                 tostring(route_source)
             )
         end
 
         return string.format(
-            "- #%s %s reward=%s status=%s payment=%s role=%s %s %s %s %s %s",
+            "- #%s %s reward=%s status=%s payment=%s role=%s %s %s %s %s %s %s",
             tostring(contract_row.id),
             tostring(contract_row.type),
             tostring(contract_row.reward_money),
@@ -519,13 +536,14 @@ local function build_my_contract_line(contract_row)
             tostring(pickup),
             tostring(pickup_status),
             tostring(destination),
-            tostring(deadline_value or "")
+            tostring(deadline_value or ""),
+            tostring(cargo_cleanup or "")
         )
     end
 
     if route_source ~= nil then
         return string.format(
-            "- #%s %s reward=%s status=%s role=%s %s %s %s %s %s %s",
+            "- #%s %s reward=%s status=%s role=%s %s %s %s %s %s %s %s",
             tostring(contract_row.id),
             tostring(contract_row.type),
             tostring(contract_row.reward_money),
@@ -536,12 +554,13 @@ local function build_my_contract_line(contract_row)
             tostring(pickup_status),
             tostring(destination),
             tostring(deadline_value or ""),
+            tostring(cargo_cleanup or ""),
             tostring(route_source)
         )
     end
 
     return string.format(
-        "- #%s %s reward=%s status=%s role=%s %s %s %s %s %s",
+        "- #%s %s reward=%s status=%s role=%s %s %s %s %s %s %s",
         tostring(contract_row.id),
         tostring(contract_row.type),
         tostring(contract_row.reward_money),
@@ -551,8 +570,26 @@ local function build_my_contract_line(contract_row)
         tostring(pickup),
         tostring(pickup_status),
         tostring(destination),
-        tostring(deadline_value or "")
+        tostring(deadline_value or ""),
+        tostring(cargo_cleanup or "")
     )
+end
+
+local function build_expired_contract_line(contract_row)
+    local line = string.format(
+        "#%s status=%s cargo_cleanup=%s %s",
+        tostring(contract_row.id),
+        tostring(contract_row.status),
+        tostring(trim_string(contract_row.cargo_cleanup_status) or "none"),
+        tostring(format_contract_item_requirement(contract_row))
+    )
+    local cleanup_error = trim_string(contract_row and contract_row.cargo_cleanup_error)
+
+    if cleanup_error ~= nil then
+        line = string.format("%s error=%s", tostring(line), tostring(cleanup_error))
+    end
+
+    return line
 end
 
 local database_service = resolve_database_service()
@@ -756,6 +793,22 @@ GRContractsBridge.ExpireContracts = function(callback)
     return GRContracts.Server.Service:ExpireContracts(callback)
 end
 
+GRContractsBridge.CleanupExpiredContractCargo = function(contract_id, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:CleanupExpiredContractCargo(contract_id, callback)
+end
+
+GRContractsBridge.ListExpiredContracts = function(callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:ListExpiredContracts(callback)
+end
+
 GRContractsBridge.GetDeliveryLocation = function(location_key, callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -816,6 +869,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "cancelcontract"
             and command_name ~= "contractdeadline"
             and command_name ~= "expirecontracts"
+            and command_name ~= "cleanupcontractcargo"
+            and command_name ~= "expiredcontracts"
         then
             return
         end
@@ -998,13 +1053,43 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         end
 
         if command_name == "expirecontracts" then
-            GRContracts.Server.Service:ExpireContracts(function(is_success, expired_count, _, error)
+            GRContracts.Server.Service:ExpireContracts(function(is_success, summary, error)
                 if not is_success then
                     Chat.SendMessage(player, "Impossible d'expirer les contrats.")
                     return
                 end
 
-                Chat.SendMessage(player, string.format("Expiration contrats : %s contrat(s) expire(s).", tostring(expired_count or 0)))
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Expiration contrats : %s contrat(s) expire(s), cargo nettoye=%s, cargo en echec=%s.",
+                        tostring((summary and summary.expired_count) or 0),
+                        tostring((summary and summary.cleanup_cleaned_count) or 0),
+                        tostring((summary and summary.cleanup_failed_count) or 0)
+                    )
+                )
+            end)
+
+            return false
+        end
+
+        if command_name == "expiredcontracts" then
+            GRContracts.Server.Service:ListExpiredContracts(function(is_success, contract_rows, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Contrats expires indisponibles.")
+                    return
+                end
+
+                if type(contract_rows) ~= "table" or #contract_rows == 0 then
+                    Chat.SendMessage(player, "Aucun contrat expire.")
+                    return
+                end
+
+                Chat.SendMessage(player, "Contrats expires :")
+
+                for _, contract_row in ipairs(contract_rows) do
+                    Chat.SendMessage(player, build_expired_contract_line(contract_row))
+                end
             end)
 
             return false
@@ -1534,6 +1619,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 Chat.SendMessage(player, "Usage : /abandoncontract <contract_id>")
             elseif command_name == "contractdeadline" then
                 Chat.SendMessage(player, "Usage : /contractdeadline <contract_id>")
+            elseif command_name == "cleanupcontractcargo" then
+                Chat.SendMessage(player, "Usage : /cleanupcontractcargo <contract_id>")
             elseif command_name == "completecontract" then
                 Chat.SendMessage(player, "Usage : /completecontract <contract_id>")
             else
@@ -1661,6 +1748,51 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         tostring(contract_row.id),
                         tostring(format_contract_item_requirement(contract_row)),
                         tostring(contract_row.pickup_location_key or "aucun")
+                    )
+                )
+            end)
+
+            return false
+        end
+
+        if command_name == "cleanupcontractcargo" then
+            GRContracts.Server.Service:CleanupExpiredContractCargo(contract_id, function(is_success, contract_row, error)
+                if not is_success then
+                    if error == "contract-not-found" then
+                        Chat.SendMessage(player, "Cleanup cargo impossible : contrat introuvable.")
+                        return
+                    end
+
+                    if error == "contract-not-expired" then
+                        Chat.SendMessage(player, "Cleanup cargo impossible : contrat non expire.")
+                        return
+                    end
+
+                    if error == "cargo-not-picked-up" then
+                        Chat.SendMessage(player, "Cleanup cargo impossible : cargaison non recuperee.")
+                        return
+                    end
+
+                    if error == "inventory-unavailable" then
+                        Chat.SendMessage(player, "Cleanup cargo impossible : inventaire indisponible.")
+                        return
+                    end
+
+                    if error == "items-missing" then
+                        Chat.SendMessage(player, "Cleanup cargo impossible : items manquants.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Cleanup cargo impossible.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Cleanup cargo effectue : contrat #%s %s.",
+                        tostring(contract_row.id),
+                        tostring(format_contract_item_requirement(contract_row))
                     )
                 )
             end)

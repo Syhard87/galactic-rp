@@ -178,6 +178,27 @@ local function normalize_deadline_seconds(deadline_seconds)
     return normalize_positive_integer(deadline_seconds)
 end
 
+local function normalize_cargo_cleanup_status(cargo_cleanup_status)
+    local normalized_cargo_cleanup_status = trim_string(cargo_cleanup_status)
+
+    if normalized_cargo_cleanup_status == nil then
+        return "none"
+    end
+
+    normalized_cargo_cleanup_status = string.lower(normalized_cargo_cleanup_status)
+
+    if normalized_cargo_cleanup_status ~= "none"
+        and normalized_cargo_cleanup_status ~= "not_required"
+        and normalized_cargo_cleanup_status ~= "pending"
+        and normalized_cargo_cleanup_status ~= "cleaned"
+        and normalized_cargo_cleanup_status ~= "failed"
+    then
+        return "none"
+    end
+
+    return normalized_cargo_cleanup_status
+end
+
 local function normalize_cancel_reason(reason, fallback)
     local normalized_reason = trim_string(reason)
 
@@ -445,6 +466,211 @@ function ContractService:IsContractExpired(contract_row)
     return trim_string(contract_row.status) == "expired"
 end
 
+function ContractService:FinalizeCargoCleanupStatus(contract_row, cargo_cleanup_status, error_message, callback)
+    local contract_id = normalize_contract_id(contract_row and contract_row.id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if contract_id == nil then
+        callback(false, nil, "contract-id-invalid")
+        return true
+    end
+
+    return self.repository:UpdateCargoCleanupStatus(contract_id, cargo_cleanup_status, error_message, function(is_success, updated_row, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        callback(true, updated_row or contract_row, nil)
+    end)
+end
+
+function ContractService:CleanupExpiredContractCargoRow(contract_row, callback)
+    local normalized_contract_id = normalize_contract_id(contract_row and contract_row.id)
+    local pickup_status = normalize_pickup_status(contract_row and contract_row.pickup_status)
+    local cargo_cleanup_status = normalize_cargo_cleanup_status(contract_row and contract_row.cargo_cleanup_status)
+    local required_item_key = normalize_item_key(contract_row and contract_row.required_item_key)
+    local required_item_quantity = normalize_positive_integer(contract_row and contract_row.required_item_quantity)
+    local assignee_character_id = normalize_positive_integer(contract_row and contract_row.assignee_character_id)
+    local inventory_bridge = nil
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-not-found")
+        return true
+    end
+
+    if trim_string(contract_row and contract_row.status) ~= "expired" then
+        callback(false, contract_row, "contract-not-expired")
+        return true
+    end
+
+    if cargo_cleanup_status == "cleaned" then
+        callback(true, contract_row, nil)
+        return true
+    end
+
+    if pickup_status ~= "picked_up" then
+        return self:FinalizeCargoCleanupStatus(contract_row, "not_required", nil, function(is_finalize_success, updated_row, finalize_error)
+            if not is_finalize_success then
+                callback(false, contract_row, finalize_error or "database-error")
+                return
+            end
+
+            callback(false, updated_row, "cargo-not-picked-up")
+        end)
+    end
+
+    if required_item_key == nil or required_item_quantity == nil or required_item_quantity < 1 then
+        return self:FinalizeCargoCleanupStatus(contract_row, "not_required", nil, function(is_finalize_success, updated_row, finalize_error)
+            if not is_finalize_success then
+                callback(false, contract_row, finalize_error or "database-error")
+                return
+            end
+
+            callback(true, updated_row, nil)
+        end)
+    end
+
+    if assignee_character_id == nil then
+        return self:FinalizeCargoCleanupStatus(contract_row, "failed", "missing-assignee", function(is_finalize_success, updated_row, finalize_error)
+            if not is_finalize_success then
+                callback(false, contract_row, finalize_error or "database-error")
+                return
+            end
+
+            callback(false, updated_row, "missing-assignee")
+        end)
+    end
+
+    inventory_bridge = resolve_inventory_bridge()
+
+    if inventory_bridge == nil then
+        return self:FinalizeCargoCleanupStatus(contract_row, "failed", "inventory-unavailable", function(is_finalize_success, updated_row, finalize_error)
+            if not is_finalize_success then
+                callback(false, contract_row, finalize_error or "database-error")
+                return
+            end
+
+            callback(false, updated_row, "inventory-unavailable")
+        end)
+    end
+
+    return inventory_bridge.ListInventory(assignee_character_id, function(is_list_success, inventory_rows, list_error)
+        if not is_list_success then
+            self:FinalizeCargoCleanupStatus(contract_row, "failed", "inventory-unavailable", function(is_finalize_success, updated_row, finalize_error)
+                if not is_finalize_success then
+                    callback(false, contract_row, finalize_error or "database-error")
+                    return
+                end
+
+                callback(false, updated_row, "inventory-unavailable")
+            end)
+            return
+        end
+
+        local has_items = has_required_items(inventory_rows, required_item_key, required_item_quantity)
+
+        if not has_items then
+            self:FinalizeCargoCleanupStatus(contract_row, "failed", "items-missing", function(is_finalize_success, updated_row, finalize_error)
+                if not is_finalize_success then
+                    callback(false, contract_row, finalize_error or "database-error")
+                    return
+                end
+
+                callback(false, updated_row, "items-missing")
+            end)
+            return
+        end
+
+        inventory_bridge.RemoveItem(assignee_character_id, required_item_key, required_item_quantity, function(is_remove_success, _, remove_error)
+            if not is_remove_success then
+                local cleanup_error = "inventory-unavailable"
+
+                if remove_error == "inventory-item-quantity-insufficient" then
+                    cleanup_error = "items-missing"
+                end
+
+                self:FinalizeCargoCleanupStatus(contract_row, "failed", cleanup_error, function(is_finalize_success, updated_row, finalize_error)
+                    if not is_finalize_success then
+                        callback(false, contract_row, finalize_error or "database-error")
+                        return
+                    end
+
+                    callback(false, updated_row, cleanup_error)
+                end)
+                return
+            end
+
+            self:FinalizeCargoCleanupStatus(contract_row, "cleaned", nil, function(is_finalize_success, updated_row, finalize_error)
+                if not is_finalize_success then
+                    callback(false, contract_row, finalize_error or "database-error")
+                    return
+                end
+
+                callback(true, updated_row, nil)
+            end)
+        end)
+    end)
+end
+
+function ContractService:CleanupExpiredContractCargo(contract_id, callback)
+    local normalized_contract_id = normalize_contract_id(contract_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-invalid")
+        return true
+    end
+
+    return self.repository:GetContractById(normalized_contract_id, function(is_get_success, contract_row, get_error)
+        if not is_get_success then
+            callback(false, nil, get_error or "database-error")
+            return
+        end
+
+        if contract_row == nil then
+            callback(false, nil, "contract-not-found")
+            return
+        end
+
+        self:CleanupExpiredContractCargoRow(contract_row, callback)
+    end)
+end
+
+function ContractService:ListExpiredContracts(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self.repository:ListExpiredContracts(callback)
+end
+
 function ContractService:EnsureContractNotExpired(contract_row, callback)
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -472,7 +698,9 @@ function ContractService:EnsureContractNotExpired(contract_row, callback)
         end
 
         if expired_row ~= nil then
-            callback(true, expired_row, true, nil)
+            self:CleanupExpiredContractCargoRow(expired_row, function(_, cleaned_row)
+                callback(true, cleaned_row or expired_row, true, nil)
+            end)
             return
         end
 
@@ -539,7 +767,50 @@ function ContractService:ExpireContracts(callback)
             return
         end
 
-        callback(true, expired_count or 0, expired_rows or {}, nil)
+        local summary = {
+            expired_count = expired_count or 0,
+            cleanup_cleaned_count = 0,
+            cleanup_failed_count = 0,
+            cleanup_not_required_count = 0,
+            expired_rows = {},
+        }
+        local rows = expired_rows or {}
+        local index = 1
+
+        local function finish()
+            callback(true, summary, nil)
+        end
+
+        local function process_next()
+            if index > #rows then
+                finish()
+                return
+            end
+
+            local expired_row = rows[index]
+            index = index + 1
+
+            self:CleanupExpiredContractCargoRow(expired_row, function(is_cleanup_success, updated_row, cleanup_error)
+                local resolved_row = updated_row or expired_row
+                local cleanup_status = normalize_cargo_cleanup_status(resolved_row and resolved_row.cargo_cleanup_status)
+
+                summary.expired_rows[#summary.expired_rows + 1] = resolved_row
+
+                if cleanup_status == "cleaned" then
+                    summary.cleanup_cleaned_count = summary.cleanup_cleaned_count + 1
+                elseif cleanup_status == "not_required" then
+                    summary.cleanup_not_required_count = summary.cleanup_not_required_count + 1
+                elseif cleanup_status == "failed" then
+                    summary.cleanup_failed_count = summary.cleanup_failed_count + 1
+                elseif not is_cleanup_success and cleanup_error ~= nil then
+                    summary.cleanup_failed_count = summary.cleanup_failed_count + 1
+                end
+
+                process_next()
+            end)
+        end
+
+        process_next()
     end)
 end
 
@@ -1108,7 +1379,7 @@ function ContractService:TakeJobFromRoute(character_id, route_key, callback)
         return true
     end
 
-    return self:ExpireContracts(function(is_expire_success, _, _, expire_error)
+    return self:ExpireContracts(function(is_expire_success, _, expire_error)
         if not is_expire_success then
             callback(false, nil, expire_error or "database-error")
             return
