@@ -300,8 +300,66 @@ local function format_deadline_value(deadline_seconds)
     return string.format("deadline=%ss", tostring(normalized_deadline_seconds))
 end
 
+local function format_route_reward_preview(route_template)
+    local reward_skill_xp = normalize_positive_integer(route_template and route_template.reward_skill_xp)
+
+    if reward_skill_xp == nil or reward_skill_xp < 1 then
+        return nil
+    end
+
+    return string.format("reward_xp=%s", tostring(reward_skill_xp))
+end
+
+local function format_contract_rewards_status(contract_row)
+    local rewards_status = trim_string(contract_row and contract_row.rewards_status)
+
+    if rewards_status == nil or rewards_status == "none" then
+        return nil
+    end
+
+    return string.format("rewards=%s", tostring(rewards_status))
+end
+
+local function build_contract_rewards_line(contract_row)
+    local reward_skill_key = trim_string(contract_row and contract_row.reward_skill_key)
+    local reward_skill_xp = normalize_positive_integer(contract_row and contract_row.reward_skill_xp)
+    local reward_reputation_key = trim_string(contract_row and contract_row.reward_reputation_key)
+    local reward_reputation_delta = tonumber(contract_row and contract_row.reward_reputation_delta) or 0
+    local rewards_status = trim_string(contract_row and contract_row.rewards_status) or "none"
+    local reputation_value = "aucune"
+
+    if reward_reputation_key ~= nil and reward_reputation_delta ~= 0 then
+        reputation_value = string.format("%s delta=%s", tostring(reward_reputation_key), tostring(reward_reputation_delta))
+    end
+
+    return string.format(
+        "Recompenses contrat #%s : skill=%s xp=%s reputation=%s status=%s.",
+        tostring(contract_row.id),
+        tostring(reward_skill_key or "aucune"),
+        tostring(reward_skill_xp or 0),
+        tostring(reputation_value),
+        tostring(rewards_status)
+    )
+end
+
 local function build_route_template_line(route_template)
     local deadline_value = format_deadline_value(route_template and route_template.deadline_seconds)
+    local reward_preview = format_route_reward_preview(route_template)
+
+    if deadline_value ~= nil and reward_preview ~= nil then
+        return string.format(
+            "- %s item=%s x%s reward=%s pickup=%s destination=%s %s %s active=%s",
+            tostring(route_template.key),
+            tostring(route_template.item_key or "inconnu"),
+            tostring(route_template.item_quantity or "?"),
+            tostring(route_template.reward_money or 0),
+            tostring(route_template.pickup_location_key or "aucun"),
+            tostring(route_template.delivery_location_key or "aucune"),
+            tostring(deadline_value),
+            tostring(reward_preview),
+            tostring(route_template.is_active)
+        )
+    end
 
     if deadline_value ~= nil then
         return string.format(
@@ -313,6 +371,20 @@ local function build_route_template_line(route_template)
             tostring(route_template.pickup_location_key or "aucun"),
             tostring(route_template.delivery_location_key or "aucune"),
             tostring(deadline_value),
+            tostring(route_template.is_active)
+        )
+    end
+
+    if reward_preview ~= nil then
+        return string.format(
+            "- %s item=%s x%s reward=%s pickup=%s destination=%s %s active=%s",
+            tostring(route_template.key),
+            tostring(route_template.item_key or "inconnu"),
+            tostring(route_template.item_quantity or "?"),
+            tostring(route_template.reward_money or 0),
+            tostring(route_template.pickup_location_key or "aucun"),
+            tostring(route_template.delivery_location_key or "aucune"),
+            tostring(reward_preview),
             tostring(route_template.is_active)
         )
     end
@@ -331,6 +403,20 @@ end
 
 local function build_route_template_info_line(route_template)
     local deadline_value = format_deadline_value(route_template and route_template.deadline_seconds)
+    local reward_preview = format_route_reward_preview(route_template)
+
+    if deadline_value ~= nil and reward_preview ~= nil then
+        return string.format(
+            "item=%s x%s reward=%s pickup=%s destination=%s %s %s",
+            tostring(route_template.item_key or "inconnu"),
+            tostring(route_template.item_quantity or "?"),
+            tostring(route_template.reward_money or 0),
+            tostring(route_template.pickup_location_key or "aucun"),
+            tostring(route_template.delivery_location_key or "aucune"),
+            tostring(deadline_value),
+            tostring(reward_preview)
+        )
+    end
 
     if deadline_value ~= nil then
         return string.format(
@@ -341,6 +427,18 @@ local function build_route_template_info_line(route_template)
             tostring(route_template.pickup_location_key or "aucun"),
             tostring(route_template.delivery_location_key or "aucune"),
             tostring(deadline_value)
+        )
+    end
+
+    if reward_preview ~= nil then
+        return string.format(
+            "item=%s x%s reward=%s pickup=%s destination=%s %s",
+            tostring(route_template.item_key or "inconnu"),
+            tostring(route_template.item_quantity or "?"),
+            tostring(route_template.reward_money or 0),
+            tostring(route_template.pickup_location_key or "aucun"),
+            tostring(route_template.delivery_location_key or "aucune"),
+            tostring(reward_preview)
         )
     end
 
@@ -356,6 +454,21 @@ end
 
 local function build_job_board_line(route_template)
     local deadline_value = format_deadline_value(route_template and route_template.deadline_seconds)
+    local reward_preview = format_route_reward_preview(route_template)
+
+    if deadline_value ~= nil and reward_preview ~= nil then
+        return string.format(
+            "- %s item=%s x%s reward=%s pickup=%s destination=%s %s %s",
+            tostring(route_template.key),
+            tostring(route_template.item_key or "inconnu"),
+            tostring(route_template.item_quantity or "?"),
+            tostring(route_template.reward_money or 0),
+            tostring(route_template.pickup_location_key or "aucun"),
+            tostring(route_template.delivery_location_key or "aucune"),
+            tostring(deadline_value),
+            tostring(reward_preview)
+        )
+    end
 
     if deadline_value ~= nil then
         return string.format(
@@ -367,6 +480,19 @@ local function build_job_board_line(route_template)
             tostring(route_template.pickup_location_key or "aucun"),
             tostring(route_template.delivery_location_key or "aucune"),
             tostring(deadline_value)
+        )
+    end
+
+    if reward_preview ~= nil then
+        return string.format(
+            "- %s item=%s x%s reward=%s pickup=%s destination=%s %s",
+            tostring(route_template.key),
+            tostring(route_template.item_key or "inconnu"),
+            tostring(route_template.item_quantity or "?"),
+            tostring(route_template.reward_money or 0),
+            tostring(route_template.pickup_location_key or "aucun"),
+            tostring(route_template.delivery_location_key or "aucune"),
+            tostring(reward_preview)
         )
     end
 
@@ -422,11 +548,12 @@ local function build_contract_line(contract_row)
     local route_source = format_contract_route_source(contract_row)
     local deadline_value = format_deadline_value(contract_row and contract_row.deadline_seconds)
     local cargo_cleanup = format_contract_cargo_cleanup(contract_row)
+    local rewards_status = format_contract_rewards_status(contract_row)
 
     if payment_status ~= nil then
         if route_source ~= nil then
             return string.format(
-                "- #%s %s reward=%s status=%s payment=%s %s %s %s %s %s %s %s desc=%s",
+                "- #%s %s reward=%s status=%s payment=%s %s %s %s %s %s %s %s %s desc=%s",
                 tostring(contract_row.id),
                 tostring(contract_row.type),
                 tostring(contract_row.reward_money),
@@ -438,13 +565,14 @@ local function build_contract_line(contract_row)
                 tostring(destination),
                 tostring(deadline_value or ""),
                 tostring(cargo_cleanup or ""),
+                tostring(rewards_status or ""),
                 tostring(route_source),
                 tostring(contract_row.description)
             )
         end
 
         return string.format(
-            "- #%s %s reward=%s status=%s payment=%s %s %s %s %s %s %s desc=%s",
+            "- #%s %s reward=%s status=%s payment=%s %s %s %s %s %s %s %s desc=%s",
             tostring(contract_row.id),
             tostring(contract_row.type),
             tostring(contract_row.reward_money),
@@ -456,13 +584,14 @@ local function build_contract_line(contract_row)
             tostring(destination),
             tostring(deadline_value or ""),
             tostring(cargo_cleanup or ""),
+            tostring(rewards_status or ""),
             tostring(contract_row.description)
         )
     end
 
     if route_source ~= nil then
         return string.format(
-            "- #%s %s reward=%s status=%s %s %s %s %s %s %s %s desc=%s",
+            "- #%s %s reward=%s status=%s %s %s %s %s %s %s %s %s desc=%s",
             tostring(contract_row.id),
             tostring(contract_row.type),
             tostring(contract_row.reward_money),
@@ -473,13 +602,14 @@ local function build_contract_line(contract_row)
             tostring(destination),
             tostring(deadline_value or ""),
             tostring(cargo_cleanup or ""),
+            tostring(rewards_status or ""),
             tostring(route_source),
             tostring(contract_row.description)
         )
     end
 
     return string.format(
-        "- #%s %s reward=%s status=%s %s %s %s %s %s %s desc=%s",
+        "- #%s %s reward=%s status=%s %s %s %s %s %s %s %s desc=%s",
         tostring(contract_row.id),
         tostring(contract_row.type),
         tostring(contract_row.reward_money),
@@ -490,6 +620,7 @@ local function build_contract_line(contract_row)
         tostring(destination),
         tostring(deadline_value or ""),
         tostring(cargo_cleanup or ""),
+        tostring(rewards_status or ""),
         tostring(contract_row.description)
     )
 end
@@ -503,11 +634,12 @@ local function build_my_contract_line(contract_row)
     local route_source = format_contract_route_source(contract_row)
     local deadline_value = format_deadline_value(contract_row and contract_row.deadline_seconds)
     local cargo_cleanup = format_contract_cargo_cleanup(contract_row)
+    local rewards_status = format_contract_rewards_status(contract_row)
 
     if payment_status ~= nil then
         if route_source ~= nil then
             return string.format(
-                "- #%s %s reward=%s status=%s payment=%s role=%s %s %s %s %s %s %s %s",
+                "- #%s %s reward=%s status=%s payment=%s role=%s %s %s %s %s %s %s %s %s",
                 tostring(contract_row.id),
                 tostring(contract_row.type),
                 tostring(contract_row.reward_money),
@@ -520,12 +652,13 @@ local function build_my_contract_line(contract_row)
                 tostring(destination),
                 tostring(deadline_value or ""),
                 tostring(cargo_cleanup or ""),
+                tostring(rewards_status or ""),
                 tostring(route_source)
             )
         end
 
         return string.format(
-            "- #%s %s reward=%s status=%s payment=%s role=%s %s %s %s %s %s %s",
+            "- #%s %s reward=%s status=%s payment=%s role=%s %s %s %s %s %s %s %s",
             tostring(contract_row.id),
             tostring(contract_row.type),
             tostring(contract_row.reward_money),
@@ -537,13 +670,14 @@ local function build_my_contract_line(contract_row)
             tostring(pickup_status),
             tostring(destination),
             tostring(deadline_value or ""),
-            tostring(cargo_cleanup or "")
+            tostring(cargo_cleanup or ""),
+            tostring(rewards_status or "")
         )
     end
 
     if route_source ~= nil then
         return string.format(
-            "- #%s %s reward=%s status=%s role=%s %s %s %s %s %s %s %s",
+            "- #%s %s reward=%s status=%s role=%s %s %s %s %s %s %s %s %s",
             tostring(contract_row.id),
             tostring(contract_row.type),
             tostring(contract_row.reward_money),
@@ -555,12 +689,13 @@ local function build_my_contract_line(contract_row)
             tostring(destination),
             tostring(deadline_value or ""),
             tostring(cargo_cleanup or ""),
+            tostring(rewards_status or ""),
             tostring(route_source)
         )
     end
 
     return string.format(
-        "- #%s %s reward=%s status=%s role=%s %s %s %s %s %s %s",
+        "- #%s %s reward=%s status=%s role=%s %s %s %s %s %s %s %s",
         tostring(contract_row.id),
         tostring(contract_row.type),
         tostring(contract_row.reward_money),
@@ -571,7 +706,8 @@ local function build_my_contract_line(contract_row)
         tostring(pickup_status),
         tostring(destination),
         tostring(deadline_value or ""),
-        tostring(cargo_cleanup or "")
+        tostring(cargo_cleanup or ""),
+        tostring(rewards_status or "")
     )
 end
 
@@ -785,6 +921,22 @@ GRContractsBridge.GetContractDeadline = function(character_id, contract_id, call
     return GRContracts.Server.Service:GetContractDeadline(character_id, contract_id, callback)
 end
 
+GRContractsBridge.GetContractRewards = function(character_id, contract_id, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetContractRewards(character_id, contract_id, callback)
+end
+
+GRContractsBridge.GrantContractRewards = function(contract_id, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GrantContractRewards(contract_id, callback)
+end
+
 GRContractsBridge.ExpireContracts = function(callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -868,6 +1020,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "completecontract"
             and command_name ~= "cancelcontract"
             and command_name ~= "contractdeadline"
+            and command_name ~= "contractrewards"
+            and command_name ~= "grantcontractrewards"
             and command_name ~= "expirecontracts"
             and command_name ~= "cleanupcontractcargo"
             and command_name ~= "expiredcontracts"
@@ -1047,6 +1201,31 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         tostring(contract_row.status)
                     )
                 )
+            end)
+
+            return false
+        end
+
+        if command_name == "contractrewards" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /contractrewards <contract_id>")
+                return false
+            end
+
+            local contract_id = normalize_positive_integer(payload)
+
+            if contract_id == nil then
+                Chat.SendMessage(player, "Contrat introuvable.")
+                return false
+            end
+
+            GRContracts.Server.Service:GetContractRewards(active_character_id, contract_id, function(is_success, contract_row, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Contrat introuvable.")
+                    return
+                end
+
+                Chat.SendMessage(player, build_contract_rewards_line(contract_row))
             end)
 
             return false
@@ -1619,6 +1798,10 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 Chat.SendMessage(player, "Usage : /abandoncontract <contract_id>")
             elseif command_name == "contractdeadline" then
                 Chat.SendMessage(player, "Usage : /contractdeadline <contract_id>")
+            elseif command_name == "contractrewards" then
+                Chat.SendMessage(player, "Usage : /contractrewards <contract_id>")
+            elseif command_name == "grantcontractrewards" then
+                Chat.SendMessage(player, "Usage : /grantcontractrewards <contract_id>")
             elseif command_name == "cleanupcontractcargo" then
                 Chat.SendMessage(player, "Usage : /cleanupcontractcargo <contract_id>")
             elseif command_name == "completecontract" then
@@ -1793,6 +1976,77 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         "Cleanup cargo effectue : contrat #%s %s.",
                         tostring(contract_row.id),
                         tostring(format_contract_item_requirement(contract_row))
+                    )
+                )
+            end)
+
+            return false
+        end
+
+        if command_name == "grantcontractrewards" then
+            GRContracts.Server.Service:GrantContractRewards(contract_id, function(is_success, contract_row, error)
+                if not is_success then
+                    if error == "contract-not-found" then
+                        Chat.SendMessage(player, "Contrat introuvable.")
+                        return
+                    end
+
+                    if error == "contract-not-completed" then
+                        Chat.SendMessage(player, "Recompenses impossibles : contrat non termine.")
+                        return
+                    end
+
+                    if error == "rewards-already-granted" then
+                        Chat.SendMessage(player, "Recompenses impossibles : deja accordees.")
+                        return
+                    end
+
+                    if error == "rewards-not-required" then
+                        Chat.SendMessage(player, "Recompenses impossibles : aucune recompense.")
+                        return
+                    end
+
+                    if error == "skill-service-unavailable" then
+                        Chat.SendMessage(player, "Recompenses impossibles : skill indisponible.")
+                        return
+                    end
+
+                    if error == "reputation-service-unavailable" then
+                        Chat.SendMessage(player, "Recompenses impossibles : reputation indisponible.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Recompenses impossibles.")
+                    return
+                end
+
+                local reward_skill_key = trim_string(contract_row and contract_row.reward_skill_key)
+                local reward_skill_xp = normalize_positive_integer(contract_row and contract_row.reward_skill_xp)
+                local reward_reputation_key = trim_string(contract_row and contract_row.reward_reputation_key)
+                local reward_reputation_delta = tonumber(contract_row and contract_row.reward_reputation_delta) or 0
+
+                if reward_reputation_key ~= nil and reward_reputation_delta ~= 0 then
+                    Chat.SendMessage(
+                        player,
+                        string.format(
+                            "Recompenses accordees : contrat #%s skill=%s xp=%s reputation=%s delta=%s.",
+                            tostring(contract_row.id),
+                            tostring(reward_skill_key or "aucune"),
+                            tostring(reward_skill_xp or 0),
+                            tostring(reward_reputation_key),
+                            tostring(reward_reputation_delta)
+                        )
+                    )
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Recompenses accordees : contrat #%s skill=%s xp=%s.",
+                        tostring(contract_row.id),
+                        tostring(reward_skill_key or "aucune"),
+                        tostring(reward_skill_xp or 0)
                     )
                 )
             end)

@@ -12,6 +12,13 @@ local CONTRACT_SELECT_COLUMNS = [[
         title,
         description,
         reward_money,
+        reward_skill_key,
+        reward_skill_xp,
+        reward_reputation_key,
+        reward_reputation_delta,
+        rewards_status,
+        rewards_granted_at,
+        rewards_error,
         required_item_key,
         required_item_quantity,
         consume_required_items,
@@ -87,6 +94,10 @@ local SELECT_ROUTE_TEMPLATES_QUERY = [[
         item_key,
         item_quantity,
         reward_money,
+        reward_skill_key,
+        reward_skill_xp,
+        reward_reputation_key,
+        reward_reputation_delta,
         pickup_location_key,
         delivery_location_key,
         deadline_seconds,
@@ -106,6 +117,10 @@ local SELECT_ROUTE_TEMPLATE_BY_KEY_QUERY = [[
         item_key,
         item_quantity,
         reward_money,
+        reward_skill_key,
+        reward_skill_xp,
+        reward_reputation_key,
+        reward_reputation_delta,
         pickup_location_key,
         delivery_location_key,
         deadline_seconds,
@@ -148,6 +163,11 @@ local INSERT_CONTRACT_QUERY = [[
         title,
         description,
         reward_money,
+        reward_skill_key,
+        reward_skill_xp,
+        reward_reputation_key,
+        reward_reputation_delta,
+        rewards_status,
         required_item_key,
         required_item_quantity,
         consume_required_items,
@@ -178,14 +198,19 @@ local INSERT_CONTRACT_QUERY = [[
         :11,
         :12,
         :13,
-        CASE
-            WHEN :13 IS NULL THEN NULL
-            ELSE NOW() + (:13 * INTERVAL '1 second')
-        END,
         :14,
         :15,
+        :16,
+        :17,
+        :18,
+        CASE
+            WHEN :18 IS NULL THEN NULL
+            ELSE NOW() + (:18 * INTERVAL '1 second')
+        END,
+        :19,
+        :20,
         'open',
-        :16
+        :21
     )
     RETURNING
 ]] .. CONTRACT_SELECT_COLUMNS .. [[
@@ -347,6 +372,31 @@ local UPDATE_CARGO_CLEANUP_STATUS_QUERY = [[
             WHEN :1 = 'failed' THEN :2
             ELSE NULL
         END
+    WHERE id = :0
+    RETURNING
+]] .. CONTRACT_SELECT_COLUMNS .. [[
+]]
+
+local UPDATE_CONTRACT_REWARDS_STATUS_QUERY = [[
+    UPDATE contracts
+    SET
+        rewards_status = :1,
+        rewards_error = :2,
+        rewards_granted_at = CASE
+            WHEN :1 = 'granted' THEN NOW()
+            ELSE rewards_granted_at
+        END
+    WHERE id = :0
+    RETURNING
+]] .. CONTRACT_SELECT_COLUMNS .. [[
+]]
+
+local MARK_CONTRACT_REWARDS_GRANTED_QUERY = [[
+    UPDATE contracts
+    SET
+        rewards_status = 'granted',
+        rewards_granted_at = NOW(),
+        rewards_error = NULL
     WHERE id = :0
     RETURNING
 ]] .. CONTRACT_SELECT_COLUMNS .. [[
@@ -598,6 +648,34 @@ local function normalize_job_source(job_source)
     return normalized_job_source
 end
 
+local function normalize_reward_skill_key(reward_skill_key)
+    local normalized_reward_skill_key = trim_string(reward_skill_key)
+
+    if normalized_reward_skill_key == nil then
+        return nil
+    end
+
+    if normalized_reward_skill_key:match("^[a-z0-9_]+$") == nil then
+        return nil
+    end
+
+    return string.lower(normalized_reward_skill_key)
+end
+
+local function normalize_reward_reputation_key(reward_reputation_key)
+    local normalized_reward_reputation_key = trim_string(reward_reputation_key)
+
+    if normalized_reward_reputation_key == nil then
+        return nil
+    end
+
+    if normalized_reward_reputation_key:match("^[a-z0-9_]+$") == nil then
+        return nil
+    end
+
+    return string.lower(normalized_reward_reputation_key)
+end
+
 local function normalize_cargo_cleanup_status(cargo_cleanup_status)
     local normalized_cargo_cleanup_status = trim_string(cargo_cleanup_status)
 
@@ -617,6 +695,47 @@ local function normalize_cargo_cleanup_status(cargo_cleanup_status)
     end
 
     return normalized_cargo_cleanup_status
+end
+
+local function normalize_rewards_status(rewards_status)
+    local normalized_rewards_status = trim_string(rewards_status)
+
+    if normalized_rewards_status == nil then
+        return "none"
+    end
+
+    normalized_rewards_status = string.lower(normalized_rewards_status)
+
+    if normalized_rewards_status ~= "none"
+        and normalized_rewards_status ~= "pending"
+        and normalized_rewards_status ~= "granted"
+        and normalized_rewards_status ~= "failed"
+        and normalized_rewards_status ~= "not_required"
+    then
+        return "none"
+    end
+
+    return normalized_rewards_status
+end
+
+local function normalize_integer(value, fallback)
+    if type(value) == "number" then
+        if value % 1 ~= 0 then
+            return fallback
+        end
+
+        return math.floor(value)
+    end
+
+    if type(value) == "string" and value:match("^[+-]?%d+$") ~= nil then
+        local parsed_value = tonumber(value)
+
+        if parsed_value ~= nil then
+            return math.floor(parsed_value)
+        end
+    end
+
+    return fallback
 end
 
 local function normalize_contract_row(row)
@@ -644,6 +763,13 @@ local function normalize_contract_row(row)
         title = trim_string(row.title) or contract_type,
         description = trim_string(row.description) or "",
         reward_money = normalize_non_negative_integer(row.reward_money, 0),
+        reward_skill_key = normalize_reward_skill_key(row.reward_skill_key),
+        reward_skill_xp = normalize_non_negative_integer(row.reward_skill_xp, 0),
+        reward_reputation_key = normalize_reward_reputation_key(row.reward_reputation_key),
+        reward_reputation_delta = normalize_integer(row.reward_reputation_delta, 0),
+        rewards_status = normalize_rewards_status(row.rewards_status),
+        rewards_granted_at = row.rewards_granted_at,
+        rewards_error = trim_string(row.rewards_error),
         required_item_key = normalize_item_key(row.required_item_key),
         required_item_quantity = normalize_non_negative_integer(row.required_item_quantity, 0),
         consume_required_items = normalize_boolean(row.consume_required_items, true),
@@ -728,6 +854,10 @@ local function normalize_route_template_row(row)
         item_key = normalize_item_key(row.item_key),
         item_quantity = normalize_positive_integer(row.item_quantity),
         reward_money = normalize_non_negative_integer(row.reward_money, 0),
+        reward_skill_key = normalize_reward_skill_key(row.reward_skill_key),
+        reward_skill_xp = normalize_non_negative_integer(row.reward_skill_xp, 0),
+        reward_reputation_key = normalize_reward_reputation_key(row.reward_reputation_key),
+        reward_reputation_delta = normalize_integer(row.reward_reputation_delta, 0),
         pickup_location_key = normalize_location_key(row.pickup_location_key),
         delivery_location_key = normalize_location_key(row.delivery_location_key),
         deadline_seconds = normalize_positive_integer(row.deadline_seconds),
@@ -826,6 +956,11 @@ function ContractRepository:CreateContract(contract, callback)
     local normalized_title = trim_string(contract and contract.title)
     local normalized_description = trim_string(contract and contract.description)
     local normalized_reward_money = normalize_non_negative_integer(contract and contract.reward_money, nil)
+    local normalized_reward_skill_key = normalize_reward_skill_key(contract and contract.reward_skill_key)
+    local normalized_reward_skill_xp = normalize_non_negative_integer(contract and contract.reward_skill_xp, 0)
+    local normalized_reward_reputation_key = normalize_reward_reputation_key(contract and contract.reward_reputation_key)
+    local normalized_reward_reputation_delta = normalize_integer(contract and contract.reward_reputation_delta, 0)
+    local normalized_rewards_status = normalize_rewards_status(contract and contract.rewards_status)
     local normalized_required_item_key = normalize_item_key(contract and contract.required_item_key)
     local normalized_required_item_quantity = normalize_non_negative_integer(contract and contract.required_item_quantity, 0)
     local normalized_consume_required_items = normalize_boolean(contract and contract.consume_required_items, true)
@@ -865,6 +1000,26 @@ function ContractRepository:CreateContract(contract, callback)
 
     if normalized_reward_money == nil then
         callback(false, nil, "reward-money-required")
+        return true
+    end
+
+    if contract ~= nil and contract.reward_skill_key ~= nil and normalized_reward_skill_key == nil then
+        callback(false, nil, "reward-skill-key-invalid")
+        return true
+    end
+
+    if contract ~= nil and contract.reward_skill_xp ~= nil and normalized_reward_skill_xp == nil then
+        callback(false, nil, "reward-skill-xp-invalid")
+        return true
+    end
+
+    if contract ~= nil and contract.reward_reputation_key ~= nil and normalized_reward_reputation_key == nil then
+        callback(false, nil, "reward-reputation-key-invalid")
+        return true
+    end
+
+    if contract ~= nil and contract.reward_reputation_delta ~= nil and normalized_reward_reputation_delta == nil then
+        callback(false, nil, "reward-reputation-delta-invalid")
         return true
     end
 
@@ -917,6 +1072,11 @@ function ContractRepository:CreateContract(contract, callback)
             normalized_title,
             normalized_description,
             normalized_reward_money,
+            normalized_reward_skill_key,
+            normalized_reward_skill_xp,
+            normalized_reward_reputation_key,
+            normalized_reward_reputation_delta,
+            normalized_rewards_status,
             normalized_required_item_key,
             normalized_required_item_quantity,
             normalized_consume_required_items,
@@ -1511,6 +1671,72 @@ function ContractRepository:UpdateCargoCleanupStatus(contract_id, cargo_cleanup_
             callback(true, contract_rows[1], nil)
         end, normalized_contract_id, normalized_cargo_cleanup_status, normalized_error_message)
     end, "contracts-update-cargo-cleanup-status")
+end
+
+function ContractRepository:UpdateContractRewardsStatus(contract_id, rewards_status, error_message, callback)
+    local normalized_contract_id = normalize_positive_integer(contract_id)
+    local normalized_rewards_status = normalize_rewards_status(rewards_status)
+    local normalized_error_message = trim_string(error_message)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(UPDATE_CONTRACT_REWARDS_STATUS_QUERY, function(rows, update_error)
+            local contract_rows = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            contract_rows = normalize_rows(rows)
+            callback(true, contract_rows[1], nil)
+        end, normalized_contract_id, normalized_rewards_status, normalized_error_message)
+    end, "contracts-update-rewards-status")
+end
+
+function ContractRepository:MarkContractRewardsGranted(contract_id, callback)
+    local normalized_contract_id = normalize_positive_integer(contract_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(MARK_CONTRACT_REWARDS_GRANTED_QUERY, function(rows, update_error)
+            local contract_rows = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            contract_rows = normalize_rows(rows)
+            callback(true, contract_rows[1], nil)
+        end, normalized_contract_id)
+    end, "contracts-mark-rewards-granted")
 end
 
 function ContractRepository:MarkContractPayment(contract_id, payment_status, callback)

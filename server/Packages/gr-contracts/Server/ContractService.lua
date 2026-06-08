@@ -82,6 +82,46 @@ local function normalize_reward_money(value)
     return nil
 end
 
+local function normalize_non_negative_integer(value)
+    if type(value) == "number" then
+        if value < 0 or value % 1 ~= 0 then
+            return nil
+        end
+
+        return math.floor(value)
+    end
+
+    if type(value) == "string" and value:match("^%d+$") ~= nil then
+        local parsed_value = tonumber(value)
+
+        if parsed_value ~= nil and parsed_value >= 0 then
+            return math.floor(parsed_value)
+        end
+    end
+
+    return nil
+end
+
+local function normalize_integer(value)
+    if type(value) == "number" then
+        if value % 1 ~= 0 then
+            return nil
+        end
+
+        return math.floor(value)
+    end
+
+    if type(value) == "string" and value:match("^[+-]?%d+$") ~= nil then
+        local parsed_value = tonumber(value)
+
+        if parsed_value ~= nil then
+            return math.floor(parsed_value)
+        end
+    end
+
+    return nil
+end
+
 local function normalize_contract_id(value)
     return normalize_positive_integer(value)
 end
@@ -199,6 +239,27 @@ local function normalize_cargo_cleanup_status(cargo_cleanup_status)
     return normalized_cargo_cleanup_status
 end
 
+local function normalize_rewards_status(rewards_status)
+    local normalized_rewards_status = trim_string(rewards_status)
+
+    if normalized_rewards_status == nil then
+        return "none"
+    end
+
+    normalized_rewards_status = string.lower(normalized_rewards_status)
+
+    if normalized_rewards_status ~= "none"
+        and normalized_rewards_status ~= "pending"
+        and normalized_rewards_status ~= "granted"
+        and normalized_rewards_status ~= "failed"
+        and normalized_rewards_status ~= "not_required"
+    then
+        return "none"
+    end
+
+    return normalized_rewards_status
+end
+
 local function normalize_cancel_reason(reason, fallback)
     local normalized_reason = trim_string(reason)
 
@@ -253,6 +314,30 @@ local function normalize_route_key(route_key)
     end
 
     return string.lower(normalized_route_key)
+end
+
+local function normalize_reward_skill_key(skill_key)
+    local skills_config = GRSkills and GRSkills.Shared and GRSkills.Shared.SkillsConfig
+
+    if type(skills_config) == "table" and type(skills_config.NormalizeSkillKey) == "function" then
+        return skills_config.NormalizeSkillKey(skill_key)
+    end
+
+    return normalize_item_key(skill_key)
+end
+
+local function normalize_reward_reputation_key(reputation_key)
+    local normalized_reputation_key = trim_string(reputation_key)
+
+    if normalized_reputation_key == nil then
+        return nil
+    end
+
+    if normalized_reputation_key:match("^[a-z0-9_]+$") == nil then
+        return nil
+    end
+
+    return string.lower(normalized_reputation_key)
 end
 
 local function normalize_number(value)
@@ -396,6 +481,30 @@ local function resolve_inventory_bridge()
     return GRInventoryBridge
 end
 
+local function resolve_skills_bridge()
+    if type(GRSkillsBridge) ~= "table" then
+        return nil
+    end
+
+    if type(GRSkillsBridge.AddSkillXp) ~= "function" then
+        return nil
+    end
+
+    return GRSkillsBridge
+end
+
+local function resolve_reputation_bridge()
+    if type(GRReputationBridge) ~= "table" then
+        return nil
+    end
+
+    if type(GRReputationBridge.AddReputation) ~= "function" then
+        return nil
+    end
+
+    return GRReputationBridge
+end
+
 local function resolve_contract_role(contract_row, character_id)
     local normalized_character_id = normalize_positive_integer(character_id)
     local is_creator = false
@@ -483,6 +592,32 @@ function ContractService:FinalizeCargoCleanupStatus(contract_row, cargo_cleanup_
     end
 
     return self.repository:UpdateCargoCleanupStatus(contract_id, cargo_cleanup_status, error_message, function(is_success, updated_row, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        callback(true, updated_row or contract_row, nil)
+    end)
+end
+
+function ContractService:FinalizeContractRewardsStatus(contract_row, rewards_status, error_message, callback)
+    local contract_id = normalize_contract_id(contract_row and contract_row.id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if contract_id == nil then
+        callback(false, nil, "contract-id-invalid")
+        return true
+    end
+
+    return self.repository:UpdateContractRewardsStatus(contract_id, rewards_status, error_message, function(is_success, updated_row, error)
         if not is_success then
             callback(false, nil, error or "database-error")
             return
@@ -749,6 +884,205 @@ function ContractService:GetContractDeadline(character_id, contract_id, callback
 
             callback(true, resolved_row or contract_row, is_expired and "contract-expired" or nil)
         end)
+    end)
+end
+
+function ContractService:GetContractRewards(character_id, contract_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_contract_id = normalize_contract_id(contract_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-invalid")
+        return true
+    end
+
+    return self.repository:GetContractById(normalized_contract_id, function(is_success, contract_row, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        if contract_row == nil then
+            callback(false, nil, "contract-not-found")
+            return
+        end
+
+        callback(true, contract_row, nil)
+    end)
+end
+
+function ContractService:GrantContractRewards(contract_id, callback)
+    local normalized_contract_id = normalize_contract_id(contract_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-invalid")
+        return true
+    end
+
+    return self.repository:GetContractById(normalized_contract_id, function(is_success, contract_row, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        if contract_row == nil then
+            callback(false, nil, "contract-not-found")
+            return
+        end
+
+        if trim_string(contract_row.status) ~= "completed" then
+            callback(false, contract_row, "contract-not-completed")
+            return
+        end
+
+        local rewards_status = normalize_rewards_status(contract_row.rewards_status)
+        local assignee_character_id = normalize_positive_integer(contract_row.assignee_character_id)
+        local reward_skill_key = normalize_reward_skill_key(contract_row.reward_skill_key)
+        local reward_skill_xp = normalize_non_negative_integer(contract_row.reward_skill_xp) or 0
+        local reward_reputation_key = normalize_reward_reputation_key(contract_row.reward_reputation_key)
+        local reward_reputation_delta = normalize_integer(contract_row.reward_reputation_delta) or 0
+        local has_skill_reward = reward_skill_key ~= nil and reward_skill_xp > 0
+        local has_reputation_reward = reward_reputation_key ~= nil and reward_reputation_delta ~= 0
+
+        if rewards_status == "granted" then
+            callback(false, contract_row, "rewards-already-granted")
+            return
+        end
+
+        if not has_skill_reward and not has_reputation_reward then
+            self:FinalizeContractRewardsStatus(contract_row, "not_required", nil, function(is_finalize_success, updated_row, finalize_error)
+                if not is_finalize_success then
+                    callback(false, contract_row, finalize_error or "database-error")
+                    return
+                end
+
+                callback(false, updated_row, "rewards-not-required")
+            end)
+            return
+        end
+
+        local function fail_rewards(error_code, error_message)
+            return self:FinalizeContractRewardsStatus(contract_row, "failed", error_message or error_code, function(is_finalize_success, updated_row, finalize_error)
+                if not is_finalize_success then
+                    callback(false, contract_row, finalize_error or "database-error")
+                    return
+                end
+
+                callback(false, updated_row, error_code)
+            end)
+        end
+
+        if reward_skill_xp > 0 and reward_skill_key == nil then
+            fail_rewards("skill-service-unavailable", "invalid-skill")
+            return
+        end
+
+        if reward_reputation_delta ~= 0 and reward_reputation_key == nil then
+            fail_rewards("reputation-service-unavailable", "invalid-reputation")
+            return
+        end
+
+        if assignee_character_id == nil then
+            fail_rewards("database-error", "missing-assignee")
+            return
+        end
+
+        local function finish_granted()
+            self.repository:MarkContractRewardsGranted(normalized_contract_id, function(is_mark_success, updated_row, mark_error)
+                if not is_mark_success then
+                    callback(false, contract_row, mark_error or "database-error")
+                    return
+                end
+
+                callback(true, updated_row or contract_row, nil)
+            end)
+        end
+
+        local function grant_reputation_reward()
+            if not has_reputation_reward then
+                finish_granted()
+                return
+            end
+
+            if reward_reputation_delta < 0 then
+                fail_rewards("reputation-service-unavailable", "negative-reputation-disabled")
+                return
+            end
+
+            local reputation_bridge = resolve_reputation_bridge()
+
+            if reputation_bridge == nil then
+                fail_rewards("reputation-service-unavailable", "reputation-unavailable")
+                return
+            end
+
+            reputation_bridge.AddReputation(
+                assignee_character_id,
+                reward_reputation_key,
+                reward_reputation_delta,
+                string.format("contract-reward:%s", tostring(normalized_contract_id)),
+                function(is_reputation_success, _, reputation_error)
+                    if not is_reputation_success then
+                        fail_rewards("reputation-service-unavailable", reputation_error or "reputation-grant-failed")
+                        return
+                    end
+
+                    finish_granted()
+                end
+            )
+        end
+
+        local function grant_skill_reward()
+            if not has_skill_reward then
+                grant_reputation_reward()
+                return
+            end
+
+            local skills_bridge = resolve_skills_bridge()
+
+            if skills_bridge == nil then
+                fail_rewards("skill-service-unavailable", "skill-unavailable")
+                return
+            end
+
+            skills_bridge.AddSkillXp(
+                assignee_character_id,
+                reward_skill_key,
+                reward_skill_xp,
+                string.format("contract-reward:%s", tostring(normalized_contract_id)),
+                function(is_skill_success, _, skill_error)
+                    if not is_skill_success then
+                        fail_rewards("skill-service-unavailable", skill_error or "skill-grant-failed")
+                        return
+                    end
+
+                    grant_reputation_reward()
+                end
+            )
+        end
+
+        grant_skill_reward()
     end)
 end
 
@@ -1066,6 +1400,11 @@ function ContractService:CreateHaulContract(creator_character_id, item_key, quan
     local normalized_source_route_key = nil
     local normalized_job_source = "manual"
     local normalized_deadline_seconds = nil
+    local normalized_reward_skill_key = nil
+    local normalized_reward_skill_xp = 0
+    local normalized_reward_reputation_key = nil
+    local normalized_reward_reputation_delta = 0
+    local normalized_rewards_status = "not_required"
 
     if type(options_or_callback) == "function" and callback == nil then
         callback = options_or_callback
@@ -1076,6 +1415,18 @@ function ContractService:CreateHaulContract(creator_character_id, item_key, quan
     normalized_source_route_key = normalize_route_key(options and options.source_route_key)
     normalized_job_source = normalize_job_source(options and options.job_source) or "manual"
     normalized_deadline_seconds = normalize_deadline_seconds(options and options.deadline_seconds)
+    normalized_reward_skill_key = normalize_reward_skill_key(options and options.reward_skill_key)
+    normalized_reward_skill_xp = normalize_non_negative_integer(options and options.reward_skill_xp) or 0
+    normalized_reward_reputation_key = normalize_reward_reputation_key(options and options.reward_reputation_key)
+    normalized_reward_reputation_delta = normalize_integer(options and options.reward_reputation_delta) or 0
+
+    if normalized_reward_skill_key ~= nil and normalized_reward_skill_xp > 0 then
+        normalized_rewards_status = "pending"
+    end
+
+    if normalized_reward_reputation_key ~= nil and normalized_reward_reputation_delta ~= 0 then
+        normalized_rewards_status = "pending"
+    end
 
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -1130,6 +1481,26 @@ function ContractService:CreateHaulContract(creator_character_id, item_key, quan
         return true
     end
 
+    if options ~= nil and options.reward_skill_key ~= nil and normalized_reward_skill_key == nil then
+        callback(false, nil, "reward-skill-key-invalid")
+        return true
+    end
+
+    if options ~= nil and options.reward_skill_xp ~= nil and normalize_non_negative_integer(options.reward_skill_xp) == nil then
+        callback(false, nil, "reward-skill-xp-invalid")
+        return true
+    end
+
+    if options ~= nil and options.reward_reputation_key ~= nil and normalized_reward_reputation_key == nil then
+        callback(false, nil, "reward-reputation-key-invalid")
+        return true
+    end
+
+    if options ~= nil and options.reward_reputation_delta ~= nil and normalize_integer(options.reward_reputation_delta) == nil then
+        callback(false, nil, "reward-reputation-delta-invalid")
+        return true
+    end
+
     return self.repository:GetDeliveryLocation(normalized_pickup_location_key, function(is_pickup_success, pickup_location, pickup_error)
         if not is_pickup_success then
             callback(false, nil, pickup_error or "pickup-location-not-found")
@@ -1168,6 +1539,11 @@ function ContractService:CreateHaulContract(creator_character_id, item_key, quan
                 title = build_contract_title("delivery"),
                 description = normalized_description,
                 reward_money = normalized_reward_money,
+                reward_skill_key = normalized_reward_skill_key,
+                reward_skill_xp = normalized_reward_skill_xp,
+                reward_reputation_key = normalized_reward_reputation_key,
+                reward_reputation_delta = normalized_reward_reputation_delta,
+                rewards_status = normalized_rewards_status,
                 deadline_at = nil,
                 required_item_key = normalized_item_key,
                 required_item_quantity = normalized_quantity,
@@ -1253,6 +1629,10 @@ function ContractService:CreateHaulContractFromRoute(creator_character_id, route
                 source_route_key = route_template.key,
                 job_source = "route_template",
                 deadline_seconds = route_template.deadline_seconds,
+                reward_skill_key = route_template.reward_skill_key,
+                reward_skill_xp = route_template.reward_skill_xp,
+                reward_reputation_key = route_template.reward_reputation_key,
+                reward_reputation_delta = route_template.reward_reputation_delta,
             },
             function(is_create_success, contract_row, create_error)
                 if not is_create_success then
@@ -1432,6 +1812,10 @@ function ContractService:TakeJobFromRoute(character_id, route_key, callback)
                         source_route_key = route_template.key,
                         job_source = "job_board",
                         deadline_seconds = route_template.deadline_seconds,
+                        reward_skill_key = route_template.reward_skill_key,
+                        reward_skill_xp = route_template.reward_skill_xp,
+                        reward_reputation_key = route_template.reward_reputation_key,
+                        reward_reputation_delta = route_template.reward_reputation_delta,
                     },
                     function(is_create_success, contract_row, create_error)
                         if not is_create_success then
@@ -2091,7 +2475,25 @@ function ContractService:CompleteContract(character_id, contract_id, player_or_c
                         tostring(normalized_character_id)
                     )
 
-                    callback(true, enriched_row, nil)
+                    self:GrantContractRewards(enriched_row.id, function(is_rewards_success, reward_row, rewards_error)
+                        local final_row = reward_row or enriched_row
+
+                        if final_row ~= enriched_row then
+                            final_row.money_result = money_result
+                            final_row.payment_status = final_row.payment_status or payment_status
+                        end
+
+                        if not is_rewards_success and rewards_error ~= "rewards-not-required" and rewards_error ~= "rewards-already-granted" then
+                            Console.Log(
+                                "[gr_contracts][service] Contract rewards failed contract_id=%s assignee_character_id=%s reason=%s.",
+                                tostring(enriched_row.id),
+                                tostring(normalized_character_id),
+                                tostring(rewards_error)
+                            )
+                        end
+
+                        callback(true, final_row, nil)
+                    end)
                 end
 
                 local function mark_payment_and_finish(payment_status, money_result)
