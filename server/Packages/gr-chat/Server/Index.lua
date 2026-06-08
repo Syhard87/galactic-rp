@@ -22,6 +22,7 @@ local EXTERNAL_CHAT_COMMANDS = {
     contractrouteinfo = true,
     jobboard = true,
     jobinfo = true,
+    jobrequirements = true,
     deliverylocations = true,
     deliverylocationinfo = true,
     createcontract = true,

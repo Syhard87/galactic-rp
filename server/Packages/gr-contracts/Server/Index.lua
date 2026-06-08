@@ -78,6 +78,26 @@ local function normalize_positive_integer(value)
     return nil
 end
 
+local function normalize_non_negative_integer(value)
+    if type(value) == "number" then
+        if value < 0 or value % 1 ~= 0 then
+            return nil
+        end
+
+        return math.floor(value)
+    end
+
+    if type(value) == "string" and value:match("^%d+$") ~= nil then
+        local parsed_value = tonumber(value)
+
+        if parsed_value ~= nil and parsed_value >= 0 then
+            return math.floor(parsed_value)
+        end
+    end
+
+    return nil
+end
+
 local function read_custom_settings()
     if type(Server) ~= "table" and type(Server) ~= "userdata" then
         return nil
@@ -310,6 +330,71 @@ local function format_route_reward_preview(route_template)
     return string.format("reward_xp=%s", tostring(reward_skill_xp))
 end
 
+local function append_optional_parts(base_text, ...)
+    local parts = { ... }
+    local resolved_text = tostring(base_text)
+
+    for _, part in ipairs(parts) do
+        if part ~= nil and part ~= "" then
+            resolved_text = resolved_text .. " " .. tostring(part)
+        end
+    end
+
+    return resolved_text
+end
+
+local function format_route_requirements_preview(route_template)
+    local required_skill_key = trim_string(route_template and route_template.required_skill_key)
+    local required_skill_level = normalize_non_negative_integer(route_template and route_template.required_skill_level) or 0
+    local required_reputation_key = trim_string(route_template and route_template.required_reputation_key)
+    local required_reputation_min = tonumber(route_template and route_template.required_reputation_min) or 0
+    local preview_parts = {}
+
+    if required_skill_key ~= nil and required_skill_level > 0 then
+        preview_parts[#preview_parts + 1] = string.format("req_skill=%s:%s", tostring(required_skill_key), tostring(required_skill_level))
+    end
+
+    if required_reputation_key ~= nil and required_reputation_min ~= 0 then
+        preview_parts[#preview_parts + 1] = string.format("req_rep=%s:%s", tostring(required_reputation_key), tostring(required_reputation_min))
+    end
+
+    if #preview_parts == 0 then
+        return nil
+    end
+
+    return table.concat(preview_parts, " ")
+end
+
+local function build_route_requirements_message(route_template)
+    local required_skill_key = trim_string(route_template and route_template.required_skill_key)
+    local required_skill_level = normalize_non_negative_integer(route_template and route_template.required_skill_level) or 0
+    local required_reputation_key = trim_string(route_template and route_template.required_reputation_key)
+    local required_reputation_min = tonumber(route_template and route_template.required_reputation_min) or 0
+
+    if (required_skill_key == nil or required_skill_level < 1)
+        and (required_reputation_key == nil or required_reputation_min == 0)
+    then
+        return "aucun."
+    end
+
+    local skill_requirement = "skill=aucune"
+    local reputation_requirement = "reputation=aucune"
+
+    if required_skill_key ~= nil and required_skill_level > 0 then
+        skill_requirement = string.format("skill=%s niveau=%s", tostring(required_skill_key), tostring(required_skill_level))
+    end
+
+    if required_reputation_key ~= nil and required_reputation_min ~= 0 then
+        reputation_requirement = string.format(
+            "reputation=%s minimum=%s",
+            tostring(required_reputation_key),
+            tostring(required_reputation_min)
+        )
+    end
+
+    return string.format("%s %s.", tostring(skill_requirement), tostring(reputation_requirement))
+end
+
 local function format_contract_rewards_status(contract_row)
     local rewards_status = trim_string(contract_row and contract_row.rewards_status)
 
@@ -345,166 +430,78 @@ end
 local function build_route_template_line(route_template)
     local deadline_value = format_deadline_value(route_template and route_template.deadline_seconds)
     local reward_preview = format_route_reward_preview(route_template)
+    local requirements_preview = format_route_requirements_preview(route_template)
 
-    if deadline_value ~= nil and reward_preview ~= nil then
-        return string.format(
-            "- %s item=%s x%s reward=%s pickup=%s destination=%s %s %s active=%s",
+    return append_optional_parts(
+        string.format(
+            "- %s item=%s x%s reward=%s pickup=%s destination=%s",
             tostring(route_template.key),
             tostring(route_template.item_key or "inconnu"),
             tostring(route_template.item_quantity or "?"),
             tostring(route_template.reward_money or 0),
             tostring(route_template.pickup_location_key or "aucun"),
-            tostring(route_template.delivery_location_key or "aucune"),
-            tostring(deadline_value),
-            tostring(reward_preview),
-            tostring(route_template.is_active)
-        )
-    end
-
-    if deadline_value ~= nil then
-        return string.format(
-            "- %s item=%s x%s reward=%s pickup=%s destination=%s %s active=%s",
-            tostring(route_template.key),
-            tostring(route_template.item_key or "inconnu"),
-            tostring(route_template.item_quantity or "?"),
-            tostring(route_template.reward_money or 0),
-            tostring(route_template.pickup_location_key or "aucun"),
-            tostring(route_template.delivery_location_key or "aucune"),
-            tostring(deadline_value),
-            tostring(route_template.is_active)
-        )
-    end
-
-    if reward_preview ~= nil then
-        return string.format(
-            "- %s item=%s x%s reward=%s pickup=%s destination=%s %s active=%s",
-            tostring(route_template.key),
-            tostring(route_template.item_key or "inconnu"),
-            tostring(route_template.item_quantity or "?"),
-            tostring(route_template.reward_money or 0),
-            tostring(route_template.pickup_location_key or "aucun"),
-            tostring(route_template.delivery_location_key or "aucune"),
-            tostring(reward_preview),
-            tostring(route_template.is_active)
-        )
-    end
-
-    return string.format(
-        "- %s item=%s x%s reward=%s pickup=%s destination=%s active=%s",
-        tostring(route_template.key),
-        tostring(route_template.item_key or "inconnu"),
-        tostring(route_template.item_quantity or "?"),
-        tostring(route_template.reward_money or 0),
-        tostring(route_template.pickup_location_key or "aucun"),
-        tostring(route_template.delivery_location_key or "aucune"),
-        tostring(route_template.is_active)
+            tostring(route_template.delivery_location_key or "aucune")
+        ),
+        deadline_value,
+        reward_preview,
+        requirements_preview,
+        string.format("active=%s", tostring(route_template.is_active))
     )
 end
 
 local function build_route_template_info_line(route_template)
     local deadline_value = format_deadline_value(route_template and route_template.deadline_seconds)
     local reward_preview = format_route_reward_preview(route_template)
+    local requirements_preview = format_route_requirements_preview(route_template)
 
-    if deadline_value ~= nil and reward_preview ~= nil then
-        return string.format(
-            "item=%s x%s reward=%s pickup=%s destination=%s %s %s",
+    return append_optional_parts(
+        string.format(
+            "item=%s x%s reward=%s pickup=%s destination=%s",
             tostring(route_template.item_key or "inconnu"),
             tostring(route_template.item_quantity or "?"),
             tostring(route_template.reward_money or 0),
             tostring(route_template.pickup_location_key or "aucun"),
-            tostring(route_template.delivery_location_key or "aucune"),
-            tostring(deadline_value),
-            tostring(reward_preview)
-        )
-    end
-
-    if deadline_value ~= nil then
-        return string.format(
-            "item=%s x%s reward=%s pickup=%s destination=%s %s",
-            tostring(route_template.item_key or "inconnu"),
-            tostring(route_template.item_quantity or "?"),
-            tostring(route_template.reward_money or 0),
-            tostring(route_template.pickup_location_key or "aucun"),
-            tostring(route_template.delivery_location_key or "aucune"),
-            tostring(deadline_value)
-        )
-    end
-
-    if reward_preview ~= nil then
-        return string.format(
-            "item=%s x%s reward=%s pickup=%s destination=%s %s",
-            tostring(route_template.item_key or "inconnu"),
-            tostring(route_template.item_quantity or "?"),
-            tostring(route_template.reward_money or 0),
-            tostring(route_template.pickup_location_key or "aucun"),
-            tostring(route_template.delivery_location_key or "aucune"),
-            tostring(reward_preview)
-        )
-    end
-
-    return string.format(
-        "item=%s x%s reward=%s pickup=%s destination=%s",
-        tostring(route_template.item_key or "inconnu"),
-        tostring(route_template.item_quantity or "?"),
-        tostring(route_template.reward_money or 0),
-        tostring(route_template.pickup_location_key or "aucun"),
-        tostring(route_template.delivery_location_key or "aucune")
+            tostring(route_template.delivery_location_key or "aucune")
+        ),
+        deadline_value,
+        reward_preview,
+        requirements_preview
     )
 end
 
 local function build_job_board_line(route_template)
     local deadline_value = format_deadline_value(route_template and route_template.deadline_seconds)
     local reward_preview = format_route_reward_preview(route_template)
+    local requirements_preview = format_route_requirements_preview(route_template)
 
-    if deadline_value ~= nil and reward_preview ~= nil then
-        return string.format(
-            "- %s item=%s x%s reward=%s pickup=%s destination=%s %s %s",
+    return append_optional_parts(
+        string.format(
+            "- %s item=%s x%s reward=%s pickup=%s destination=%s",
             tostring(route_template.key),
             tostring(route_template.item_key or "inconnu"),
             tostring(route_template.item_quantity or "?"),
             tostring(route_template.reward_money or 0),
             tostring(route_template.pickup_location_key or "aucun"),
-            tostring(route_template.delivery_location_key or "aucune"),
-            tostring(deadline_value),
-            tostring(reward_preview)
-        )
-    end
-
-    if deadline_value ~= nil then
-        return string.format(
-            "- %s item=%s x%s reward=%s pickup=%s destination=%s %s",
-            tostring(route_template.key),
-            tostring(route_template.item_key or "inconnu"),
-            tostring(route_template.item_quantity or "?"),
-            tostring(route_template.reward_money or 0),
-            tostring(route_template.pickup_location_key or "aucun"),
-            tostring(route_template.delivery_location_key or "aucune"),
-            tostring(deadline_value)
-        )
-    end
-
-    if reward_preview ~= nil then
-        return string.format(
-            "- %s item=%s x%s reward=%s pickup=%s destination=%s %s",
-            tostring(route_template.key),
-            tostring(route_template.item_key or "inconnu"),
-            tostring(route_template.item_quantity or "?"),
-            tostring(route_template.reward_money or 0),
-            tostring(route_template.pickup_location_key or "aucun"),
-            tostring(route_template.delivery_location_key or "aucune"),
-            tostring(reward_preview)
-        )
-    end
-
-    return string.format(
-        "- %s item=%s x%s reward=%s pickup=%s destination=%s",
-        tostring(route_template.key),
-        tostring(route_template.item_key or "inconnu"),
-        tostring(route_template.item_quantity or "?"),
-        tostring(route_template.reward_money or 0),
-        tostring(route_template.pickup_location_key or "aucun"),
-        tostring(route_template.delivery_location_key or "aucune")
+            tostring(route_template.delivery_location_key or "aucune")
+        ),
+        deadline_value,
+        reward_preview,
+        requirements_preview
     )
+end
+
+local function build_job_requirements_status_line(route_key, requirements_result)
+    local missing_requirements = type(requirements_result) == "table" and requirements_result.missing_requirements or nil
+
+    if type(missing_requirements) == "table" and #missing_requirements > 0 then
+        return string.format(
+            "Prerequis mission %s : %s",
+            tostring(route_key),
+            tostring(table.concat(missing_requirements, " "))
+        )
+    end
+
+    return string.format("Prerequis mission %s : OK.", tostring(route_key))
 end
 
 local function format_coordinate_value(value)
@@ -905,6 +902,14 @@ GRContractsBridge.GetJobBoardRoute = function(route_key, callback)
     return GRContracts.Server.Service:GetJobBoardRoute(route_key, callback)
 end
 
+GRContractsBridge.GetJobRequirements = function(character_id, route_key, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetJobRequirements(character_id, route_key, callback)
+end
+
 GRContractsBridge.TakeJobFromRoute = function(character_id, route_key, callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -1005,6 +1010,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "contractrouteinfo"
             and command_name ~= "jobboard"
             and command_name ~= "jobinfo"
+            and command_name ~= "jobrequirements"
             and command_name ~= "createcontract"
             and command_name ~= "createdeliverycontract"
             and command_name ~= "createdeliverycontractat"
@@ -1132,6 +1138,13 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 Chat.SendMessage(player, string.format("Route %s :", tostring(route_template.key)))
                 Chat.SendMessage(player, build_route_template_info_line(route_template))
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "prerequis=%s",
+                        tostring(build_route_requirements_message(route_template))
+                    )
+                )
                 Chat.SendMessage(player, string.format("description=%s", tostring(route_template.description or "")))
             end)
 
@@ -1162,7 +1175,69 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 Chat.SendMessage(player, string.format("Mission %s :", tostring(route_template.key)))
                 Chat.SendMessage(player, build_route_template_info_line(route_template))
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "prerequis=%s",
+                        tostring(build_route_requirements_message(route_template))
+                    )
+                )
                 Chat.SendMessage(player, string.format("description=%s", tostring(route_template.description or "")))
+            end)
+
+            return false
+        end
+
+        if command_name == "jobrequirements" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /jobrequirements <route_key>")
+                return false
+            end
+
+            GRContracts.Server.Service:GetJobRequirements(active_character_id, payload, function(is_success, requirements_result, error)
+                local route_template = type(requirements_result) == "table" and (requirements_result.route_template or requirements_result) or nil
+                local route_key = trim_string(route_template and route_template.key) or trim_string(payload) or "inconnue"
+
+                if error == "route-not-found" or route_template == nil then
+                    Chat.SendMessage(player, "Mission introuvable.")
+                    return
+                end
+
+                if error == "route-inactive" then
+                    Chat.SendMessage(player, "Mission inactive.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Prerequis mission %s : %s",
+                        tostring(route_key),
+                        tostring(build_route_requirements_message(route_template))
+                    )
+                )
+
+                if is_success then
+                    Chat.SendMessage(player, string.format("Prerequis mission %s : OK.", tostring(route_key)))
+                    return
+                end
+
+                if error == "requirements-not-met" then
+                    Chat.SendMessage(player, build_job_requirements_status_line(route_key, requirements_result))
+                    return
+                end
+
+                if error == "skill-service-unavailable" then
+                    Chat.SendMessage(player, string.format("Prerequis mission %s : skill indisponible.", tostring(route_key)))
+                    return
+                end
+
+                if error == "reputation-service-unavailable" then
+                    Chat.SendMessage(player, string.format("Prerequis mission %s : reputation indisponible.", tostring(route_key)))
+                    return
+                end
+
+                Chat.SendMessage(player, string.format("Prerequis mission %s : verification indisponible.", tostring(route_key)))
             end)
 
             return false
@@ -1381,6 +1456,16 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                     if error == "active-job-limit-reached" then
                         Chat.SendMessage(player, "Limite de missions actives atteinte.")
+                        return
+                    end
+
+                    if error == "requirements-not-met" then
+                        Chat.SendMessage(player, "Mission impossible : prerequis non remplis.")
+                        return
+                    end
+
+                    if error == "skill-service-unavailable" or error == "reputation-service-unavailable" then
+                        Chat.SendMessage(player, "Mission impossible : prerequis indisponibles.")
                         return
                     end
 

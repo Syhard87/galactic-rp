@@ -340,6 +340,22 @@ local function normalize_reward_reputation_key(reputation_key)
     return string.lower(normalized_reputation_key)
 end
 
+local function normalize_required_skill_key(skill_key)
+    return normalize_reward_skill_key(skill_key)
+end
+
+local function normalize_required_skill_level(skill_level)
+    return normalize_non_negative_integer(skill_level)
+end
+
+local function normalize_required_reputation_key(reputation_key)
+    return normalize_reward_reputation_key(reputation_key)
+end
+
+local function normalize_required_reputation_min(reputation_min)
+    return normalize_integer(reputation_min)
+end
+
 local function normalize_number(value)
     if type(value) == "number" then
         if value ~= value or value == math.huge or value == -math.huge then
@@ -486,7 +502,7 @@ local function resolve_skills_bridge()
         return nil
     end
 
-    if type(GRSkillsBridge.AddSkillXp) ~= "function" then
+    if type(GRSkillsBridge.AddSkillXp) ~= "function" or type(GRSkillsBridge.ListSkills) ~= "function" then
         return nil
     end
 
@@ -498,7 +514,7 @@ local function resolve_reputation_bridge()
         return nil
     end
 
-    if type(GRReputationBridge.AddReputation) ~= "function" then
+    if type(GRReputationBridge.AddReputation) ~= "function" or type(GRReputationBridge.ListCharacterReputations) ~= "function" then
         return nil
     end
 
@@ -553,6 +569,23 @@ local function is_contract_terminal(contract_row)
     end
 
     if payment_status == "paid" then
+        return true
+    end
+
+    return false
+end
+
+local function route_has_job_requirements(route_template)
+    local required_skill_key = normalize_required_skill_key(route_template and route_template.required_skill_key)
+    local required_skill_level = normalize_required_skill_level(route_template and route_template.required_skill_level) or 0
+    local required_reputation_key = normalize_required_reputation_key(route_template and route_template.required_reputation_key)
+    local required_reputation_min = normalize_required_reputation_min(route_template and route_template.required_reputation_min) or 0
+
+    if required_skill_key ~= nil and required_skill_level > 0 then
+        return true
+    end
+
+    if required_reputation_key ~= nil and required_reputation_min ~= 0 then
         return true
     end
 
@@ -1083,6 +1116,172 @@ function ContractService:GrantContractRewards(contract_id, callback)
         end
 
         grant_skill_reward()
+    end)
+end
+
+function ContractService:CheckJobRequirements(character_id, route_template, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local required_skill_key = normalize_required_skill_key(route_template and route_template.required_skill_key)
+    local required_skill_level = normalize_required_skill_level(route_template and route_template.required_skill_level) or 0
+    local required_reputation_key = normalize_required_reputation_key(route_template and route_template.required_reputation_key)
+    local required_reputation_min = normalize_required_reputation_min(route_template and route_template.required_reputation_min) or 0
+    local result = {
+        is_met = true,
+        missing_requirements = {},
+        skill_current_level = nil,
+        reputation_current_value = nil,
+        route_template = route_template,
+        required_skill_key = required_skill_key,
+        required_skill_level = required_skill_level,
+        required_reputation_key = required_reputation_key,
+        required_reputation_min = required_reputation_min,
+    }
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_id == nil then
+        callback(false, result, "invalid-character")
+        return true
+    end
+
+    if type(route_template) ~= "table" then
+        callback(false, result, "route-not-found")
+        return true
+    end
+
+    if not route_has_job_requirements(route_template) then
+        callback(true, result, nil)
+        return true
+    end
+
+    local function evaluate_reputation_requirement()
+        if required_reputation_key == nil or required_reputation_min == 0 then
+            callback(result.is_met, result, result.is_met and nil or "requirements-not-met")
+            return
+        end
+
+        local reputation_bridge = resolve_reputation_bridge()
+
+        if reputation_bridge == nil then
+            callback(false, result, "reputation-service-unavailable")
+            return
+        end
+
+        reputation_bridge.ListCharacterReputations(normalized_character_id, function(is_success, reputation_rows, error)
+            if not is_success then
+                callback(false, result, error or "reputation-service-unavailable")
+                return
+            end
+
+            local current_value = 0
+
+            for _, reputation_row in ipairs(reputation_rows or {}) do
+                if normalize_required_reputation_key(reputation_row and reputation_row.key) == required_reputation_key then
+                    current_value = normalize_required_reputation_min(reputation_row and reputation_row.value) or 0
+                    break
+                end
+            end
+
+            result.reputation_current_value = current_value
+
+            if current_value < required_reputation_min then
+                result.is_met = false
+                result.missing_requirements[#result.missing_requirements + 1] = string.format(
+                    "reputation %s minimum %s requis, valeur actuelle=%s.",
+                    tostring(required_reputation_key),
+                    tostring(required_reputation_min),
+                    tostring(current_value)
+                )
+            end
+
+            callback(result.is_met, result, result.is_met and nil or "requirements-not-met")
+        end)
+    end
+
+    if required_skill_key == nil or required_skill_level < 1 then
+        evaluate_reputation_requirement()
+        return true
+    end
+
+    local skills_bridge = resolve_skills_bridge()
+
+    if skills_bridge == nil then
+        callback(false, result, "skill-service-unavailable")
+        return true
+    end
+
+    return skills_bridge.ListSkills(normalized_character_id, function(is_success, skill_rows, error)
+        if not is_success then
+            callback(false, result, error or "skill-service-unavailable")
+            return
+        end
+
+        local current_level = 0
+
+        for _, skill_row in ipairs(skill_rows or {}) do
+            if normalize_required_skill_key(skill_row and skill_row.skill_key) == required_skill_key then
+                current_level = normalize_required_skill_level(skill_row and skill_row.level) or 0
+                break
+            end
+        end
+
+        result.skill_current_level = current_level
+
+        if current_level < required_skill_level then
+            result.is_met = false
+            result.missing_requirements[#result.missing_requirements + 1] = string.format(
+                "skill %s niveau %s requis, niveau actuel=%s.",
+                tostring(required_skill_key),
+                tostring(required_skill_level),
+                tostring(current_level)
+            )
+        end
+
+        evaluate_reputation_requirement()
+    end)
+end
+
+function ContractService:GetJobRequirements(character_id, route_key, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_route_key = normalize_route_key(route_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "invalid-character")
+        return true
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "route-not-found")
+        return true
+    end
+
+    return self:GetRouteTemplate(normalized_route_key, function(is_success, route_template, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        if route_template == nil then
+            callback(false, nil, "route-not-found")
+            return
+        end
+
+        if route_template.is_active ~= true then
+            callback(false, route_template, "route-inactive")
+            return
+        end
+
+        self:CheckJobRequirements(normalized_character_id, route_template, callback)
     end)
 end
 
@@ -1800,49 +1999,56 @@ function ContractService:TakeJobFromRoute(character_id, route_key, callback)
                     return
                 end
 
-                self:CreateHaulContract(
-                    normalized_character_id,
-                    route_template.item_key,
-                    route_template.item_quantity,
-                    route_template.reward_money,
-                    route_template.pickup_location_key,
-                    route_template.delivery_location_key,
-                    build_route_contract_description(route_template),
-                    {
-                        source_route_key = route_template.key,
-                        job_source = "job_board",
-                        deadline_seconds = route_template.deadline_seconds,
-                        reward_skill_key = route_template.reward_skill_key,
-                        reward_skill_xp = route_template.reward_skill_xp,
-                        reward_reputation_key = route_template.reward_reputation_key,
-                        reward_reputation_delta = route_template.reward_reputation_delta,
-                    },
-                    function(is_create_success, contract_row, create_error)
-                        if not is_create_success then
-                            callback(false, route_template, create_error or "contract-create-failed")
-                            return
-                        end
+                self:CheckJobRequirements(normalized_character_id, route_template, function(is_requirements_success, requirements_result, requirements_error)
+                    if not is_requirements_success then
+                        callback(false, requirements_result or route_template, requirements_error or "requirements-not-met")
+                        return
+                    end
 
-                        if contract_row == nil or normalize_positive_integer(contract_row.id) == nil then
-                            callback(false, route_template, "contract-create-failed")
-                            return
-                        end
-
-                        self.repository:AcceptContract(contract_row.id, normalized_character_id, function(is_accept_success, accepted_row, accept_error)
-                            if not is_accept_success or accepted_row == nil then
-                                self.repository:CancelContract(contract_row.id, normalized_character_id, function()
-                                    callback(false, contract_row, "contract-assign-failed")
-                                end)
+                    self:CreateHaulContract(
+                        normalized_character_id,
+                        route_template.item_key,
+                        route_template.item_quantity,
+                        route_template.reward_money,
+                        route_template.pickup_location_key,
+                        route_template.delivery_location_key,
+                        build_route_contract_description(route_template),
+                        {
+                            source_route_key = route_template.key,
+                            job_source = "job_board",
+                            deadline_seconds = route_template.deadline_seconds,
+                            reward_skill_key = route_template.reward_skill_key,
+                            reward_skill_xp = route_template.reward_skill_xp,
+                            reward_reputation_key = route_template.reward_reputation_key,
+                            reward_reputation_delta = route_template.reward_reputation_delta,
+                        },
+                        function(is_create_success, contract_row, create_error)
+                            if not is_create_success then
+                                callback(false, route_template, create_error or "contract-create-failed")
                                 return
                             end
 
-                            accepted_row.route_key = route_template.key
-                            accepted_row.route_name = route_template.name
+                            if contract_row == nil or normalize_positive_integer(contract_row.id) == nil then
+                                callback(false, route_template, "contract-create-failed")
+                                return
+                            end
 
-                            callback(true, accepted_row, nil)
-                        end)
-                    end
-                )
+                            self.repository:AcceptContract(contract_row.id, normalized_character_id, function(is_accept_success, accepted_row, accept_error)
+                                if not is_accept_success or accepted_row == nil then
+                                    self.repository:CancelContract(contract_row.id, normalized_character_id, function()
+                                        callback(false, contract_row, "contract-assign-failed")
+                                    end)
+                                    return
+                                end
+
+                                accepted_row.route_key = route_template.key
+                                accepted_row.route_name = route_template.name
+
+                                callback(true, accepted_row, nil)
+                            end)
+                        end
+                    )
+                end)
             end)
         end)
     end)
