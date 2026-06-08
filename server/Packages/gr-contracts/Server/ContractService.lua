@@ -174,6 +174,10 @@ local function normalize_job_source(job_source)
     return normalized_job_source
 end
 
+local function normalize_deadline_seconds(deadline_seconds)
+    return normalize_positive_integer(deadline_seconds)
+end
+
 local function normalize_cancel_reason(reason, fallback)
     local normalized_reason = trim_string(reason)
 
@@ -414,7 +418,7 @@ local function is_contract_terminal(contract_row)
     local contract_status = trim_string(contract_row and contract_row.status)
     local payment_status = normalize_payment_status(contract_row and contract_row.payment_status)
 
-    if contract_status == "completed" or contract_status == "cancelled" then
+    if contract_status == "completed" or contract_status == "cancelled" or contract_status == "expired" then
         return true
     end
 
@@ -431,6 +435,112 @@ function ContractService.Create(repository)
     self.repository = repository
 
     return self
+end
+
+function ContractService:IsContractExpired(contract_row)
+    if type(contract_row) ~= "table" then
+        return false
+    end
+
+    return trim_string(contract_row.status) == "expired"
+end
+
+function ContractService:EnsureContractNotExpired(contract_row, callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if type(contract_row) ~= "table" then
+        callback(true, contract_row, false, nil)
+        return true
+    end
+
+    if self:IsContractExpired(contract_row) then
+        callback(true, contract_row, true, nil)
+        return true
+    end
+
+    if contract_row.expires_at == nil then
+        callback(true, contract_row, false, nil)
+        return true
+    end
+
+    return self.repository:MarkContractExpired(contract_row.id, function(is_success, expired_row, error)
+        if not is_success then
+            callback(false, nil, false, error or "database-error")
+            return
+        end
+
+        if expired_row ~= nil then
+            callback(true, expired_row, true, nil)
+            return
+        end
+
+        callback(true, contract_row, false, nil)
+    end)
+end
+
+function ContractService:GetContractDeadline(character_id, contract_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_contract_id = normalize_contract_id(contract_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-invalid")
+        return true
+    end
+
+    return self.repository:GetContractById(normalized_contract_id, function(is_success, contract_row, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        if contract_row == nil then
+            callback(false, nil, "contract-not-found")
+            return
+        end
+
+        self:EnsureContractNotExpired(contract_row, function(is_deadline_success, resolved_row, is_expired, deadline_error)
+            if not is_deadline_success then
+                callback(false, nil, deadline_error or "database-error")
+                return
+            end
+
+            callback(true, resolved_row or contract_row, is_expired and "contract-expired" or nil)
+        end)
+    end)
+end
+
+function ContractService:ExpireContracts(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self.repository:MarkExpiredContracts(function(is_success, expired_count, expired_rows, error)
+        if not is_success then
+            callback(false, nil, nil, error or "database-error")
+            return
+        end
+
+        callback(true, expired_count or 0, expired_rows or {}, nil)
+    end)
 end
 
 function ContractService:CreateContract(character_id, contract_type, reward_money, description, callback)
@@ -684,6 +794,7 @@ function ContractService:CreateHaulContract(creator_character_id, item_key, quan
     local options = nil
     local normalized_source_route_key = nil
     local normalized_job_source = "manual"
+    local normalized_deadline_seconds = nil
 
     if type(options_or_callback) == "function" and callback == nil then
         callback = options_or_callback
@@ -693,6 +804,7 @@ function ContractService:CreateHaulContract(creator_character_id, item_key, quan
 
     normalized_source_route_key = normalize_route_key(options and options.source_route_key)
     normalized_job_source = normalize_job_source(options and options.job_source) or "manual"
+    normalized_deadline_seconds = normalize_deadline_seconds(options and options.deadline_seconds)
 
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -739,6 +851,11 @@ function ContractService:CreateHaulContract(creator_character_id, item_key, quan
 
     if normalized_source_route_key == nil and normalized_job_source ~= "manual" then
         callback(false, nil, "source-route-key-invalid")
+        return true
+    end
+
+    if options ~= nil and options.deadline_seconds ~= nil and normalized_deadline_seconds == nil then
+        callback(false, nil, "deadline-seconds-invalid")
         return true
     end
 
@@ -789,6 +906,7 @@ function ContractService:CreateHaulContract(creator_character_id, item_key, quan
                 pickup_status = "pending",
                 delivery_location_key = normalized_delivery_location_key,
                 requires_delivery_location = true,
+                deadline_seconds = normalized_deadline_seconds,
                 source_route_key = normalized_source_route_key,
                 job_source = normalized_job_source,
             }, function(is_success, contract_row, error)
@@ -863,6 +981,7 @@ function ContractService:CreateHaulContractFromRoute(creator_character_id, route
             {
                 source_route_key = route_template.key,
                 job_source = "route_template",
+                deadline_seconds = route_template.deadline_seconds,
             },
             function(is_create_success, contract_row, create_error)
                 if not is_create_success then
@@ -989,79 +1108,87 @@ function ContractService:TakeJobFromRoute(character_id, route_key, callback)
         return true
     end
 
-    return self.repository:ListContractsForCharacter(normalized_character_id, function(is_list_success, contract_rows, list_error)
-        local active_job_count = 0
-
-        if not is_list_success then
-            callback(false, nil, list_error or "database-error")
+    return self:ExpireContracts(function(is_expire_success, _, _, expire_error)
+        if not is_expire_success then
+            callback(false, nil, expire_error or "database-error")
             return
         end
 
-        for _, contract_row in ipairs(contract_rows or {}) do
-            if is_active_job_contract(contract_row, normalized_character_id) then
-                active_job_count = active_job_count + 1
-            end
-        end
+        self.repository:ListContractsForCharacter(normalized_character_id, function(is_list_success, contract_rows, list_error)
+            local active_job_count = 0
 
-        if active_job_count >= MAX_ACTIVE_JOB_CONTRACTS then
-            callback(false, nil, "active-job-limit-reached")
-            return
-        end
-
-        self:GetRouteTemplate(normalized_route_key, function(is_route_success, route_template, route_error)
-            if not is_route_success then
-                callback(false, nil, route_error or "database-error")
+            if not is_list_success then
+                callback(false, nil, list_error or "database-error")
                 return
             end
 
-            if route_template == nil then
-                callback(false, nil, "route-not-found")
+            for _, contract_row in ipairs(contract_rows or {}) do
+                if is_active_job_contract(contract_row, normalized_character_id) then
+                    active_job_count = active_job_count + 1
+                end
+            end
+
+            if active_job_count >= MAX_ACTIVE_JOB_CONTRACTS then
+                callback(false, nil, "active-job-limit-reached")
                 return
             end
 
-            if route_template.is_active ~= true then
-                callback(false, route_template, "route-inactive")
-                return
-            end
+            self:GetRouteTemplate(normalized_route_key, function(is_route_success, route_template, route_error)
+                if not is_route_success then
+                    callback(false, nil, route_error or "database-error")
+                    return
+                end
 
-            self:CreateHaulContract(
-                normalized_character_id,
-                route_template.item_key,
-                route_template.item_quantity,
-                route_template.reward_money,
-                route_template.pickup_location_key,
-                route_template.delivery_location_key,
-                build_route_contract_description(route_template),
-                {
-                    source_route_key = route_template.key,
-                    job_source = "job_board",
-                },
-                function(is_create_success, contract_row, create_error)
-                    if not is_create_success then
-                        callback(false, route_template, create_error or "contract-create-failed")
-                        return
-                    end
+                if route_template == nil then
+                    callback(false, nil, "route-not-found")
+                    return
+                end
 
-                    if contract_row == nil or normalize_positive_integer(contract_row.id) == nil then
-                        callback(false, route_template, "contract-create-failed")
-                        return
-                    end
+                if route_template.is_active ~= true then
+                    callback(false, route_template, "route-inactive")
+                    return
+                end
 
-                    self.repository:AcceptContract(contract_row.id, normalized_character_id, function(is_accept_success, accepted_row, accept_error)
-                        if not is_accept_success or accepted_row == nil then
-                            self.repository:CancelContract(contract_row.id, normalized_character_id, function()
-                                callback(false, contract_row, "contract-assign-failed")
-                            end)
+                self:CreateHaulContract(
+                    normalized_character_id,
+                    route_template.item_key,
+                    route_template.item_quantity,
+                    route_template.reward_money,
+                    route_template.pickup_location_key,
+                    route_template.delivery_location_key,
+                    build_route_contract_description(route_template),
+                    {
+                        source_route_key = route_template.key,
+                        job_source = "job_board",
+                        deadline_seconds = route_template.deadline_seconds,
+                    },
+                    function(is_create_success, contract_row, create_error)
+                        if not is_create_success then
+                            callback(false, route_template, create_error or "contract-create-failed")
                             return
                         end
 
-                        accepted_row.route_key = route_template.key
-                        accepted_row.route_name = route_template.name
+                        if contract_row == nil or normalize_positive_integer(contract_row.id) == nil then
+                            callback(false, route_template, "contract-create-failed")
+                            return
+                        end
 
-                        callback(true, accepted_row, nil)
-                    end)
-                end
-            )
+                        self.repository:AcceptContract(contract_row.id, normalized_character_id, function(is_accept_success, accepted_row, accept_error)
+                            if not is_accept_success or accepted_row == nil then
+                                self.repository:CancelContract(contract_row.id, normalized_character_id, function()
+                                    callback(false, contract_row, "contract-assign-failed")
+                                end)
+                                return
+                            end
+
+                            accepted_row.route_key = route_template.key
+                            accepted_row.route_name = route_template.name
+
+                            callback(true, accepted_row, nil)
+                        end)
+                    end
+                )
+            end)
         end)
     end)
 end
@@ -1283,29 +1410,43 @@ function ContractService:AcceptContract(character_id, contract_id, callback)
             return
         end
 
-        if contract_row.status ~= "open" then
-            callback(false, nil, "contract-not-available")
-            return
-        end
-
-        self.repository:AcceptContract(normalized_contract_id, normalized_character_id, function(is_accept_success, accepted_row, accept_error)
-            if not is_accept_success then
-                callback(false, nil, accept_error)
+        self:EnsureContractNotExpired(contract_row, function(is_deadline_success, resolved_row, is_expired, deadline_error)
+            if not is_deadline_success then
+                callback(false, nil, deadline_error or "database-error")
                 return
             end
 
-            if accepted_row == nil then
+            if is_expired then
+                callback(false, resolved_row or contract_row, "contract-expired")
+                return
+            end
+
+            contract_row = resolved_row or contract_row
+
+            if contract_row.status ~= "open" then
                 callback(false, nil, "contract-not-available")
                 return
             end
 
-            Console.Log(
-                "[gr_contracts][service] Contract accepted id=%s assignee_character_id=%s.",
-                tostring(accepted_row.id),
-                tostring(normalized_character_id)
-            )
+            self.repository:AcceptContract(normalized_contract_id, normalized_character_id, function(is_accept_success, accepted_row, accept_error)
+                if not is_accept_success then
+                    callback(false, nil, accept_error)
+                    return
+                end
 
-            callback(true, accepted_row, nil)
+                if accepted_row == nil then
+                    callback(false, nil, "contract-not-available")
+                    return
+                end
+
+                Console.Log(
+                    "[gr_contracts][service] Contract accepted id=%s assignee_character_id=%s.",
+                    tostring(accepted_row.id),
+                    tostring(normalized_character_id)
+                )
+
+                callback(true, accepted_row, nil)
+            end)
         end)
     end)
 end
@@ -1390,136 +1531,150 @@ function ContractService:PickupContract(character_id, player, contract_id, callb
             return
         end
 
-        if contract_row.status ~= "accepted"
-            or normalize_positive_integer(contract_row.assignee_character_id) ~= normalized_character_id
-        then
-            callback(false, contract_row, "pickup-contract-forbidden")
-            return
-        end
-
-        if contract_row.requires_pickup_location ~= true then
-            callback(false, contract_row, "pickup-not-required")
-            return
-        end
-
-        local pickup_status = normalize_pickup_status(contract_row.pickup_status)
-
-        if pickup_status ~= "pending" then
-            callback(false, contract_row, "pickup-already-completed")
-            return
-        end
-
-        local pickup_location_key = normalize_location_key(contract_row.pickup_location_key)
-        local required_item_key = normalize_item_key(contract_row.required_item_key)
-        local required_item_quantity = normalize_positive_integer(contract_row.required_item_quantity)
-        local inventory_bridge = resolve_inventory_bridge()
-
-        if pickup_location_key == nil then
-            callback(false, contract_row, "pickup-location-not-found")
-            return
-        end
-
-        if required_item_key == nil or required_item_quantity == nil then
-            callback(false, contract_row, "pickup-item-invalid")
-            return
-        end
-
-        if inventory_bridge == nil then
-            callback(false, contract_row, "inventory-unavailable")
-            return
-        end
-
-        self.repository:GetDeliveryLocation(pickup_location_key, function(is_location_success, pickup_location, location_error)
-            if not is_location_success then
-                callback(false, contract_row, location_error or "pickup-location-not-found")
+        self:EnsureContractNotExpired(contract_row, function(is_deadline_success, resolved_row, is_expired, deadline_error)
+            if not is_deadline_success then
+                callback(false, nil, deadline_error or "database-error")
                 return
             end
 
-            if pickup_location == nil then
+            if is_expired then
+                callback(false, resolved_row or contract_row, "contract-expired")
+                return
+            end
+
+            contract_row = resolved_row or contract_row
+
+            if contract_row.status ~= "accepted"
+                or normalize_positive_integer(contract_row.assignee_character_id) ~= normalized_character_id
+            then
+                callback(false, contract_row, "pickup-contract-forbidden")
+                return
+            end
+
+            if contract_row.requires_pickup_location ~= true then
+                callback(false, contract_row, "pickup-not-required")
+                return
+            end
+
+            local pickup_status = normalize_pickup_status(contract_row.pickup_status)
+
+            if pickup_status ~= "pending" then
+                callback(false, contract_row, "pickup-already-completed")
+                return
+            end
+
+            local pickup_location_key = normalize_location_key(contract_row.pickup_location_key)
+            local required_item_key = normalize_item_key(contract_row.required_item_key)
+            local required_item_quantity = normalize_positive_integer(contract_row.required_item_quantity)
+            local inventory_bridge = resolve_inventory_bridge()
+
+            if pickup_location_key == nil then
                 callback(false, contract_row, "pickup-location-not-found")
                 return
             end
 
-            local is_near_pickup, proximity_error = self:ValidateDeliveryLocationProximity(player, pickup_location)
+            if required_item_key == nil or required_item_quantity == nil then
+                callback(false, contract_row, "pickup-item-invalid")
+                return
+            end
 
-            if not is_near_pickup then
-                if proximity_error == "delivery-location-not-found" then
+            if inventory_bridge == nil then
+                callback(false, contract_row, "inventory-unavailable")
+                return
+            end
+
+            self.repository:GetDeliveryLocation(pickup_location_key, function(is_location_success, pickup_location, location_error)
+                if not is_location_success then
+                    callback(false, contract_row, location_error or "pickup-location-not-found")
+                    return
+                end
+
+                if pickup_location == nil then
                     callback(false, contract_row, "pickup-location-not-found")
                     return
                 end
 
-                if proximity_error == "delivery-location-inactive" then
-                    callback(false, contract_row, "pickup-location-inactive")
-                    return
-                end
+                local is_near_pickup, proximity_error = self:ValidateDeliveryLocationProximity(player, pickup_location)
 
-                if proximity_error == "delivery-location-position-missing" then
-                    callback(false, contract_row, "pickup-location-position-missing")
-                    return
-                end
-
-                if proximity_error == "too-far-from-delivery-location" then
-                    callback(false, contract_row, "too-far-from-pickup-location")
-                    return
-                end
-
-                callback(false, contract_row, proximity_error)
-                return
-            end
-
-            inventory_bridge.AddItem(normalized_character_id, required_item_key, required_item_quantity, {
-                source = "contract_pickup",
-                contract_id = normalized_contract_id,
-                pickup_location_key = pickup_location_key,
-            }, function(is_add_success, _, add_error)
-                if not is_add_success then
-                    Console.Log(
-                        "[gr_contracts][service] Contract pickup add item failed contract_id=%s assignee_character_id=%s item_key=%s quantity=%s reason=%s.",
-                        tostring(normalized_contract_id),
-                        tostring(normalized_character_id),
-                        tostring(required_item_key),
-                        tostring(required_item_quantity),
-                        tostring(add_error or "inventory-add-failed")
-                    )
-                    callback(false, contract_row, "inventory-unavailable")
-                    return
-                end
-
-                self.repository:MarkContractPickedUp(normalized_contract_id, function(is_mark_success, picked_up_row, mark_error)
-                    if not is_mark_success then
-                        inventory_bridge.RemoveItem(normalized_character_id, required_item_key, required_item_quantity, function(is_remove_success)
-                            if not is_remove_success then
-                                callback(false, contract_row, "inventory-compensation-failed")
-                                return
-                            end
-
-                            callback(false, contract_row, mark_error or "database-error")
-                        end)
+                if not is_near_pickup then
+                    if proximity_error == "delivery-location-not-found" then
+                        callback(false, contract_row, "pickup-location-not-found")
                         return
                     end
 
-                    if picked_up_row == nil then
-                        inventory_bridge.RemoveItem(normalized_character_id, required_item_key, required_item_quantity, function(is_remove_success)
-                            if not is_remove_success then
-                                callback(false, contract_row, "inventory-compensation-failed")
-                                return
-                            end
-
-                            callback(false, contract_row, "pickup-already-completed")
-                        end)
+                    if proximity_error == "delivery-location-inactive" then
+                        callback(false, contract_row, "pickup-location-inactive")
                         return
                     end
 
-                    Console.Log(
-                        "[gr_contracts][service] Contract cargo picked up id=%s assignee_character_id=%s pickup=%s item=%s quantity=%s.",
-                        tostring(picked_up_row.id),
-                        tostring(normalized_character_id),
-                        tostring(pickup_location_key),
-                        tostring(required_item_key),
-                        tostring(required_item_quantity)
-                    )
+                    if proximity_error == "delivery-location-position-missing" then
+                        callback(false, contract_row, "pickup-location-position-missing")
+                        return
+                    end
 
-                    callback(true, picked_up_row, nil)
+                    if proximity_error == "too-far-from-delivery-location" then
+                        callback(false, contract_row, "too-far-from-pickup-location")
+                        return
+                    end
+
+                    callback(false, contract_row, proximity_error)
+                    return
+                end
+
+                inventory_bridge.AddItem(normalized_character_id, required_item_key, required_item_quantity, {
+                    source = "contract_pickup",
+                    contract_id = normalized_contract_id,
+                    pickup_location_key = pickup_location_key,
+                }, function(is_add_success, _, add_error)
+                    if not is_add_success then
+                        Console.Log(
+                            "[gr_contracts][service] Contract pickup add item failed contract_id=%s assignee_character_id=%s item_key=%s quantity=%s reason=%s.",
+                            tostring(normalized_contract_id),
+                            tostring(normalized_character_id),
+                            tostring(required_item_key),
+                            tostring(required_item_quantity),
+                            tostring(add_error or "inventory-add-failed")
+                        )
+                        callback(false, contract_row, "inventory-unavailable")
+                        return
+                    end
+
+                    self.repository:MarkContractPickedUp(normalized_contract_id, function(is_mark_success, picked_up_row, mark_error)
+                        if not is_mark_success then
+                            inventory_bridge.RemoveItem(normalized_character_id, required_item_key, required_item_quantity, function(is_remove_success)
+                                if not is_remove_success then
+                                    callback(false, contract_row, "inventory-compensation-failed")
+                                    return
+                                end
+
+                                callback(false, contract_row, mark_error or "database-error")
+                            end)
+                            return
+                        end
+
+                        if picked_up_row == nil then
+                            inventory_bridge.RemoveItem(normalized_character_id, required_item_key, required_item_quantity, function(is_remove_success)
+                                if not is_remove_success then
+                                    callback(false, contract_row, "inventory-compensation-failed")
+                                    return
+                                end
+
+                                callback(false, contract_row, "pickup-already-completed")
+                            end)
+                            return
+                        end
+
+                        Console.Log(
+                            "[gr_contracts][service] Contract cargo picked up id=%s assignee_character_id=%s pickup=%s item=%s quantity=%s.",
+                            tostring(picked_up_row.id),
+                            tostring(normalized_character_id),
+                            tostring(pickup_location_key),
+                            tostring(required_item_key),
+                            tostring(required_item_quantity)
+                        )
+
+                        callback(true, picked_up_row, nil)
+                    end)
                 end)
             end)
         end)
@@ -1577,28 +1732,41 @@ function ContractService:CompleteContract(character_id, contract_id, player_or_c
             return
         end
 
-        if contract_row.status ~= "accepted"
-            or normalize_positive_integer(contract_row.assignee_character_id) ~= normalized_character_id
-        then
-            callback(false, nil, "contract-complete-forbidden")
-            return
-        end
+        self:EnsureContractNotExpired(contract_row, function(is_deadline_success, resolved_row, is_expired, deadline_error)
+            if not is_deadline_success then
+                callback(false, nil, deadline_error or "database-error")
+                return
+            end
 
-        local required_item_key = normalize_item_key(contract_row.required_item_key)
-        local required_item_quantity = normalize_positive_integer(contract_row.required_item_quantity)
-        local should_consume_required_items = contract_row.consume_required_items ~= false
-        local inventory_bridge = nil
-        local requires_pickup_location = contract_row.requires_pickup_location == true
-        local pickup_status = normalize_pickup_status(contract_row.pickup_status)
-        local delivery_location_key = normalize_location_key(contract_row.delivery_location_key)
-        local requires_delivery_location = contract_row.requires_delivery_location == true
+            if is_expired then
+                callback(false, resolved_row or contract_row, "contract-expired")
+                return
+            end
 
-        if requires_pickup_location and pickup_status ~= "picked_up" then
-            callback(false, contract_row, "pickup-not-completed")
-            return
-        end
+            contract_row = resolved_row or contract_row
 
-        local function continue_after_requirements()
+            if contract_row.status ~= "accepted"
+                or normalize_positive_integer(contract_row.assignee_character_id) ~= normalized_character_id
+            then
+                callback(false, nil, "contract-complete-forbidden")
+                return
+            end
+
+            local required_item_key = normalize_item_key(contract_row.required_item_key)
+            local required_item_quantity = normalize_positive_integer(contract_row.required_item_quantity)
+            local should_consume_required_items = contract_row.consume_required_items ~= false
+            local inventory_bridge = nil
+            local requires_pickup_location = contract_row.requires_pickup_location == true
+            local pickup_status = normalize_pickup_status(contract_row.pickup_status)
+            local delivery_location_key = normalize_location_key(contract_row.delivery_location_key)
+            local requires_delivery_location = contract_row.requires_delivery_location == true
+
+            if requires_pickup_location and pickup_status ~= "picked_up" then
+                callback(false, contract_row, "pickup-not-completed")
+                return
+            end
+
+            local function continue_after_requirements()
             self.repository:CompleteContract(normalized_contract_id, normalized_character_id, function(is_complete_success, completed_row, complete_error)
                 if not is_complete_success then
                     if required_item_key ~= nil and required_item_quantity ~= nil and should_consume_required_items and inventory_bridge ~= nil then
@@ -1781,7 +1949,7 @@ function ContractService:CompleteContract(character_id, contract_id, player_or_c
             end)
         end
 
-        local function continue_after_delivery_location()
+            local function continue_after_delivery_location()
             if required_item_key == nil or required_item_quantity == nil or required_item_quantity < 1 or not should_consume_required_items then
                 continue_after_requirements()
                 return
@@ -1839,35 +2007,36 @@ function ContractService:CompleteContract(character_id, contract_id, player_or_c
             end)
         end
 
-        if not requires_delivery_location then
-            continue_after_delivery_location()
-            return
-        end
-
-        if delivery_location_key == nil then
-            callback(false, contract_row, "delivery-location-not-found")
-            return
-        end
-
-        self.repository:GetDeliveryLocation(delivery_location_key, function(is_location_success, delivery_location, location_error)
-            if not is_location_success then
-                callback(false, contract_row, location_error or "delivery-location-not-found")
+            if not requires_delivery_location then
+                continue_after_delivery_location()
                 return
             end
 
-            if delivery_location == nil then
+            if delivery_location_key == nil then
                 callback(false, contract_row, "delivery-location-not-found")
                 return
             end
 
-            local is_near_delivery_location, proximity_error = self:ValidateDeliveryLocationProximity(player, delivery_location)
+            self.repository:GetDeliveryLocation(delivery_location_key, function(is_location_success, delivery_location, location_error)
+                if not is_location_success then
+                    callback(false, contract_row, location_error or "delivery-location-not-found")
+                    return
+                end
 
-            if not is_near_delivery_location then
-                callback(false, contract_row, proximity_error)
-                return
-            end
+                if delivery_location == nil then
+                    callback(false, contract_row, "delivery-location-not-found")
+                    return
+                end
 
-            continue_after_delivery_location()
+                local is_near_delivery_location, proximity_error = self:ValidateDeliveryLocationProximity(player, delivery_location)
+
+                if not is_near_delivery_location then
+                    callback(false, contract_row, proximity_error)
+                    return
+                end
+
+                continue_after_delivery_location()
+            end)
         end)
     end)
 end

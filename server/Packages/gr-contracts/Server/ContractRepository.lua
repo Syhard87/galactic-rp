@@ -21,6 +21,9 @@ local CONTRACT_SELECT_COLUMNS = [[
         picked_up_at,
         delivery_location_key,
         requires_delivery_location,
+        deadline_seconds,
+        expires_at,
+        expired_at,
         source_route_key,
         job_source,
         status,
@@ -83,6 +86,7 @@ local SELECT_ROUTE_TEMPLATES_QUERY = [[
         reward_money,
         pickup_location_key,
         delivery_location_key,
+        deadline_seconds,
         is_active,
         created_at,
         updated_at
@@ -101,6 +105,7 @@ local SELECT_ROUTE_TEMPLATE_BY_KEY_QUERY = [[
         reward_money,
         pickup_location_key,
         delivery_location_key,
+        deadline_seconds,
         is_active,
         created_at,
         updated_at
@@ -148,6 +153,8 @@ local INSERT_CONTRACT_QUERY = [[
         pickup_status,
         delivery_location_key,
         requires_delivery_location,
+        deadline_seconds,
+        expires_at,
         source_route_key,
         job_source,
         status,
@@ -168,9 +175,14 @@ local INSERT_CONTRACT_QUERY = [[
         :11,
         :12,
         :13,
+        CASE
+            WHEN :13 IS NULL THEN NULL
+            ELSE NOW() + (:13 * INTERVAL '1 second')
+        END,
         :14,
+        :15,
         'open',
-        :15
+        :16
     )
     RETURNING
 ]] .. CONTRACT_SELECT_COLUMNS .. [[
@@ -268,6 +280,33 @@ local MARK_CONTRACT_CANCELLED_QUERY = [[
     WHERE id = :0
       AND status <> 'completed'
       AND status <> 'cancelled'
+      AND COALESCE(payment_status, 'pending') <> 'paid'
+    RETURNING
+]] .. CONTRACT_SELECT_COLUMNS .. [[
+]]
+
+local MARK_CONTRACT_EXPIRED_QUERY = [[
+    UPDATE contracts
+    SET
+        status = 'expired',
+        expired_at = NOW()
+    WHERE id = :0
+      AND status IN ('open', 'accepted')
+      AND expires_at IS NOT NULL
+      AND expires_at < NOW()
+      AND COALESCE(payment_status, 'pending') <> 'paid'
+    RETURNING
+]] .. CONTRACT_SELECT_COLUMNS .. [[
+]]
+
+local MARK_EXPIRED_CONTRACTS_QUERY = [[
+    UPDATE contracts
+    SET
+        status = 'expired',
+        expired_at = NOW()
+    WHERE status IN ('open', 'accepted')
+      AND expires_at IS NOT NULL
+      AND expires_at < NOW()
       AND COALESCE(payment_status, 'pending') <> 'paid'
     RETURNING
 ]] .. CONTRACT_SELECT_COLUMNS .. [[
@@ -453,6 +492,7 @@ local function normalize_contract_status(status)
         and normalized_status ~= "accepted"
         and normalized_status ~= "completed"
         and normalized_status ~= "cancelled"
+        and normalized_status ~= "expired"
     then
         return "open"
     end
@@ -552,6 +592,9 @@ local function normalize_contract_row(row)
         picked_up_at = row.picked_up_at,
         delivery_location_key = normalize_location_key(row.delivery_location_key),
         requires_delivery_location = normalize_boolean(row.requires_delivery_location, false),
+        deadline_seconds = normalize_positive_integer(row.deadline_seconds),
+        expires_at = row.expires_at,
+        expired_at = row.expired_at,
         source_route_key = normalize_route_key(row.source_route_key),
         job_source = normalize_job_source(row.job_source),
         status = normalize_contract_status(row.status),
@@ -623,6 +666,7 @@ local function normalize_route_template_row(row)
         reward_money = normalize_non_negative_integer(row.reward_money, 0),
         pickup_location_key = normalize_location_key(row.pickup_location_key),
         delivery_location_key = normalize_location_key(row.delivery_location_key),
+        deadline_seconds = normalize_positive_integer(row.deadline_seconds),
         is_active = normalize_boolean(row.is_active, true),
         created_at = row.created_at,
         updated_at = row.updated_at,
@@ -726,6 +770,7 @@ function ContractRepository:CreateContract(contract, callback)
     local normalized_pickup_status = normalize_pickup_status(contract and contract.pickup_status)
     local normalized_delivery_location_key = normalize_location_key(contract and contract.delivery_location_key)
     local normalized_requires_delivery_location = normalize_boolean(contract and contract.requires_delivery_location, false)
+    local normalized_deadline_seconds = normalize_positive_integer(contract and contract.deadline_seconds)
     local normalized_source_route_key = normalize_route_key(contract and contract.source_route_key)
     local normalized_job_source = normalize_job_source(contract and contract.job_source)
     local normalized_deadline_at = contract ~= nil and contract.deadline_at or nil
@@ -779,6 +824,11 @@ function ContractRepository:CreateContract(contract, callback)
         return true
     end
 
+    if contract ~= nil and contract.deadline_seconds ~= nil and normalized_deadline_seconds == nil then
+        callback(false, nil, "deadline-seconds-invalid")
+        return true
+    end
+
     return self:Connect(function(is_connected, database_or_error, error)
         if not is_connected then
             callback(false, nil, error)
@@ -811,6 +861,7 @@ function ContractRepository:CreateContract(contract, callback)
             normalized_pickup_status,
             normalized_delivery_location_key,
             normalized_requires_delivery_location,
+            normalized_deadline_seconds,
             normalized_source_route_key,
             normalized_job_source,
             normalized_deadline_at
@@ -1283,6 +1334,63 @@ function ContractRepository:MarkContractCancelled(contract_id, character_id, rea
             callback(true, contract_rows[1], nil)
         end, normalized_contract_id, normalized_character_id, normalized_reason)
     end, "contracts-mark-cancelled")
+end
+
+function ContractRepository:MarkContractExpired(contract_id, callback)
+    local normalized_contract_id = normalize_positive_integer(contract_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(MARK_CONTRACT_EXPIRED_QUERY, function(rows, update_error)
+            local contract_rows = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            contract_rows = normalize_rows(rows)
+            callback(true, contract_rows[1], nil)
+        end, normalized_contract_id)
+    end, "contracts-mark-expired")
+end
+
+function ContractRepository:MarkExpiredContracts(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(MARK_EXPIRED_CONTRACTS_QUERY, function(rows, update_error)
+            local contract_rows = nil
+
+            if update_error ~= nil then
+                callback(false, nil, nil, update_error)
+                return
+            end
+
+            contract_rows = normalize_rows(rows)
+            callback(true, #contract_rows, contract_rows, nil)
+        end)
+    end, "contracts-mark-expired-batch")
 end
 
 function ContractRepository:MarkContractPayment(contract_id, payment_status, callback)
