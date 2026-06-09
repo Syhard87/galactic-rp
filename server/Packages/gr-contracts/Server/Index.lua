@@ -365,6 +365,16 @@ local function format_route_requirements_preview(route_template)
     return table.concat(preview_parts, " ")
 end
 
+local function format_route_requirements_available_value(route_template)
+    local requirements_preview = format_route_requirements_preview(route_template)
+
+    if requirements_preview == nil then
+        return "aucun"
+    end
+
+    return requirements_preview
+end
+
 local function build_route_requirements_message(route_template)
     local required_skill_key = trim_string(route_template and route_template.required_skill_key)
     local required_skill_level = normalize_non_negative_integer(route_template and route_template.required_skill_level) or 0
@@ -487,6 +497,37 @@ local function build_job_board_line(route_template)
         deadline_value,
         reward_preview,
         requirements_preview
+    )
+end
+
+local function build_available_job_line(availability_result)
+    local route_template = availability_result and availability_result.route or {}
+
+    return string.format(
+        "- %s item=%s x%s reward=%s pickup=%s destination=%s req=%s",
+        tostring(route_template.key or "inconnue"),
+        tostring(route_template.item_key or "inconnu"),
+        tostring(route_template.item_quantity or "?"),
+        tostring(route_template.reward_money or 0),
+        tostring(route_template.pickup_location_key or "aucun"),
+        tostring(route_template.delivery_location_key or "aucune"),
+        tostring(format_route_requirements_available_value(route_template))
+    )
+end
+
+local function build_locked_job_line(availability_result)
+    local route_template = availability_result and availability_result.route or {}
+    local reasons = type(availability_result) == "table" and availability_result.reasons or nil
+    local reason_text = "raison indisponible"
+
+    if type(reasons) == "table" and #reasons > 0 then
+        reason_text = table.concat(reasons, ", ")
+    end
+
+    return string.format(
+        "- %s bloque : %s",
+        tostring(route_template.key or "inconnue"),
+        tostring(reason_text)
     )
 end
 
@@ -910,6 +951,22 @@ GRContractsBridge.GetJobRequirements = function(character_id, route_key, callbac
     return GRContracts.Server.Service:GetJobRequirements(character_id, route_key, callback)
 end
 
+GRContractsBridge.GetAvailableJobs = function(character_id, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetAvailableJobs(character_id, callback)
+end
+
+GRContractsBridge.GetLockedJobs = function(character_id, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetLockedJobs(character_id, callback)
+end
+
 GRContractsBridge.TakeJobFromRoute = function(character_id, route_key, callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -1010,6 +1067,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "contractrouteinfo"
             and command_name ~= "jobboard"
             and command_name ~= "jobinfo"
+            and command_name ~= "availablejobs"
+            and command_name ~= "lockedjobs"
             and command_name ~= "jobrequirements"
             and command_name ~= "createcontract"
             and command_name ~= "createdeliverycontract"
@@ -1118,6 +1177,50 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 for _, route_template in ipairs(route_templates) do
                     Chat.SendMessage(player, build_job_board_line(route_template))
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "availablejobs" then
+            GRContracts.Server.Service:GetAvailableJobs(active_character_id, function(is_success, availability_rows, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Missions indisponibles.")
+                    return
+                end
+
+                if type(availability_rows) ~= "table" or #availability_rows == 0 then
+                    Chat.SendMessage(player, "Aucune mission disponible pour votre personnage.")
+                    return
+                end
+
+                Chat.SendMessage(player, "Missions disponibles :")
+
+                for _, availability_result in ipairs(availability_rows) do
+                    Chat.SendMessage(player, build_available_job_line(availability_result))
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "lockedjobs" then
+            GRContracts.Server.Service:GetLockedJobs(active_character_id, function(is_success, availability_rows, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Missions indisponibles.")
+                    return
+                end
+
+                if type(availability_rows) ~= "table" or #availability_rows == 0 then
+                    Chat.SendMessage(player, "Aucune mission bloquee pour votre personnage.")
+                    return
+                end
+
+                Chat.SendMessage(player, "Missions bloquees :")
+
+                for _, availability_result in ipairs(availability_rows) do
+                    Chat.SendMessage(player, build_locked_job_line(availability_result))
                 end
             end)
 

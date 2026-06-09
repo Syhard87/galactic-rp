@@ -592,6 +592,66 @@ local function route_has_job_requirements(route_template)
     return false
 end
 
+local function trim_trailing_period(value)
+    local normalized_value = trim_string(value)
+
+    if normalized_value == nil then
+        return nil
+    end
+
+    return normalized_value:gsub("%.$", "")
+end
+
+local function normalize_route_availability_reason(reason)
+    local normalized_reason = trim_trailing_period(reason)
+
+    if normalized_reason == nil then
+        return nil
+    end
+
+    if normalized_reason == "skill-unavailable" or normalized_reason == "skills-service-missing" then
+        return "service skill indisponible"
+    end
+
+    if normalized_reason == "reputation-unavailable" or normalized_reason == "reputation-service-missing" then
+        return "service reputation indisponible"
+    end
+
+    if normalized_reason == "pickup-location-not-found" or normalized_reason == "pickup-location-key-invalid" then
+        return "pickup introuvable"
+    end
+
+    if normalized_reason == "pickup-location-inactive" then
+        return "pickup inactif"
+    end
+
+    if normalized_reason == "delivery-location-not-found" or normalized_reason == "delivery-location-key-invalid" then
+        return "destination introuvable"
+    end
+
+    if normalized_reason == "delivery-location-inactive" then
+        return "destination inactive"
+    end
+
+    if normalized_reason == "route-inactive" then
+        return "route inactive"
+    end
+
+    if normalized_reason == "active-job-limit-reached" then
+        return "limite de jobs actifs atteinte"
+    end
+
+    if normalized_reason == "skill-service-unavailable" then
+        return "service skill indisponible"
+    end
+
+    if normalized_reason == "reputation-service-unavailable" then
+        return "service reputation indisponible"
+    end
+
+    return normalized_reason
+end
+
 function ContractService.Create(repository)
     local self = setmetatable({}, ContractService)
 
@@ -1282,6 +1342,271 @@ function ContractService:GetJobRequirements(character_id, route_key, callback)
         end
 
         self:CheckJobRequirements(normalized_character_id, route_template, callback)
+    end)
+end
+
+function ContractService:EvaluateJobAvailability(character_id, route_template, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local route_key = normalize_route_key(route_template and route_template.key)
+    local result = {
+        route = route_template,
+        is_available = false,
+        reasons = {},
+        missing_requirements = {},
+        skill_current_level = nil,
+        reputation_current_value = nil,
+        active_job_count = 0,
+        has_active_job_slot = false,
+    }
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, result, "invalid-character")
+        return true
+    end
+
+    if type(route_template) ~= "table" or route_key == nil then
+        callback(false, result, "route-not-found")
+        return true
+    end
+
+    result.route = route_template
+
+    if route_template.is_active ~= true then
+        result.reasons[#result.reasons + 1] = normalize_route_availability_reason("route-inactive")
+        callback(true, result, nil)
+        return true
+    end
+
+    local function evaluate_delivery_location()
+        local delivery_location_key = normalize_location_key(route_template.delivery_location_key)
+
+        if delivery_location_key == nil then
+            result.reasons[#result.reasons + 1] = normalize_route_availability_reason("delivery-location-key-invalid")
+            callback(true, result, nil)
+            return
+        end
+
+        self.repository:GetDeliveryLocation(delivery_location_key, function(is_success, delivery_location, error)
+            if not is_success then
+                result.reasons[#result.reasons + 1] = normalize_route_availability_reason(error or "delivery-location-not-found")
+                callback(true, result, nil)
+                return
+            end
+
+            if delivery_location == nil then
+                result.reasons[#result.reasons + 1] = normalize_route_availability_reason("delivery-location-not-found")
+                callback(true, result, nil)
+                return
+            end
+
+            if delivery_location.is_active ~= true then
+                result.reasons[#result.reasons + 1] = normalize_route_availability_reason("delivery-location-inactive")
+                callback(true, result, nil)
+                return
+            end
+
+            result.is_available = #result.reasons == 0
+            callback(true, result, nil)
+        end)
+    end
+
+    local function evaluate_pickup_location()
+        local pickup_location_key = normalize_location_key(route_template.pickup_location_key)
+
+        if pickup_location_key == nil then
+            result.reasons[#result.reasons + 1] = normalize_route_availability_reason("pickup-location-key-invalid")
+            callback(true, result, nil)
+            return
+        end
+
+        self.repository:GetDeliveryLocation(pickup_location_key, function(is_success, pickup_location, error)
+            if not is_success then
+                result.reasons[#result.reasons + 1] = normalize_route_availability_reason(error or "pickup-location-not-found")
+                callback(true, result, nil)
+                return
+            end
+
+            if pickup_location == nil then
+                result.reasons[#result.reasons + 1] = normalize_route_availability_reason("pickup-location-not-found")
+                callback(true, result, nil)
+                return
+            end
+
+            if pickup_location.is_active ~= true then
+                result.reasons[#result.reasons + 1] = normalize_route_availability_reason("pickup-location-inactive")
+                callback(true, result, nil)
+                return
+            end
+
+            evaluate_delivery_location()
+        end)
+    end
+
+    local function evaluate_requirements()
+        self:CheckJobRequirements(normalized_character_id, route_template, function(is_requirements_success, requirements_result, requirements_error)
+            if type(requirements_result) == "table" then
+                result.missing_requirements = requirements_result.missing_requirements or {}
+                result.skill_current_level = requirements_result.skill_current_level
+                result.reputation_current_value = requirements_result.reputation_current_value
+            end
+
+            if not is_requirements_success then
+                if requirements_error == "requirements-not-met" then
+                    for _, requirement_message in ipairs(result.missing_requirements) do
+                        local normalized_reason = normalize_route_availability_reason(requirement_message)
+
+                        if normalized_reason ~= nil then
+                            result.reasons[#result.reasons + 1] = normalized_reason
+                        end
+                    end
+                else
+                    result.reasons[#result.reasons + 1] = normalize_route_availability_reason(requirements_error)
+                end
+            end
+
+            evaluate_pickup_location()
+        end)
+    end
+
+    return self.repository:ListContractsForCharacter(normalized_character_id, function(is_list_success, contract_rows, list_error)
+        if not is_list_success then
+            callback(false, nil, list_error or "database-error")
+            return
+        end
+
+        for _, contract_row in ipairs(contract_rows or {}) do
+            if is_active_job_contract(contract_row, normalized_character_id) then
+                result.active_job_count = result.active_job_count + 1
+            end
+        end
+
+        result.has_active_job_slot = result.active_job_count < MAX_ACTIVE_JOB_CONTRACTS
+
+        if not result.has_active_job_slot then
+            result.reasons[#result.reasons + 1] = normalize_route_availability_reason("active-job-limit-reached")
+        end
+
+        evaluate_requirements()
+    end)
+end
+
+function ContractService:GetAvailableJobs(character_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "invalid-character")
+        return true
+    end
+
+    return self:ListRouteTemplates(function(is_success, route_templates, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        local available_routes = {}
+        local index = 1
+
+        local function finish()
+            callback(true, available_routes, nil)
+        end
+
+        local function process_next()
+            if index > #(route_templates or {}) then
+                finish()
+                return
+            end
+
+            local route_template = route_templates[index]
+            index = index + 1
+
+            self:EvaluateJobAvailability(normalized_character_id, route_template, function(is_evaluation_success, availability_result, evaluation_error)
+                if not is_evaluation_success then
+                    callback(false, nil, evaluation_error or "database-error")
+                    return
+                end
+
+                if availability_result ~= nil and availability_result.is_available == true then
+                    available_routes[#available_routes + 1] = availability_result
+                end
+
+                process_next()
+            end)
+        end
+
+        process_next()
+    end)
+end
+
+function ContractService:GetLockedJobs(character_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "invalid-character")
+        return true
+    end
+
+    return self:ListRouteTemplates(function(is_success, route_templates, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        local locked_routes = {}
+        local index = 1
+
+        local function finish()
+            callback(true, locked_routes, nil)
+        end
+
+        local function process_next()
+            if index > #(route_templates or {}) then
+                finish()
+                return
+            end
+
+            local route_template = route_templates[index]
+            index = index + 1
+
+            self:EvaluateJobAvailability(normalized_character_id, route_template, function(is_evaluation_success, availability_result, evaluation_error)
+                if not is_evaluation_success then
+                    callback(false, nil, evaluation_error or "database-error")
+                    return
+                end
+
+                if availability_result ~= nil and availability_result.is_available ~= true then
+                    locked_routes[#locked_routes + 1] = availability_result
+                end
+
+                process_next()
+            end)
+        end
+
+        process_next()
     end)
 end
 
