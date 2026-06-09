@@ -311,7 +311,11 @@ local function normalize_route_key(route_key)
         return nil
     end
 
-    if normalized_route_key:match("^[a-z0-9_]+$") == nil then
+    if #normalized_route_key > 100 then
+        return nil
+    end
+
+    if normalized_route_key:match("^[a-z0-9_-]+$") == nil then
         return nil
     end
 
@@ -2535,6 +2539,160 @@ function ContractService:GetRouteTemplate(route_key, callback)
     end
 
     return self.repository:GetRouteTemplate(normalized_route_key, function(is_success, route_template, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        if route_template == nil then
+            callback(false, nil, "route-not-found")
+            return
+        end
+
+        callback(true, route_template, nil)
+    end)
+end
+
+function ContractService:CreateRouteTemplate(route_key, item_key, quantity, reward_money, pickup_location_key, delivery_location_key, description, callback)
+    local normalized_route_key = normalize_route_key(route_key)
+    local normalized_item_key = normalize_item_key(item_key)
+    local normalized_quantity = normalize_positive_integer(quantity)
+    local normalized_reward_money = normalize_reward_money(reward_money)
+    local normalized_pickup_location_key = normalize_location_key(pickup_location_key)
+    local normalized_delivery_location_key = normalize_location_key(delivery_location_key)
+    local normalized_description = normalize_description(description)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "invalid-route-key")
+        return true
+    end
+
+    if normalized_item_key == nil then
+        callback(false, nil, "invalid-item-key")
+        return true
+    end
+
+    if normalized_quantity == nil or normalized_quantity > MAX_DELIVERY_QUANTITY then
+        callback(false, nil, "invalid-quantity")
+        return true
+    end
+
+    if normalized_reward_money == nil then
+        callback(false, nil, "invalid-reward")
+        return true
+    end
+
+    if normalized_pickup_location_key == nil then
+        callback(false, nil, "invalid-pickup-location")
+        return true
+    end
+
+    if normalized_delivery_location_key == nil then
+        callback(false, nil, "invalid-delivery-location")
+        return true
+    end
+
+    if normalized_description == nil then
+        callback(false, nil, "invalid-description")
+        return true
+    end
+
+    return self:GetRouteTemplate(normalized_route_key, function(is_route_success, existing_route_template, route_error)
+        if is_route_success and existing_route_template ~= nil then
+            callback(false, existing_route_template, "route-already-exists")
+            return
+        end
+
+        if not is_route_success and route_error ~= "route-not-found" then
+            callback(false, nil, route_error or "database-error")
+            return
+        end
+
+        self.repository:GetDeliveryLocation(normalized_pickup_location_key, function(is_pickup_success, pickup_location, pickup_error)
+            if not is_pickup_success then
+                callback(false, nil, pickup_error or "invalid-pickup-location")
+                return
+            end
+
+            if pickup_location == nil or pickup_location.is_active ~= true then
+                callback(false, nil, "invalid-pickup-location")
+                return
+            end
+
+            self.repository:GetDeliveryLocation(normalized_delivery_location_key, function(is_delivery_success, delivery_location, delivery_error)
+                if not is_delivery_success then
+                    callback(false, nil, delivery_error or "invalid-delivery-location")
+                    return
+                end
+
+                if delivery_location == nil or delivery_location.is_active ~= true then
+                    callback(false, nil, "invalid-delivery-location")
+                    return
+                end
+
+                self.repository:CreateRouteTemplate({
+                    key = normalized_route_key,
+                    name = normalized_route_key,
+                    description = normalized_description,
+                    item_key = normalized_item_key,
+                    item_quantity = normalized_quantity,
+                    reward_money = normalized_reward_money,
+                    pickup_location_key = normalized_pickup_location_key,
+                    delivery_location_key = normalized_delivery_location_key,
+                }, function(is_create_success, route_template, create_error)
+                    if not is_create_success then
+                        if create_error == "route-already-exists" then
+                            callback(false, nil, "route-already-exists")
+                            return
+                        end
+
+                        callback(false, nil, create_error or "database-error")
+                        return
+                    end
+
+                    if route_template == nil then
+                        callback(false, nil, "database-error")
+                        return
+                    end
+
+                    callback(true, route_template, nil)
+                end)
+            end)
+        end)
+    end)
+end
+
+function ContractService:SetRouteDescription(route_key, description, callback)
+    local normalized_route_key = normalize_route_key(route_key)
+    local normalized_description = normalize_description(description)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "invalid-route-key")
+        return true
+    end
+
+    if normalized_description == nil then
+        callback(false, nil, "invalid-description")
+        return true
+    end
+
+    return self.repository:UpdateRouteDescription(normalized_route_key, normalized_description, function(is_success, route_template, error)
         if not is_success then
             callback(false, nil, error or "database-error")
             return

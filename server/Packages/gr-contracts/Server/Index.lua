@@ -1049,6 +1049,31 @@ GRContractsBridge.ListAllRouteTemplates = function(callback)
     return GRContracts.Server.Service:ListAllRouteTemplates(callback)
 end
 
+GRContractsBridge.CreateRouteTemplate = function(route_key, item_key, quantity, reward_money, pickup_location_key, delivery_location_key, description, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:CreateRouteTemplate(
+        route_key,
+        item_key,
+        quantity,
+        reward_money,
+        pickup_location_key,
+        delivery_location_key,
+        description,
+        callback
+    )
+end
+
+GRContractsBridge.SetRouteDescription = function(route_key, description, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:SetRouteDescription(route_key, description, callback)
+end
+
 GRContractsBridge.GetRouteTemplate = function(route_key, callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -1259,7 +1284,9 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "mycontracts"
             and command_name ~= "contractroutes"
             and command_name ~= "allcontractroutes"
+            and command_name ~= "createroute"
             and command_name ~= "contractrouteinfo"
+            and command_name ~= "setroutedescription"
             and command_name ~= "jobboard"
             and command_name ~= "jobinfo"
             and command_name ~= "availablejobs"
@@ -1382,6 +1409,93 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     Chat.SendMessage(player, build_route_admin_line(route_template))
                 end
             end)
+
+            return false
+        end
+
+        if command_name == "createroute" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /createroute <route_key> <item_key> <quantity> <reward_money> <pickup_location_key> <delivery_location_key> <description>")
+                return false
+            end
+
+            local route_key, item_key, quantity_text, reward_money_text, pickup_location_key, delivery_location_key, description =
+                payload:match("^(%S+)%s+(%S+)%s+(%S+)%s+([+-]?%d+)%s+(%S+)%s+(%S+)%s+(.+)$")
+
+            if route_key == nil then
+                Chat.SendMessage(player, "Usage : /createroute <route_key> <item_key> <quantity> <reward_money> <pickup_location_key> <delivery_location_key> <description>")
+                return false
+            end
+
+            GRContracts.Server.Service:CreateRouteTemplate(
+                route_key,
+                item_key,
+                quantity_text,
+                reward_money_text,
+                pickup_location_key,
+                delivery_location_key,
+                description,
+                function(is_success, route_template, error)
+                    if not is_success then
+                        if error == "invalid-route-key" then
+                            Chat.SendMessage(player, "Creation route impossible : route_key invalide.")
+                            return
+                        end
+
+                        if error == "route-already-exists" then
+                            Chat.SendMessage(player, "Creation route impossible : route deja existante.")
+                            return
+                        end
+
+                        if error == "invalid-item-key" then
+                            Chat.SendMessage(player, "Creation route impossible : item invalide.")
+                            return
+                        end
+
+                        if error == "invalid-quantity" then
+                            Chat.SendMessage(player, "Creation route impossible : quantite invalide.")
+                            return
+                        end
+
+                        if error == "invalid-reward" then
+                            Chat.SendMessage(player, "Creation route impossible : reward invalide.")
+                            return
+                        end
+
+                        if error == "invalid-pickup-location" then
+                            Chat.SendMessage(player, "Creation route impossible : pickup introuvable.")
+                            return
+                        end
+
+                        if error == "invalid-delivery-location" then
+                            Chat.SendMessage(player, "Creation route impossible : destination introuvable.")
+                            return
+                        end
+
+                        if error == "invalid-description" then
+                            Chat.SendMessage(player, "Creation route impossible : description invalide.")
+                            return
+                        end
+
+                        Chat.SendMessage(player, "Creation route impossible.")
+                        return
+                    end
+
+                    Chat.SendMessage(
+                        player,
+                        string.format(
+                            "Route creee : %s item=%s x%s reward=%s pickup=%s destination=%s active=%s.",
+                            tostring(route_template.key),
+                            tostring(route_template.item_key or "inconnu"),
+                            tostring(route_template.item_quantity or "?"),
+                            tostring(route_template.reward_money or 0),
+                            tostring(route_template.pickup_location_key or "aucun"),
+                            tostring(route_template.delivery_location_key or "aucune"),
+                            tostring(route_template.is_active == true)
+                        )
+                    )
+                end
+            )
 
             return false
         end
@@ -1534,6 +1648,41 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 for _, contract_row in ipairs(history_rows) do
                     Chat.SendMessage(player, build_job_history_line(contract_row))
                 end
+            end)
+
+            return false
+        end
+
+        if command_name == "setroutedescription" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /setroutedescription <route_key> <description>")
+                return false
+            end
+
+            local route_key, description = payload:match("^(%S+)%s+(.+)$")
+
+            if route_key == nil or description == nil then
+                Chat.SendMessage(player, "Usage : /setroutedescription <route_key> <description>")
+                return false
+            end
+
+            GRContracts.Server.Service:SetRouteDescription(route_key, description, function(is_success, route_template, error)
+                if not is_success then
+                    if error == "route-not-found" or error == "invalid-route-key" then
+                        Chat.SendMessage(player, "Route introuvable.")
+                        return
+                    end
+
+                    if error == "invalid-description" then
+                        Chat.SendMessage(player, "Description invalide.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Route indisponible.")
+                    return
+                end
+
+                Chat.SendMessage(player, string.format("Route %s description mise a jour.", tostring(route_template.key)))
             end)
 
             return false
