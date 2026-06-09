@@ -8,6 +8,7 @@ local MAX_REWARD_MONEY = 1000000
 local MAX_DELIVERY_QUANTITY = 1000
 local DEFAULT_DELIVERY_LOCATION_RADIUS = 500
 local MAX_DELIVERY_LOCATION_RADIUS = 5000
+local MAX_CONTRACT_LOCATION_RADIUS = 100000
 local MAX_ACTIVE_JOB_CONTRACTS = 3
 local DEFAULT_JOB_HISTORY_LIMIT = 5
 local MAX_JOB_HISTORY_LIMIT = 20
@@ -297,11 +298,29 @@ local function normalize_location_key(location_key)
         return nil
     end
 
-    if normalized_location_key:match("^[a-z0-9_]+$") == nil then
+    if #normalized_location_key > 100 then
+        return nil
+    end
+
+    if normalized_location_key:match("^[a-z0-9_-]+$") == nil then
         return nil
     end
 
     return string.lower(normalized_location_key)
+end
+
+local function normalize_location_name(name)
+    local normalized_name = trim_string(name)
+
+    if normalized_name == nil then
+        return nil
+    end
+
+    if #normalized_name > 150 then
+        return nil
+    end
+
+    return normalized_name
 end
 
 local function normalize_route_key(route_key)
@@ -2595,6 +2614,18 @@ function ContractService:ListDeliveryLocations(callback)
     return self.repository:ListDeliveryLocations(callback)
 end
 
+function ContractService:ListAllContractLocations(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self.repository:ListAllContractLocations(callback)
+end
+
 function ContractService:ListRouteTemplates(callback)
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -3425,6 +3456,177 @@ function ContractService:GetDeliveryLocationInfo(location_key, callback)
     end
 
     return self.repository:GetDeliveryLocation(normalized_location_key, function(is_success, delivery_location, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        if delivery_location == nil then
+            callback(false, nil, "location-not-found")
+            return
+        end
+
+        callback(true, delivery_location, nil)
+    end)
+end
+
+function ContractService:CreateContractLocation(location_key, radius, name, callback)
+    local normalized_location_key = normalize_location_key(location_key)
+    local normalized_radius = normalize_positive_integer(radius)
+    local normalized_name = normalize_location_name(name)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "invalid-location-key")
+        return true
+    end
+
+    if normalized_radius == nil or normalized_radius > MAX_CONTRACT_LOCATION_RADIUS then
+        callback(false, nil, "invalid-radius")
+        return true
+    end
+
+    if normalized_name == nil then
+        callback(false, nil, "invalid-name")
+        return true
+    end
+
+    return self.repository:GetDeliveryLocation(normalized_location_key, function(is_get_success, delivery_location, get_error)
+        if not is_get_success then
+            callback(false, nil, get_error or "database-error")
+            return
+        end
+
+        if delivery_location ~= nil then
+            callback(false, delivery_location, "location-already-exists")
+            return
+        end
+
+        self.repository:CreateContractLocation({
+            key = normalized_location_key,
+            name = normalized_name,
+            description = "",
+            radius = normalized_radius,
+        }, function(is_create_success, created_location, create_error)
+            if not is_create_success then
+                callback(false, nil, create_error or "database-error")
+                return
+            end
+
+            if created_location == nil then
+                callback(false, nil, "database-error")
+                return
+            end
+
+            callback(true, created_location, nil)
+        end)
+    end)
+end
+
+function ContractService:SetContractLocationActive(location_key, is_active, callback)
+    local normalized_location_key = normalize_location_key(location_key)
+    local normalized_is_active = normalize_boolean_text(is_active)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "invalid-location-key")
+        return true
+    end
+
+    if normalized_is_active == nil then
+        callback(false, nil, "invalid-active-value")
+        return true
+    end
+
+    return self.repository:UpdateContractLocationActive(normalized_location_key, normalized_is_active, function(is_success, delivery_location, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        if delivery_location == nil then
+            callback(false, nil, "location-not-found")
+            return
+        end
+
+        callback(true, delivery_location, nil)
+    end)
+end
+
+function ContractService:SetContractLocationRadius(location_key, radius, callback)
+    local normalized_location_key = normalize_location_key(location_key)
+    local normalized_radius = normalize_positive_integer(radius)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "invalid-location-key")
+        return true
+    end
+
+    if normalized_radius == nil or normalized_radius > MAX_CONTRACT_LOCATION_RADIUS then
+        callback(false, nil, "invalid-radius")
+        return true
+    end
+
+    return self.repository:UpdateContractLocationRadius(normalized_location_key, normalized_radius, function(is_success, delivery_location, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        if delivery_location == nil then
+            callback(false, nil, "location-not-found")
+            return
+        end
+
+        callback(true, delivery_location, nil)
+    end)
+end
+
+function ContractService:SetContractLocationName(location_key, name, callback)
+    local normalized_location_key = normalize_location_key(location_key)
+    local normalized_name = normalize_location_name(name)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "invalid-location-key")
+        return true
+    end
+
+    if normalized_name == nil then
+        callback(false, nil, "invalid-name")
+        return true
+    end
+
+    return self.repository:UpdateContractLocationName(normalized_location_key, normalized_name, function(is_success, delivery_location, error)
         if not is_success then
             callback(false, nil, error or "database-error")
             return

@@ -766,6 +766,32 @@ local function build_delivery_location_info_line(delivery_location)
     )
 end
 
+local function build_contract_location_admin_line(delivery_location)
+    local is_calibrated = type(delivery_location) == "table"
+        and type(delivery_location.position_x) == "number"
+        and type(delivery_location.position_y) == "number"
+        and type(delivery_location.position_z) == "number"
+    local position_value = "none"
+
+    if is_calibrated then
+        position_value = string.format(
+            "%s,%s,%s",
+            tostring(format_coordinate_value(delivery_location.position_x)),
+            tostring(format_coordinate_value(delivery_location.position_y)),
+            tostring(format_coordinate_value(delivery_location.position_z))
+        )
+    end
+
+    return string.format(
+        "- %s active=%s radius=%s calibrated=%s pos=%s",
+        tostring(delivery_location and delivery_location.key or "inconnue"),
+        tostring(delivery_location and delivery_location.is_active == true),
+        tostring(format_radius_value(delivery_location and delivery_location.radius)),
+        tostring(is_calibrated),
+        tostring(position_value)
+    )
+end
+
 local function build_contract_line(contract_row)
     local payment_status = trim_string(contract_row and contract_row.payment_status)
     local item_requirement = format_contract_item_requirement(contract_row)
@@ -1349,6 +1375,46 @@ GRContractsBridge.GetDeliveryLocationInfo = function(location_key, callback)
     return GRContracts.Server.Service:GetDeliveryLocationInfo(location_key, callback)
 end
 
+GRContractsBridge.ListAllContractLocations = function(callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:ListAllContractLocations(callback)
+end
+
+GRContractsBridge.CreateContractLocation = function(location_key, radius, name, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:CreateContractLocation(location_key, radius, name, callback)
+end
+
+GRContractsBridge.SetContractLocationActive = function(location_key, is_active, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:SetContractLocationActive(location_key, is_active, callback)
+end
+
+GRContractsBridge.SetContractLocationRadius = function(location_key, radius, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:SetContractLocationRadius(location_key, radius, callback)
+end
+
+GRContractsBridge.SetContractLocationName = function(location_key, name, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:SetContractLocationName(location_key, name, callback)
+end
+
 GRContractsBridge.SetDeliveryLocationHere = function(player, location_key, radius, callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -1396,7 +1462,12 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "createhaulfromroute"
             and command_name ~= "takejob"
             and command_name ~= "deliverylocations"
+            and command_name ~= "allcontractlocations"
             and command_name ~= "deliverylocationinfo"
+            and command_name ~= "createcontractlocation"
+            and command_name ~= "setcontractlocationactive"
+            and command_name ~= "setcontractlocationradius"
+            and command_name ~= "setcontractlocationname"
             and command_name ~= "setdeliverylocationhere"
             and command_name ~= "acceptcontract"
             and command_name ~= "pickupcontract"
@@ -2297,6 +2368,28 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             return false
         end
 
+        if command_name == "allcontractlocations" then
+            GRContracts.Server.Service:ListAllContractLocations(function(is_success, delivery_locations, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Locations contrats indisponibles.")
+                    return
+                end
+
+                if type(delivery_locations) ~= "table" or #delivery_locations == 0 then
+                    Chat.SendMessage(player, "Aucune location contrat.")
+                    return
+                end
+
+                Chat.SendMessage(player, "Locations contrats :")
+
+                for _, delivery_location in ipairs(delivery_locations) do
+                    Chat.SendMessage(player, build_contract_location_admin_line(delivery_location))
+                end
+            end)
+
+            return false
+        end
+
         if command_name == "createhaulfromroute" then
             if payload == nil then
                 Chat.SendMessage(player, "Usage : /createhaulfromroute <route_key>")
@@ -2441,6 +2534,170 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 end
 
                 Chat.SendMessage(player, build_delivery_location_info_line(delivery_location))
+            end)
+
+            return false
+        end
+
+        if command_name == "createcontractlocation" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /createcontractlocation <location_key> <radius> <name>")
+                return false
+            end
+
+            local location_key, radius_text, name = payload:match("^(%S+)%s+(%S+)%s+(.+)$")
+
+            if location_key == nil then
+                Chat.SendMessage(player, "Usage : /createcontractlocation <location_key> <radius> <name>")
+                return false
+            end
+
+            GRContracts.Server.Service:CreateContractLocation(location_key, radius_text, name, function(is_success, delivery_location, error)
+                if not is_success then
+                    if error == "invalid-location-key" then
+                        Chat.SendMessage(player, "Creation location impossible : location_key invalide.")
+                        return
+                    end
+
+                    if error == "location-already-exists" then
+                        Chat.SendMessage(player, "Creation location impossible : location deja existante.")
+                        return
+                    end
+
+                    if error == "invalid-radius" then
+                        Chat.SendMessage(player, "Creation location impossible : radius invalide.")
+                        return
+                    end
+
+                    if error == "invalid-name" then
+                        Chat.SendMessage(player, "Creation location impossible : nom invalide.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Creation location impossible.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Location creee : %s radius=%s active=%s calibrated=false.",
+                        tostring(delivery_location.key),
+                        tostring(format_radius_value(delivery_location.radius)),
+                        tostring(delivery_location.is_active == true)
+                    )
+                )
+            end)
+
+            return false
+        end
+
+        if command_name == "setcontractlocationactive" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /setcontractlocationactive <location_key> <true|false>")
+                return false
+            end
+
+            local location_key, active_text = payload:match("^(%S+)%s+(%S+)$")
+
+            if location_key == nil then
+                Chat.SendMessage(player, "Usage : /setcontractlocationactive <location_key> <true|false>")
+                return false
+            end
+
+            GRContracts.Server.Service:SetContractLocationActive(location_key, active_text, function(is_success, delivery_location, error)
+                if not is_success then
+                    if error == "invalid-active-value" then
+                        Chat.SendMessage(player, "Valeur active invalide.")
+                        return
+                    end
+
+                    if error == "location-not-found" then
+                        Chat.SendMessage(player, "Location introuvable.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Impossible de mettre a jour la location.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format("Location %s active=%s.", tostring(delivery_location.key), tostring(delivery_location.is_active == true))
+                )
+            end)
+
+            return false
+        end
+
+        if command_name == "setcontractlocationradius" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /setcontractlocationradius <location_key> <radius>")
+                return false
+            end
+
+            local location_key, radius_text = payload:match("^(%S+)%s+(%S+)$")
+
+            if location_key == nil then
+                Chat.SendMessage(player, "Usage : /setcontractlocationradius <location_key> <radius>")
+                return false
+            end
+
+            GRContracts.Server.Service:SetContractLocationRadius(location_key, radius_text, function(is_success, delivery_location, error)
+                if not is_success then
+                    if error == "invalid-radius" then
+                        Chat.SendMessage(player, "Radius invalide.")
+                        return
+                    end
+
+                    if error == "location-not-found" then
+                        Chat.SendMessage(player, "Location introuvable.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Impossible de mettre a jour la location.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format("Location %s radius=%s.", tostring(delivery_location.key), tostring(format_radius_value(delivery_location.radius)))
+                )
+            end)
+
+            return false
+        end
+
+        if command_name == "setcontractlocationname" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /setcontractlocationname <location_key> <name>")
+                return false
+            end
+
+            local location_key, name = payload:match("^(%S+)%s+(.+)$")
+
+            if location_key == nil then
+                Chat.SendMessage(player, "Usage : /setcontractlocationname <location_key> <name>")
+                return false
+            end
+
+            GRContracts.Server.Service:SetContractLocationName(location_key, name, function(is_success, delivery_location, error)
+                if not is_success then
+                    if error == "invalid-name" then
+                        Chat.SendMessage(player, "Nom invalide.")
+                        return
+                    end
+
+                    if error == "location-not-found" then
+                        Chat.SendMessage(player, "Location introuvable.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Impossible de mettre a jour la location.")
+                    return
+                end
+
+                Chat.SendMessage(player, string.format("Location %s nom mis a jour.", tostring(delivery_location.key)))
             end)
 
             return false

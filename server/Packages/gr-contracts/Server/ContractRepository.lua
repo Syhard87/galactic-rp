@@ -85,6 +85,107 @@ local SELECT_DELIVERY_LOCATION_BY_KEY_QUERY = [[
     LIMIT 1
 ]]
 
+local INSERT_CONTRACT_LOCATION_QUERY = [[
+    INSERT INTO contract_delivery_locations (
+        key,
+        name,
+        description,
+        location_type,
+        position_x,
+        position_y,
+        position_z,
+        radius,
+        is_active
+    )
+    VALUES (
+        :0,
+        :1,
+        :2,
+        'delivery',
+        NULL,
+        NULL,
+        NULL,
+        :3,
+        true
+    )
+    RETURNING
+        id,
+        key,
+        name,
+        description,
+        location_type,
+        position_x,
+        position_y,
+        position_z,
+        radius,
+        is_active,
+        created_at,
+        updated_at
+]]
+
+local UPDATE_CONTRACT_LOCATION_ACTIVE_QUERY = [[
+    UPDATE contract_delivery_locations
+    SET
+        is_active = :1,
+        updated_at = NOW()
+    WHERE key = :0
+    RETURNING
+        id,
+        key,
+        name,
+        description,
+        location_type,
+        position_x,
+        position_y,
+        position_z,
+        radius,
+        is_active,
+        created_at,
+        updated_at
+]]
+
+local UPDATE_CONTRACT_LOCATION_RADIUS_QUERY = [[
+    UPDATE contract_delivery_locations
+    SET
+        radius = :1,
+        updated_at = NOW()
+    WHERE key = :0
+    RETURNING
+        id,
+        key,
+        name,
+        description,
+        location_type,
+        position_x,
+        position_y,
+        position_z,
+        radius,
+        is_active,
+        created_at,
+        updated_at
+]]
+
+local UPDATE_CONTRACT_LOCATION_NAME_QUERY = [[
+    UPDATE contract_delivery_locations
+    SET
+        name = :1,
+        updated_at = NOW()
+    WHERE key = :0
+    RETURNING
+        id,
+        key,
+        name,
+        description,
+        location_type,
+        position_x,
+        position_y,
+        position_z,
+        radius,
+        is_active,
+        created_at,
+        updated_at
+]]
+
 local SELECT_ROUTE_TEMPLATES_QUERY = [[
     SELECT
         id,
@@ -908,7 +1009,11 @@ local function normalize_location_key(location_key)
         return nil
     end
 
-    if normalized_location_key:match("^[a-z0-9_]+$") == nil then
+    if #normalized_location_key > 100 then
+        return nil
+    end
+
+    if normalized_location_key:match("^[a-z0-9_-]+$") == nil then
         return nil
     end
 
@@ -1595,6 +1700,14 @@ function ContractRepository:ListDeliveryLocations(callback)
     end, "contracts-list-delivery-locations")
 end
 
+function ContractRepository:ListAllContractLocations(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    return self:ListDeliveryLocations(callback)
+end
+
 function ContractRepository:ListRouteTemplates(callback)
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -2008,6 +2121,165 @@ function ContractRepository:GetDeliveryLocation(location_key, callback)
             callback(true, delivery_locations[1], nil)
         end, normalized_location_key)
     end, "contracts-get-delivery-location")
+end
+
+function ContractRepository:CreateContractLocation(location, callback)
+    local normalized_location_key = normalize_location_key(location and location.key)
+    local normalized_name = trim_string(location and location.name)
+    local normalized_description = trim_string(location and location.description) or ""
+    local normalized_radius = normalize_number(location and location.radius, nil)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "delivery-location-key-required")
+        return true
+    end
+
+    if normalized_name == nil then
+        callback(false, nil, "delivery-location-name-required")
+        return true
+    end
+
+    if normalized_radius == nil or normalized_radius <= 0 then
+        callback(false, nil, "delivery-location-radius-invalid")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(INSERT_CONTRACT_LOCATION_QUERY, function(rows, insert_error)
+            local delivery_locations = nil
+
+            if insert_error ~= nil then
+                callback(false, nil, insert_error)
+                return
+            end
+
+            delivery_locations = normalize_delivery_location_rows(rows)
+            callback(true, delivery_locations[1], nil)
+        end, normalized_location_key, normalized_name, normalized_description, normalized_radius)
+    end, "contracts-create-delivery-location")
+end
+
+function ContractRepository:UpdateContractLocationActive(location_key, is_active, callback)
+    local normalized_location_key = normalize_location_key(location_key)
+    local normalized_is_active = normalize_boolean(is_active, nil)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "delivery-location-key-required")
+        return true
+    end
+
+    if normalized_is_active == nil then
+        callback(false, nil, "delivery-location-active-invalid")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(UPDATE_CONTRACT_LOCATION_ACTIVE_QUERY, function(rows, update_error)
+            local delivery_locations = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            delivery_locations = normalize_delivery_location_rows(rows)
+            callback(true, delivery_locations[1], nil)
+        end, normalized_location_key, normalized_is_active)
+    end, "contracts-update-delivery-location-active")
+end
+
+function ContractRepository:UpdateContractLocationRadius(location_key, radius, callback)
+    local normalized_location_key = normalize_location_key(location_key)
+    local normalized_radius = normalize_number(radius, nil)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "delivery-location-key-required")
+        return true
+    end
+
+    if normalized_radius == nil or normalized_radius <= 0 then
+        callback(false, nil, "delivery-location-radius-invalid")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(UPDATE_CONTRACT_LOCATION_RADIUS_QUERY, function(rows, update_error)
+            local delivery_locations = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            delivery_locations = normalize_delivery_location_rows(rows)
+            callback(true, delivery_locations[1], nil)
+        end, normalized_location_key, normalized_radius)
+    end, "contracts-update-delivery-location-radius")
+end
+
+function ContractRepository:UpdateContractLocationName(location_key, name, callback)
+    local normalized_location_key = normalize_location_key(location_key)
+    local normalized_name = trim_string(name)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "delivery-location-key-required")
+        return true
+    end
+
+    if normalized_name == nil then
+        callback(false, nil, "delivery-location-name-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(UPDATE_CONTRACT_LOCATION_NAME_QUERY, function(rows, update_error)
+            local delivery_locations = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            delivery_locations = normalize_delivery_location_rows(rows)
+            callback(true, delivery_locations[1], nil)
+        end, normalized_location_key, normalized_name)
+    end, "contracts-update-delivery-location-name")
 end
 
 function ContractRepository:UpdateDeliveryLocationPosition(location_key, position_x, position_y, position_z, radius, callback)
