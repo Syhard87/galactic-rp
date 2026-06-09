@@ -531,6 +531,41 @@ local function build_locked_job_line(availability_result)
     )
 end
 
+local function build_job_progress_skill_line(skill_progress_row)
+    return string.format(
+        "- %s niveau=%s xp=%s",
+        tostring(skill_progress_row.skill_key or "inconnue"),
+        tostring(skill_progress_row.level or 0),
+        tostring(skill_progress_row.xp or 0)
+    )
+end
+
+local function build_job_progress_summary_line(job_progress)
+    return string.format(
+        "Missions disponibles=%s bloquees=%s jobs_actifs=%s/%s",
+        tostring(job_progress and job_progress.available_count or 0),
+        tostring(job_progress and job_progress.locked_count or 0),
+        tostring(job_progress and job_progress.active_job_count or 0),
+        tostring(job_progress and job_progress.max_active_job_count or 0)
+    )
+end
+
+local function build_job_unlock_line(availability_result)
+    local route_template = availability_result and availability_result.route or {}
+    local unlock_reasons = availability_result and availability_result.unlock_reasons or {}
+    local reason_text = "raison indisponible"
+
+    if type(unlock_reasons) == "table" and #unlock_reasons > 0 then
+        reason_text = table.concat(unlock_reasons, ", ")
+    end
+
+    return string.format(
+        "- %s : %s",
+        tostring(route_template.key or "inconnue"),
+        tostring(reason_text)
+    )
+end
+
 local function build_job_requirements_status_line(route_key, requirements_result)
     local missing_requirements = type(requirements_result) == "table" and requirements_result.missing_requirements or nil
 
@@ -967,6 +1002,22 @@ GRContractsBridge.GetLockedJobs = function(character_id, callback)
     return GRContracts.Server.Service:GetLockedJobs(character_id, callback)
 end
 
+GRContractsBridge.GetJobProgress = function(character_id, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetJobProgress(character_id, callback)
+end
+
+GRContractsBridge.GetJobUnlocks = function(character_id, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetJobUnlocks(character_id, callback)
+end
+
 GRContractsBridge.TakeJobFromRoute = function(character_id, route_key, callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -1069,6 +1120,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "jobinfo"
             and command_name ~= "availablejobs"
             and command_name ~= "lockedjobs"
+            and command_name ~= "jobprogress"
+            and command_name ~= "jobunlocks"
             and command_name ~= "jobrequirements"
             and command_name ~= "createcontract"
             and command_name ~= "createdeliverycontract"
@@ -1221,6 +1274,53 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 for _, availability_result in ipairs(availability_rows) do
                     Chat.SendMessage(player, build_locked_job_line(availability_result))
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "jobprogress" then
+            GRContracts.Server.Service:GetJobProgress(active_character_id, function(is_success, job_progress, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Progression jobs indisponible.")
+                    return
+                end
+
+                if job_progress.has_required_skills ~= true then
+                    Chat.SendMessage(player, "Progression jobs : aucun skill requis par les routes actuelles.")
+                    Chat.SendMessage(player, build_job_progress_summary_line(job_progress))
+                    return
+                end
+
+                Chat.SendMessage(player, "Progression jobs :")
+
+                for _, skill_progress_row in ipairs(job_progress.skills or {}) do
+                    Chat.SendMessage(player, build_job_progress_skill_line(skill_progress_row))
+                end
+
+                Chat.SendMessage(player, build_job_progress_summary_line(job_progress))
+            end)
+
+            return false
+        end
+
+        if command_name == "jobunlocks" then
+            GRContracts.Server.Service:GetJobUnlocks(active_character_id, function(is_success, unlock_rows, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Deblocages jobs indisponibles.")
+                    return
+                end
+
+                if type(unlock_rows) ~= "table" or #unlock_rows == 0 then
+                    Chat.SendMessage(player, "Tous les jobs actifs sont disponibles pour votre personnage.")
+                    return
+                end
+
+                Chat.SendMessage(player, "Deblocages jobs :")
+
+                for _, unlock_row in ipairs(unlock_rows) do
+                    Chat.SendMessage(player, build_job_unlock_line(unlock_row))
                 end
             end)
 

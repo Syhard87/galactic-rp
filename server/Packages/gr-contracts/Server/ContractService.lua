@@ -1610,6 +1610,182 @@ function ContractService:GetLockedJobs(character_id, callback)
     end)
 end
 
+function ContractService:GetJobProgress(character_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "invalid-character")
+        return true
+    end
+
+    return self:ListRouteTemplates(function(is_routes_success, route_templates, routes_error)
+        if not is_routes_success then
+            callback(false, nil, routes_error or "database-error")
+            return
+        end
+
+        local required_skill_keys = {}
+        local required_skill_entries = {}
+
+        for _, route_template in ipairs(route_templates or {}) do
+            local required_skill_key = normalize_required_skill_key(route_template and route_template.required_skill_key)
+            local required_skill_level = normalize_required_skill_level(route_template and route_template.required_skill_level) or 0
+
+            if required_skill_key ~= nil and required_skill_level > 0 and required_skill_keys[required_skill_key] ~= true then
+                required_skill_keys[required_skill_key] = true
+                required_skill_entries[#required_skill_entries + 1] = {
+                    skill_key = required_skill_key,
+                    level = 0,
+                    xp = 0,
+                }
+            end
+        end
+
+        local function resolve_active_jobs_and_counts()
+            self.repository:ListContractsForCharacter(normalized_character_id, function(is_list_success, contract_rows, list_error)
+                if not is_list_success then
+                    callback(false, nil, list_error or "database-error")
+                    return
+                end
+
+                local active_job_count = 0
+
+                for _, contract_row in ipairs(contract_rows or {}) do
+                    if is_active_job_contract(contract_row, normalized_character_id) then
+                        active_job_count = active_job_count + 1
+                    end
+                end
+
+                self:GetAvailableJobs(normalized_character_id, function(is_available_success, available_rows, available_error)
+                    if not is_available_success then
+                        callback(false, nil, available_error or "database-error")
+                        return
+                    end
+
+                    self:GetLockedJobs(normalized_character_id, function(is_locked_success, locked_rows, locked_error)
+                        if not is_locked_success then
+                            callback(false, nil, locked_error or "database-error")
+                            return
+                        end
+
+                        callback(true, {
+                            skills = required_skill_entries,
+                            has_required_skills = #required_skill_entries > 0,
+                            available_count = #(available_rows or {}),
+                            locked_count = #(locked_rows or {}),
+                            active_job_count = active_job_count,
+                            max_active_job_count = MAX_ACTIVE_JOB_CONTRACTS,
+                        }, nil)
+                    end)
+                end)
+            end)
+        end
+
+        if #required_skill_entries == 0 then
+            resolve_active_jobs_and_counts()
+            return
+        end
+
+        local skills_bridge = resolve_skills_bridge()
+
+        if skills_bridge == nil then
+            callback(false, nil, "skill-service-unavailable")
+            return
+        end
+
+        skills_bridge.ListSkills(normalized_character_id, function(is_skills_success, skill_rows, skills_error)
+            if not is_skills_success then
+                callback(false, nil, skills_error or "skill-service-unavailable")
+                return
+            end
+
+            local skill_row_map = {}
+
+            for _, skill_row in ipairs(skill_rows or {}) do
+                local skill_key = normalize_required_skill_key(skill_row and skill_row.skill_key)
+
+                if skill_key ~= nil then
+                    skill_row_map[skill_key] = skill_row
+                end
+            end
+
+            for _, skill_entry in ipairs(required_skill_entries) do
+                local skill_row = skill_row_map[skill_entry.skill_key]
+
+                if type(skill_row) == "table" then
+                    skill_entry.level = normalize_required_skill_level(skill_row.level) or 0
+                    skill_entry.xp = normalize_non_negative_integer(skill_row.total_xp) or 0
+                end
+            end
+
+            resolve_active_jobs_and_counts()
+        end)
+    end)
+end
+
+function ContractService:GetJobUnlocks(character_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "invalid-character")
+        return true
+    end
+
+    return self:GetLockedJobs(normalized_character_id, function(is_locked_success, locked_rows, locked_error)
+        if not is_locked_success then
+            callback(false, nil, locked_error or "database-error")
+            return
+        end
+
+        local unlock_rows = {}
+
+        for _, availability_result in ipairs(locked_rows or {}) do
+            local unlock_reasons = {}
+            local missing_requirements = availability_result and availability_result.missing_requirements or {}
+            local reasons = availability_result and availability_result.reasons or {}
+
+            for _, requirement_message in ipairs(missing_requirements or {}) do
+                local normalized_reason = trim_trailing_period(requirement_message)
+
+                if normalized_reason ~= nil then
+                    unlock_reasons[#unlock_reasons + 1] = normalized_reason
+                end
+            end
+
+            if #unlock_reasons == 0 then
+                for _, reason in ipairs(reasons or {}) do
+                    if reason == "service skill indisponible" or reason == "service reputation indisponible" then
+                        unlock_reasons[#unlock_reasons + 1] = reason
+                    end
+                end
+            end
+
+            if #unlock_reasons > 0 then
+                availability_result.unlock_reasons = unlock_reasons
+                unlock_rows[#unlock_rows + 1] = availability_result
+            end
+        end
+
+        callback(true, unlock_rows, nil)
+    end)
+end
+
 function ContractService:ExpireContracts(callback)
     if type(callback) ~= "function" then
         return false, "callback-required"
