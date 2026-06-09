@@ -98,6 +98,24 @@ local function normalize_non_negative_integer(value)
     return nil
 end
 
+local function normalize_job_history_limit_value(value)
+    local normalized_limit = normalize_positive_integer(value)
+
+    if normalized_limit == nil then
+        return 5
+    end
+
+    if normalized_limit < 1 then
+        return 1
+    end
+
+    if normalized_limit > 20 then
+        return 20
+    end
+
+    return normalized_limit
+end
+
 local function read_custom_settings()
     if type(Server) ~= "table" and type(Server) ~= "userdata" then
         return nil
@@ -566,6 +584,49 @@ local function build_job_unlock_line(availability_result)
     )
 end
 
+local function build_job_stats_summary_line(job_stats)
+    return string.format(
+        "completes=%s actifs=%s abandonnes=%s expires=%s argent_gagne=%s xp_jobs=%s taux_reussite=%s%%",
+        tostring(job_stats and job_stats.completed_count or 0),
+        tostring(job_stats and job_stats.active_count or 0),
+        tostring(job_stats and job_stats.abandoned_or_cancelled_count or 0),
+        tostring(job_stats and job_stats.expired_count or 0),
+        tostring(job_stats and job_stats.money_earned or 0),
+        tostring(job_stats and job_stats.granted_skill_xp or 0),
+        tostring(job_stats and job_stats.success_rate_percentage or 0)
+    )
+end
+
+local function build_job_history_line(contract_row)
+    local source_route_key = trim_string(contract_row and contract_row.source_route_key) or "aucune"
+    local pickup_location_key = trim_string(contract_row and contract_row.pickup_location_key) or "aucun"
+    local delivery_location_key = trim_string(contract_row and contract_row.delivery_location_key) or "aucune"
+    local rewards_status = trim_string(contract_row and contract_row.rewards_status)
+    local cargo_cleanup_status = trim_string(contract_row and contract_row.cargo_cleanup_status)
+    local cargo_cleanup_error = trim_string(contract_row and contract_row.cargo_cleanup_error)
+    local cancel_reason = trim_string(contract_row and contract_row.cancel_reason)
+
+    if cancel_reason == "abandoned" then
+        cancel_reason = "abandon"
+    end
+
+    return append_optional_parts(
+        string.format(
+            "#%s status=%s route=%s reward=%s pickup=%s destination=%s",
+            tostring(contract_row and contract_row.id or "?"),
+            tostring(contract_row and contract_row.status or "inconnu"),
+            tostring(source_route_key),
+            tostring(contract_row and contract_row.reward_money or 0),
+            tostring(pickup_location_key),
+            tostring(delivery_location_key)
+        ),
+        rewards_status ~= nil and rewards_status ~= "none" and string.format("rewards=%s", tostring(rewards_status)) or nil,
+        cargo_cleanup_status ~= nil and cargo_cleanup_status ~= "none" and string.format("cleanup=%s", tostring(cargo_cleanup_status)) or nil,
+        cargo_cleanup_error ~= nil and cargo_cleanup_status == "failed" and string.format("error=%s", tostring(cargo_cleanup_error)) or nil,
+        cancel_reason ~= nil and string.format("reason=%s", tostring(cancel_reason)) or nil
+    )
+end
+
 local function build_job_requirements_status_line(route_key, requirements_result)
     local missing_requirements = type(requirements_result) == "table" and requirements_result.missing_requirements or nil
 
@@ -1018,6 +1079,22 @@ GRContractsBridge.GetJobUnlocks = function(character_id, callback)
     return GRContracts.Server.Service:GetJobUnlocks(character_id, callback)
 end
 
+GRContractsBridge.GetJobStats = function(character_id, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetJobStats(character_id, callback)
+end
+
+GRContractsBridge.GetJobHistory = function(character_id, limit, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetJobHistory(character_id, limit, callback)
+end
+
 GRContractsBridge.TakeJobFromRoute = function(character_id, route_key, callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -1122,6 +1199,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "lockedjobs"
             and command_name ~= "jobprogress"
             and command_name ~= "jobunlocks"
+            and command_name ~= "jobstats"
+            and command_name ~= "jobhistory"
             and command_name ~= "jobrequirements"
             and command_name ~= "createcontract"
             and command_name ~= "createdeliverycontract"
@@ -1321,6 +1400,46 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 for _, unlock_row in ipairs(unlock_rows) do
                     Chat.SendMessage(player, build_job_unlock_line(unlock_row))
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "jobstats" then
+            GRContracts.Server.Service:GetJobStats(active_character_id, function(is_success, job_stats, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Stats jobs indisponibles.")
+                    return
+                end
+
+                Chat.SendMessage(player, "Stats jobs :")
+                Chat.SendMessage(player, build_job_stats_summary_line(job_stats))
+            end)
+
+            return false
+        end
+
+        if command_name == "jobhistory" then
+            local history_limit = normalize_job_history_limit_value(payload)
+
+            GRContracts.Server.Service:GetJobHistory(active_character_id, history_limit, function(is_success, job_history, error)
+                local history_rows = type(job_history) == "table" and job_history.rows or nil
+
+                if not is_success then
+                    Chat.SendMessage(player, "Historique jobs indisponible.")
+                    return
+                end
+
+                if type(history_rows) ~= "table" or #history_rows == 0 then
+                    Chat.SendMessage(player, "Aucun historique job pour votre personnage.")
+                    return
+                end
+
+                Chat.SendMessage(player, "Historique jobs :")
+
+                for _, contract_row in ipairs(history_rows) do
+                    Chat.SendMessage(player, build_job_history_line(contract_row))
                 end
             end)
 

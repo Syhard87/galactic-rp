@@ -9,6 +9,8 @@ local MAX_DELIVERY_QUANTITY = 1000
 local DEFAULT_DELIVERY_LOCATION_RADIUS = 500
 local MAX_DELIVERY_LOCATION_RADIUS = 5000
 local MAX_ACTIVE_JOB_CONTRACTS = 3
+local DEFAULT_JOB_HISTORY_LIMIT = 5
+local MAX_JOB_HISTORY_LIMIT = 20
 
 local ALLOWED_CONTRACT_TYPES = {
     crafting = true,
@@ -650,6 +652,35 @@ local function normalize_route_availability_reason(reason)
     end
 
     return normalized_reason
+end
+
+local function normalize_job_history_limit(value)
+    local normalized_limit = normalize_positive_integer(value)
+
+    if normalized_limit == nil then
+        return DEFAULT_JOB_HISTORY_LIMIT
+    end
+
+    if normalized_limit < 1 then
+        return 1
+    end
+
+    if normalized_limit > MAX_JOB_HISTORY_LIMIT then
+        return MAX_JOB_HISTORY_LIMIT
+    end
+
+    return normalized_limit
+end
+
+local function calculate_success_rate_percentage(completed_count, terminal_count)
+    local normalized_completed_count = normalize_non_negative_integer(completed_count) or 0
+    local normalized_terminal_count = normalize_non_negative_integer(terminal_count) or 0
+
+    if normalized_terminal_count < 1 then
+        return 0
+    end
+
+    return math.floor(((normalized_completed_count / normalized_terminal_count) * 100) + 0.5)
 end
 
 function ContractService.Create(repository)
@@ -1783,6 +1814,83 @@ function ContractService:GetJobUnlocks(character_id, callback)
         end
 
         callback(true, unlock_rows, nil)
+    end)
+end
+
+function ContractService:GetJobStats(character_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "invalid-character")
+        return true
+    end
+
+    return self.repository:GetCharacterJobStats(normalized_character_id, function(is_success, job_stats_row, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        local normalized_job_stats = job_stats_row or {}
+        local completed_count = normalize_non_negative_integer(normalized_job_stats.completed_count) or 0
+        local active_count = normalize_non_negative_integer(normalized_job_stats.active_count) or 0
+        local cancelled_count = normalize_non_negative_integer(normalized_job_stats.cancelled_count) or 0
+        local abandoned_count = normalize_non_negative_integer(normalized_job_stats.abandoned_count) or 0
+        local expired_count = normalize_non_negative_integer(normalized_job_stats.expired_count) or 0
+        local terminal_count = normalize_non_negative_integer(normalized_job_stats.terminal_count) or 0
+        local money_earned = normalize_non_negative_integer(normalized_job_stats.money_earned) or 0
+        local granted_skill_xp = normalize_non_negative_integer(normalized_job_stats.granted_skill_xp) or 0
+
+        callback(true, {
+            completed_count = completed_count,
+            active_count = active_count,
+            cancelled_count = cancelled_count,
+            abandoned_count = abandoned_count,
+            abandoned_or_cancelled_count = cancelled_count,
+            expired_count = expired_count,
+            terminal_count = terminal_count,
+            money_earned = money_earned,
+            granted_skill_xp = granted_skill_xp,
+            success_rate_percentage = calculate_success_rate_percentage(completed_count, terminal_count),
+        }, nil)
+    end)
+end
+
+function ContractService:GetJobHistory(character_id, limit, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_limit = normalize_job_history_limit(limit)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "invalid-character")
+        return true
+    end
+
+    return self.repository:ListCharacterJobHistory(normalized_character_id, normalized_limit, function(is_success, contract_rows, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        callback(true, {
+            limit = normalized_limit,
+            rows = contract_rows or {},
+        }, nil)
     end)
 end
 

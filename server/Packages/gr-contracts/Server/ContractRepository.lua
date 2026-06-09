@@ -240,6 +240,46 @@ local SELECT_CONTRACTS_FOR_CHARACTER_QUERY = [[
     ORDER BY id ASC
 ]]
 
+local SELECT_JOB_STATS_FOR_CHARACTER_QUERY = [[
+    SELECT
+        COUNT(*) FILTER (WHERE status = 'completed') AS completed_count,
+        COUNT(*) FILTER (WHERE status = 'accepted') AS active_count,
+        COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled_count,
+        COUNT(*) FILTER (WHERE status = 'cancelled' AND cancel_reason = 'abandoned') AS abandoned_count,
+        COUNT(*) FILTER (WHERE status = 'expired') AS expired_count,
+        COUNT(*) FILTER (WHERE status IN ('completed', 'cancelled', 'expired')) AS terminal_count,
+        COUNT(*) AS total_count,
+        COALESCE(SUM(CASE
+            WHEN status = 'completed' AND COALESCE(payment_status, 'pending') = 'paid' THEN reward_money
+            ELSE 0
+        END), 0) AS money_earned,
+        COALESCE(SUM(CASE
+            WHEN rewards_status = 'granted' THEN reward_skill_xp
+            ELSE 0
+        END), 0) AS granted_skill_xp
+    FROM contracts
+    WHERE assignee_character_id = :0
+      AND (
+          source_route_key IS NOT NULL
+          OR job_source IN ('route_template', 'job_board')
+          OR requires_pickup_location = true
+      )
+]]
+
+local SELECT_JOB_HISTORY_FOR_CHARACTER_QUERY = [[
+    SELECT
+]] .. CONTRACT_SELECT_COLUMNS .. [[
+    FROM contracts
+    WHERE assignee_character_id = :0
+      AND (
+          source_route_key IS NOT NULL
+          OR job_source IN ('route_template', 'job_board')
+          OR requires_pickup_location = true
+      )
+    ORDER BY COALESCE(completed_at, cancelled_at, expired_at, accepted_at, created_at) DESC, id DESC
+    LIMIT :1
+]]
+
 local SELECT_CONTRACT_BY_ID_QUERY = [[
     SELECT
 ]] .. CONTRACT_SELECT_COLUMNS .. [[
@@ -921,6 +961,34 @@ local function normalize_rows(rows)
     return normalized_rows
 end
 
+local function normalize_job_stats_row(row)
+    if type(row) ~= "table" then
+        return {
+            completed_count = 0,
+            active_count = 0,
+            cancelled_count = 0,
+            abandoned_count = 0,
+            expired_count = 0,
+            terminal_count = 0,
+            total_count = 0,
+            money_earned = 0,
+            granted_skill_xp = 0,
+        }
+    end
+
+    return {
+        completed_count = normalize_non_negative_integer(row.completed_count, 0),
+        active_count = normalize_non_negative_integer(row.active_count, 0),
+        cancelled_count = normalize_non_negative_integer(row.cancelled_count, 0),
+        abandoned_count = normalize_non_negative_integer(row.abandoned_count, 0),
+        expired_count = normalize_non_negative_integer(row.expired_count, 0),
+        terminal_count = normalize_non_negative_integer(row.terminal_count, 0),
+        total_count = normalize_non_negative_integer(row.total_count, 0),
+        money_earned = normalize_non_negative_integer(row.money_earned, 0),
+        granted_skill_xp = normalize_non_negative_integer(row.granted_skill_xp, 0),
+    }
+end
+
 function ContractRepository.Create(database_service)
     local self = setmetatable({}, ContractRepository)
 
@@ -1308,6 +1376,78 @@ function ContractRepository:ListContractsForCharacter(character_id, callback)
             callback(true, normalize_rows(rows), nil)
         end, normalized_character_id, normalized_character_id)
     end, "contracts-list-character")
+end
+
+function ContractRepository:GetCharacterJobStats(character_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_JOB_STATS_FOR_CHARACTER_QUERY, function(rows, select_error)
+            local job_stats_row = nil
+
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            if type(rows) == "table" and #rows > 0 then
+                job_stats_row = normalize_job_stats_row(rows[1])
+            else
+                job_stats_row = normalize_job_stats_row(nil)
+            end
+
+            callback(true, job_stats_row, nil)
+        end, normalized_character_id)
+    end, "contracts-job-stats-character")
+end
+
+function ContractRepository:ListCharacterJobHistory(character_id, limit, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local normalized_limit = normalize_positive_integer(limit)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if normalized_limit == nil then
+        callback(false, nil, "limit-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_JOB_HISTORY_FOR_CHARACTER_QUERY, function(rows, select_error)
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            callback(true, normalize_rows(rows), nil)
+        end, normalized_character_id, normalized_limit)
+    end, "contracts-job-history-character")
 end
 
 function ContractRepository:ListExpiredContracts(callback)
