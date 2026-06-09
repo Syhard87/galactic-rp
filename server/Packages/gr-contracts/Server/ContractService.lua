@@ -378,6 +378,26 @@ local function normalize_number(value)
     return nil
 end
 
+local function normalize_boolean_text(value)
+    local normalized_value = trim_string(value)
+
+    if normalized_value == nil then
+        return nil
+    end
+
+    normalized_value = string.lower(normalized_value)
+
+    if normalized_value == "true" then
+        return true
+    end
+
+    if normalized_value == "false" then
+        return false
+    end
+
+    return nil
+end
+
 local function get_controlled_character(player)
     if type(player) ~= "table" and type(player) ~= "userdata" then
         return nil
@@ -2527,6 +2547,222 @@ function ContractService:GetRouteTemplate(route_key, callback)
 
         callback(true, route_template, nil)
     end)
+end
+
+function ContractService:ListAllRouteTemplates(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self.repository:ListAllRouteTemplates(callback)
+end
+
+function ContractService:SetRouteActive(route_key, is_active, callback)
+    local normalized_route_key = normalize_route_key(route_key)
+    local normalized_is_active = normalize_boolean_text(is_active)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "invalid-route-key")
+        return true
+    end
+
+    if normalized_is_active == nil then
+        callback(false, nil, "invalid-active-value")
+        return true
+    end
+
+    return self.repository:UpdateRouteActive(normalized_route_key, normalized_is_active, function(is_success, route_template, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        if route_template == nil then
+            callback(false, nil, "route-not-found")
+            return
+        end
+
+        callback(true, route_template, nil)
+    end)
+end
+
+function ContractService:SetRouteDeadline(route_key, deadline_seconds, callback)
+    local normalized_route_key = normalize_route_key(route_key)
+    local normalized_deadline_seconds = nil
+    local deadline_value = trim_string(deadline_seconds)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "invalid-route-key")
+        return true
+    end
+
+    if deadline_value ~= nil and string.lower(deadline_value) ~= "none" then
+        normalized_deadline_seconds = normalize_deadline_seconds(deadline_seconds)
+
+        if normalized_deadline_seconds == nil then
+            callback(false, nil, "invalid-deadline")
+            return true
+        end
+    elseif deadline_value == nil and deadline_seconds ~= nil then
+        callback(false, nil, "invalid-deadline")
+        return true
+    end
+
+    return self.repository:UpdateRouteDeadline(normalized_route_key, normalized_deadline_seconds, function(is_success, route_template, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        if route_template == nil then
+            callback(false, nil, "route-not-found")
+            return
+        end
+
+        callback(true, route_template, nil)
+    end)
+end
+
+function ContractService:SetRouteReward(route_key, reward_money, reward_skill_xp, callback)
+    local normalized_route_key = normalize_route_key(route_key)
+    local normalized_reward_money = normalize_reward_money(reward_money)
+    local normalized_reward_skill_xp = nil
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "invalid-route-key")
+        return true
+    end
+
+    if normalized_reward_money == nil then
+        callback(false, nil, "invalid-reward")
+        return true
+    end
+
+    if reward_skill_xp ~= nil then
+        normalized_reward_skill_xp = normalize_non_negative_integer(reward_skill_xp)
+
+        if normalized_reward_skill_xp == nil then
+            callback(false, nil, "invalid-reward")
+            return true
+        end
+    end
+
+    return self:GetRouteTemplate(normalized_route_key, function(is_get_success, route_template, get_error)
+        local effective_reward_skill_xp = normalized_reward_skill_xp
+
+        if not is_get_success then
+            callback(false, nil, get_error or "database-error")
+            return
+        end
+
+        if route_template == nil then
+            callback(false, nil, "route-not-found")
+            return
+        end
+
+        if effective_reward_skill_xp == nil then
+            effective_reward_skill_xp = normalize_non_negative_integer(route_template.reward_skill_xp) or 0
+        end
+
+        self.repository:UpdateRouteReward(normalized_route_key, normalized_reward_money, effective_reward_skill_xp, function(is_update_success, updated_route_template, update_error)
+            if not is_update_success then
+                callback(false, nil, update_error or "database-error")
+                return
+            end
+
+            if updated_route_template == nil then
+                callback(false, nil, "route-not-found")
+                return
+            end
+
+            callback(true, updated_route_template, nil)
+        end)
+    end)
+end
+
+function ContractService:SetRouteRequirement(route_key, required_skill_key, required_skill_level, callback)
+    local normalized_route_key = normalize_route_key(route_key)
+    local skill_key_value = trim_string(required_skill_key)
+    local normalized_required_skill_key = nil
+    local normalized_required_skill_level = nil
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "invalid-route-key")
+        return true
+    end
+
+    if skill_key_value ~= nil and string.lower(skill_key_value) ~= "none" then
+        normalized_required_skill_key = normalize_required_skill_key(skill_key_value)
+        normalized_required_skill_level = normalize_required_skill_level(required_skill_level)
+
+        if normalized_required_skill_key == nil or normalized_required_skill_level == nil or normalized_required_skill_level < 1 then
+            callback(false, nil, "invalid-requirement")
+            return true
+        end
+    else
+        normalized_required_skill_key = nil
+        normalized_required_skill_level = normalize_required_skill_level(required_skill_level)
+
+        if normalized_required_skill_level == nil or normalized_required_skill_level ~= 0 then
+            callback(false, nil, "invalid-requirement")
+            return true
+        end
+    end
+
+    return self.repository:UpdateRouteRequirement(
+        normalized_route_key,
+        normalized_required_skill_key,
+        normalized_required_skill_level,
+        function(is_success, route_template, error)
+            if not is_success then
+                callback(false, nil, error or "database-error")
+                return
+            end
+
+            if route_template == nil then
+                callback(false, nil, "route-not-found")
+                return
+            end
+
+            callback(true, route_template, nil)
+        end
+    )
 end
 
 function ContractService:ListJobBoardRoutes(callback)

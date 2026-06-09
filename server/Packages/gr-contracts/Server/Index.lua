@@ -477,6 +477,32 @@ local function build_route_template_line(route_template)
     )
 end
 
+local function format_route_admin_requirement_value(route_template)
+    local required_skill_key = trim_string(route_template and route_template.required_skill_key)
+    local required_skill_level = normalize_non_negative_integer(route_template and route_template.required_skill_level) or 0
+
+    if required_skill_key == nil or required_skill_level < 1 then
+        return "aucun"
+    end
+
+    return string.format("%s:%s", tostring(required_skill_key), tostring(required_skill_level))
+end
+
+local function build_route_admin_line(route_template)
+    local deadline_seconds = normalize_positive_integer(route_template and route_template.deadline_seconds)
+    local reward_skill_xp = normalize_non_negative_integer(route_template and route_template.reward_skill_xp) or 0
+
+    return string.format(
+        "- %s active=%s reward=%s deadline=%s req=%s xp=%s",
+        tostring(route_template and route_template.key or "inconnue"),
+        tostring(route_template and route_template.is_active == true),
+        tostring(route_template and route_template.reward_money or 0),
+        deadline_seconds ~= nil and string.format("%ss", tostring(deadline_seconds)) or "aucune",
+        tostring(format_route_admin_requirement_value(route_template)),
+        tostring(reward_skill_xp)
+    )
+end
+
 local function build_route_template_info_line(route_template)
     local deadline_value = format_deadline_value(route_template and route_template.deadline_seconds)
     local reward_preview = format_route_reward_preview(route_template)
@@ -1015,12 +1041,52 @@ GRContractsBridge.ListRouteTemplates = function(callback)
     return GRContracts.Server.Service:ListRouteTemplates(callback)
 end
 
+GRContractsBridge.ListAllRouteTemplates = function(callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:ListAllRouteTemplates(callback)
+end
+
 GRContractsBridge.GetRouteTemplate = function(route_key, callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
     end
 
     return GRContracts.Server.Service:GetRouteTemplate(route_key, callback)
+end
+
+GRContractsBridge.SetRouteActive = function(route_key, is_active, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:SetRouteActive(route_key, is_active, callback)
+end
+
+GRContractsBridge.SetRouteDeadline = function(route_key, deadline_seconds, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:SetRouteDeadline(route_key, deadline_seconds, callback)
+end
+
+GRContractsBridge.SetRouteReward = function(route_key, reward_money, reward_skill_xp, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:SetRouteReward(route_key, reward_money, reward_skill_xp, callback)
+end
+
+GRContractsBridge.SetRouteRequirement = function(route_key, required_skill_key, required_skill_level, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:SetRouteRequirement(route_key, required_skill_key, required_skill_level, callback)
 end
 
 GRContractsBridge.ListJobBoardRoutes = function(callback)
@@ -1192,6 +1258,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         if command_name ~= "contracts"
             and command_name ~= "mycontracts"
             and command_name ~= "contractroutes"
+            and command_name ~= "allcontractroutes"
             and command_name ~= "contractrouteinfo"
             and command_name ~= "jobboard"
             and command_name ~= "jobinfo"
@@ -1222,6 +1289,10 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "expirecontracts"
             and command_name ~= "cleanupcontractcargo"
             and command_name ~= "expiredcontracts"
+            and command_name ~= "setrouteactive"
+            and command_name ~= "setroutedeadline"
+            and command_name ~= "setroutereward"
+            and command_name ~= "setrouterequirement"
         then
             return
         end
@@ -1287,6 +1358,28 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 for _, route_template in ipairs(route_templates) do
                     Chat.SendMessage(player, build_route_template_line(route_template))
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "allcontractroutes" then
+            GRContracts.Server.Service:ListAllRouteTemplates(function(is_success, route_templates, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Routes transport indisponibles.")
+                    return
+                end
+
+                if type(route_templates) ~= "table" or #route_templates == 0 then
+                    Chat.SendMessage(player, "Aucune route transport.")
+                    return
+                end
+
+                Chat.SendMessage(player, "Toutes les routes transport :")
+
+                for _, route_template in ipairs(route_templates) do
+                    Chat.SendMessage(player, build_route_admin_line(route_template))
                 end
             end)
 
@@ -1441,6 +1534,187 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 for _, contract_row in ipairs(history_rows) do
                     Chat.SendMessage(player, build_job_history_line(contract_row))
                 end
+            end)
+
+            return false
+        end
+
+        if command_name == "setrouteactive" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /setrouteactive <route_key> <true|false>")
+                return false
+            end
+
+            local route_key, active_text = payload:match("^(%S+)%s+(%S+)$")
+
+            if route_key == nil or active_text == nil then
+                Chat.SendMessage(player, "Usage : /setrouteactive <route_key> <true|false>")
+                return false
+            end
+
+            GRContracts.Server.Service:SetRouteActive(route_key, active_text, function(is_success, route_template, error)
+                if not is_success then
+                    if error == "route-not-found" or error == "invalid-route-key" then
+                        Chat.SendMessage(player, "Route introuvable.")
+                        return
+                    end
+
+                    if error == "invalid-active-value" then
+                        Chat.SendMessage(player, "Valeur active invalide.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Route indisponible.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Route %s active=%s.",
+                        tostring(route_template.key),
+                        tostring(route_template.is_active == true)
+                    )
+                )
+            end)
+
+            return false
+        end
+
+        if command_name == "setroutedeadline" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /setroutedeadline <route_key> <seconds|none>")
+                return false
+            end
+
+            local route_key, deadline_text = payload:match("^(%S+)%s+(%S+)$")
+
+            if route_key == nil or deadline_text == nil then
+                Chat.SendMessage(player, "Usage : /setroutedeadline <route_key> <seconds|none>")
+                return false
+            end
+
+            GRContracts.Server.Service:SetRouteDeadline(route_key, deadline_text, function(is_success, route_template, error)
+                if not is_success then
+                    if error == "route-not-found" or error == "invalid-route-key" then
+                        Chat.SendMessage(player, "Route introuvable.")
+                        return
+                    end
+
+                    if error == "invalid-deadline" then
+                        Chat.SendMessage(player, "Deadline invalide.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Route indisponible.")
+                    return
+                end
+
+                if route_template.deadline_seconds == nil then
+                    Chat.SendMessage(player, string.format("Route %s deadline=aucune.", tostring(route_template.key)))
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Route %s deadline=%ss.",
+                        tostring(route_template.key),
+                        tostring(route_template.deadline_seconds)
+                    )
+                )
+            end)
+
+            return false
+        end
+
+        if command_name == "setroutereward" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /setroutereward <route_key> <reward_money> [reward_skill_xp]")
+                return false
+            end
+
+            local route_key, reward_money_text, reward_skill_xp_text = payload:match("^(%S+)%s+(%S+)%s*(.*)$")
+            local reward_skill_xp = trim_string(reward_skill_xp_text)
+
+            if route_key == nil or reward_money_text == nil then
+                Chat.SendMessage(player, "Usage : /setroutereward <route_key> <reward_money> [reward_skill_xp]")
+                return false
+            end
+
+            GRContracts.Server.Service:SetRouteReward(route_key, reward_money_text, reward_skill_xp, function(is_success, route_template, error)
+                if not is_success then
+                    if error == "route-not-found" or error == "invalid-route-key" then
+                        Chat.SendMessage(player, "Route introuvable.")
+                        return
+                    end
+
+                    if error == "invalid-reward" then
+                        Chat.SendMessage(player, "Reward invalide.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Route indisponible.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Route %s reward=%s xp=%s.",
+                        tostring(route_template.key),
+                        tostring(route_template.reward_money or 0),
+                        tostring(route_template.reward_skill_xp or 0)
+                    )
+                )
+            end)
+
+            return false
+        end
+
+        if command_name == "setrouterequirement" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /setrouterequirement <route_key> <skill_key|none> <level>")
+                return false
+            end
+
+            local route_key, skill_key, level_text = payload:match("^(%S+)%s+(%S+)%s+(%S+)$")
+
+            if route_key == nil or skill_key == nil or level_text == nil then
+                Chat.SendMessage(player, "Usage : /setrouterequirement <route_key> <skill_key|none> <level>")
+                return false
+            end
+
+            GRContracts.Server.Service:SetRouteRequirement(route_key, skill_key, level_text, function(is_success, route_template, error)
+                if not is_success then
+                    if error == "route-not-found" or error == "invalid-route-key" then
+                        Chat.SendMessage(player, "Route introuvable.")
+                        return
+                    end
+
+                    if error == "invalid-requirement" then
+                        Chat.SendMessage(player, "Prerequis invalide.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Route indisponible.")
+                    return
+                end
+
+                if trim_string(route_template.required_skill_key) == nil or (normalize_non_negative_integer(route_template.required_skill_level) or 0) < 1 then
+                    Chat.SendMessage(player, string.format("Route %s prerequis skill=aucun.", tostring(route_template.key)))
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Route %s prerequis skill=%s level=%s.",
+                        tostring(route_template.key),
+                        tostring(route_template.required_skill_key),
+                        tostring(route_template.required_skill_level or 0)
+                    )
+                )
             end)
 
             return false

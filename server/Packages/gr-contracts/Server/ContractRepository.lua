@@ -140,6 +140,128 @@ local SELECT_ROUTE_TEMPLATE_BY_KEY_QUERY = [[
     LIMIT 1
 ]]
 
+local UPDATE_ROUTE_ACTIVE_QUERY = [[
+    UPDATE contract_route_templates
+    SET
+        is_active = :1,
+        updated_at = NOW()
+    WHERE key = :0
+    RETURNING
+        id,
+        key,
+        name,
+        description,
+        item_key,
+        item_quantity,
+        reward_money,
+        reward_skill_key,
+        reward_skill_xp,
+        reward_reputation_key,
+        reward_reputation_delta,
+        required_skill_key,
+        required_skill_level,
+        required_reputation_key,
+        required_reputation_min,
+        pickup_location_key,
+        delivery_location_key,
+        deadline_seconds,
+        is_active,
+        created_at,
+        updated_at
+]]
+
+local UPDATE_ROUTE_DEADLINE_QUERY = [[
+    UPDATE contract_route_templates
+    SET
+        deadline_seconds = :1,
+        updated_at = NOW()
+    WHERE key = :0
+    RETURNING
+        id,
+        key,
+        name,
+        description,
+        item_key,
+        item_quantity,
+        reward_money,
+        reward_skill_key,
+        reward_skill_xp,
+        reward_reputation_key,
+        reward_reputation_delta,
+        required_skill_key,
+        required_skill_level,
+        required_reputation_key,
+        required_reputation_min,
+        pickup_location_key,
+        delivery_location_key,
+        deadline_seconds,
+        is_active,
+        created_at,
+        updated_at
+]]
+
+local UPDATE_ROUTE_REWARD_QUERY = [[
+    UPDATE contract_route_templates
+    SET
+        reward_money = :1,
+        reward_skill_xp = :2,
+        updated_at = NOW()
+    WHERE key = :0
+    RETURNING
+        id,
+        key,
+        name,
+        description,
+        item_key,
+        item_quantity,
+        reward_money,
+        reward_skill_key,
+        reward_skill_xp,
+        reward_reputation_key,
+        reward_reputation_delta,
+        required_skill_key,
+        required_skill_level,
+        required_reputation_key,
+        required_reputation_min,
+        pickup_location_key,
+        delivery_location_key,
+        deadline_seconds,
+        is_active,
+        created_at,
+        updated_at
+]]
+
+local UPDATE_ROUTE_REQUIREMENT_QUERY = [[
+    UPDATE contract_route_templates
+    SET
+        required_skill_key = :1,
+        required_skill_level = :2,
+        updated_at = NOW()
+    WHERE key = :0
+    RETURNING
+        id,
+        key,
+        name,
+        description,
+        item_key,
+        item_quantity,
+        reward_money,
+        reward_skill_key,
+        reward_skill_xp,
+        reward_reputation_key,
+        reward_reputation_delta,
+        required_skill_key,
+        required_skill_level,
+        required_reputation_key,
+        required_reputation_min,
+        pickup_location_key,
+        delivery_location_key,
+        deadline_seconds,
+        is_active,
+        created_at,
+        updated_at
+]]
+
 local UPDATE_DELIVERY_LOCATION_POSITION_QUERY = [[
     UPDATE contract_delivery_locations
     SET
@@ -1217,6 +1339,14 @@ function ContractRepository:ListRouteTemplates(callback)
     end, "contracts-list-route-templates")
 end
 
+function ContractRepository:ListAllRouteTemplates(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    return self:ListRouteTemplates(callback)
+end
+
 function ContractRepository:GetRouteTemplate(route_key, callback)
     local normalized_route_key = normalize_route_key(route_key)
 
@@ -1247,6 +1377,170 @@ function ContractRepository:GetRouteTemplate(route_key, callback)
             callback(true, route_templates[1], nil)
         end, normalized_route_key)
     end, "contracts-get-route-template")
+end
+
+function ContractRepository:UpdateRouteActive(route_key, is_active, callback)
+    local normalized_route_key = normalize_route_key(route_key)
+    local normalized_is_active = normalize_boolean(is_active, nil)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "route-key-required")
+        return true
+    end
+
+    if normalized_is_active == nil then
+        callback(false, nil, "route-active-invalid")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(UPDATE_ROUTE_ACTIVE_QUERY, function(rows, update_error)
+            local route_templates = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            route_templates = normalize_route_template_rows(rows)
+            callback(true, route_templates[1], nil)
+        end, normalized_route_key, normalized_is_active)
+    end, "contracts-update-route-active")
+end
+
+function ContractRepository:UpdateRouteDeadline(route_key, deadline_seconds, callback)
+    local normalized_route_key = normalize_route_key(route_key)
+    local normalized_deadline_seconds = normalize_positive_integer(deadline_seconds)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "route-key-required")
+        return true
+    end
+
+    if deadline_seconds ~= nil and normalized_deadline_seconds == nil then
+        callback(false, nil, "deadline-seconds-invalid")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(UPDATE_ROUTE_DEADLINE_QUERY, function(rows, update_error)
+            local route_templates = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            route_templates = normalize_route_template_rows(rows)
+            callback(true, route_templates[1], nil)
+        end, normalized_route_key, normalized_deadline_seconds)
+    end, "contracts-update-route-deadline")
+end
+
+function ContractRepository:UpdateRouteReward(route_key, reward_money, reward_skill_xp, callback)
+    local normalized_route_key = normalize_route_key(route_key)
+    local normalized_reward_money = normalize_non_negative_integer(reward_money, nil)
+    local normalized_reward_skill_xp = normalize_non_negative_integer(reward_skill_xp, nil)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "route-key-required")
+        return true
+    end
+
+    if normalized_reward_money == nil then
+        callback(false, nil, "reward-money-invalid")
+        return true
+    end
+
+    if normalized_reward_skill_xp == nil then
+        callback(false, nil, "reward-skill-xp-invalid")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(UPDATE_ROUTE_REWARD_QUERY, function(rows, update_error)
+            local route_templates = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            route_templates = normalize_route_template_rows(rows)
+            callback(true, route_templates[1], nil)
+        end, normalized_route_key, normalized_reward_money, normalized_reward_skill_xp)
+    end, "contracts-update-route-reward")
+end
+
+function ContractRepository:UpdateRouteRequirement(route_key, required_skill_key, required_skill_level, callback)
+    local normalized_route_key = normalize_route_key(route_key)
+    local normalized_required_skill_key = normalize_reward_skill_key(required_skill_key)
+    local normalized_required_skill_level = normalize_non_negative_integer(required_skill_level, nil)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "route-key-required")
+        return true
+    end
+
+    if required_skill_key ~= nil and normalized_required_skill_key == nil then
+        callback(false, nil, "required-skill-key-invalid")
+        return true
+    end
+
+    if normalized_required_skill_level == nil then
+        callback(false, nil, "required-skill-level-invalid")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(UPDATE_ROUTE_REQUIREMENT_QUERY, function(rows, update_error)
+            local route_templates = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            route_templates = normalize_route_template_rows(rows)
+            callback(true, route_templates[1], nil)
+        end, normalized_route_key, normalized_required_skill_key, normalized_required_skill_level)
+    end, "contracts-update-route-requirement")
 end
 
 function ContractRepository:GetDeliveryLocation(location_key, callback)
