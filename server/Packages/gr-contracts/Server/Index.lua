@@ -503,6 +503,73 @@ local function build_route_admin_line(route_template)
     )
 end
 
+local function build_route_health_summary_line(route_health)
+    return string.format(
+        "total=%s active=%s inactive=%s valid=%s invalid=%s uncalibrated=%s",
+        tostring(route_health and route_health.total or 0),
+        tostring(route_health and route_health.active or 0),
+        tostring(route_health and route_health.inactive or 0),
+        tostring(route_health and route_health.valid or 0),
+        tostring(route_health and route_health.invalid or 0),
+        tostring(route_health and route_health.uncalibrated or 0)
+    )
+end
+
+local function build_route_health_issue_count_lines(route_health)
+    local issue_counts = type(route_health) == "table" and route_health.issue_counts or {}
+    local lines = {}
+    local issue_order = {
+        "pickup-position-missing",
+        "delivery-position-missing",
+        "pickup-missing",
+        "delivery-missing",
+        "pickup-inactive",
+        "delivery-inactive",
+        "reward-invalid",
+        "deadline-invalid",
+        "requirement-invalid",
+        "reward-xp-invalid",
+    }
+    local labels = {
+        ["pickup-position-missing"] = "route(s) avec pickup non calibre",
+        ["delivery-position-missing"] = "route(s) avec destination non calibree",
+        ["pickup-missing"] = "route(s) avec pickup introuvable",
+        ["delivery-missing"] = "route(s) avec destination introuvable",
+        ["pickup-inactive"] = "route(s) avec pickup inactif",
+        ["delivery-inactive"] = "route(s) avec destination inactive",
+        ["reward-invalid"] = "route(s) avec reward invalide",
+        ["deadline-invalid"] = "route(s) avec deadline invalide",
+        ["requirement-invalid"] = "route(s) avec prerequis invalide",
+        ["reward-xp-invalid"] = "route(s) avec reward xp invalide",
+    }
+
+    for _, issue_code in ipairs(issue_order) do
+        local count = normalize_non_negative_integer(issue_counts[issue_code]) or 0
+
+        if count > 0 then
+            lines[#lines + 1] = string.format("- %s %s", tostring(count), tostring(labels[issue_code] or issue_code))
+        end
+    end
+
+    return lines
+end
+
+local function build_invalid_route_line(health_result)
+    local route_template = health_result and health_result.route or {}
+    local issues = type(health_result) == "table" and health_result.issues or {}
+    local reason_text = "diagnostic indisponible"
+
+    if type(issues) == "table" and #issues > 0 then
+        reason_text = table.concat(issues, ", ")
+    end
+
+    return string.format(
+        "- %s : %s",
+        tostring(route_template.key or "inconnue"),
+        tostring(reason_text)
+    )
+end
+
 local function build_route_template_info_line(route_template)
     local deadline_value = format_deadline_value(route_template and route_template.deadline_seconds)
     local reward_preview = format_route_reward_preview(route_template)
@@ -1066,6 +1133,30 @@ GRContractsBridge.CreateRouteTemplate = function(route_key, item_key, quantity, 
     )
 end
 
+GRContractsBridge.ValidateRouteTemplate = function(route_key, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:ValidateRouteTemplate(route_key, callback)
+end
+
+GRContractsBridge.GetRouteHealth = function(callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetRouteHealth(callback)
+end
+
+GRContractsBridge.ListInvalidRoutes = function(callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:ListInvalidRoutes(callback)
+end
+
 GRContractsBridge.SetRouteDescription = function(route_key, description, callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -1286,7 +1377,9 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "allcontractroutes"
             and command_name ~= "createroute"
             and command_name ~= "contractrouteinfo"
+            and command_name ~= "routehealth"
             and command_name ~= "setroutedescription"
+            and command_name ~= "validateroute"
             and command_name ~= "jobboard"
             and command_name ~= "jobinfo"
             and command_name ~= "availablejobs"
@@ -1320,6 +1413,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "setroutedeadline"
             and command_name ~= "setroutereward"
             and command_name ~= "setrouterequirement"
+            and command_name ~= "invalidroutes"
         then
             return
         end
@@ -1413,6 +1507,32 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             return false
         end
 
+        if command_name == "routehealth" then
+            GRContracts.Server.Service:GetRouteHealth(function(is_success, route_health, error)
+                local issue_lines = nil
+
+                if not is_success then
+                    Chat.SendMessage(player, "Diagnostic routes indisponible.")
+                    return
+                end
+
+                Chat.SendMessage(player, "Route health :")
+                Chat.SendMessage(player, build_route_health_summary_line(route_health))
+
+                issue_lines = build_route_health_issue_count_lines(route_health)
+
+                if #issue_lines > 0 then
+                    Chat.SendMessage(player, "Issues principales :")
+
+                    for _, issue_line in ipairs(issue_lines) do
+                        Chat.SendMessage(player, issue_line)
+                    end
+                end
+            end)
+
+            return false
+        end
+
         if command_name == "createroute" then
             if payload == nil then
                 Chat.SendMessage(player, "Usage : /createroute <route_key> <item_key> <quantity> <reward_money> <pickup_location_key> <delivery_location_key> <description>")
@@ -1500,6 +1620,37 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             return false
         end
 
+        if command_name == "validateroute" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /validateroute <route_key>")
+                return false
+            end
+
+            GRContracts.Server.Service:ValidateRouteTemplate(payload, function(is_success, health_result, error)
+                local route_template = type(health_result) == "table" and health_result.route or nil
+
+                if not is_success or route_template == nil then
+                    Chat.SendMessage(player, "Route introuvable.")
+                    return
+                end
+
+                if health_result.is_valid == true then
+                    Chat.SendMessage(player, string.format("Route %s : OK.", tostring(route_template.key)))
+                    Chat.SendMessage(player, build_route_template_info_line(route_template))
+                    return
+                end
+
+                Chat.SendMessage(player, string.format("Route %s : INVALID.", tostring(route_template.key)))
+                Chat.SendMessage(player, "Issues :")
+
+                for _, issue_text in ipairs(health_result.issues or {}) do
+                    Chat.SendMessage(player, string.format("- %s", tostring(issue_text)))
+                end
+            end)
+
+            return false
+        end
+
         if command_name == "jobboard" then
             GRContracts.Server.Service:ListJobBoardRoutes(function(is_success, route_templates, error)
                 if not is_success then
@@ -1516,6 +1667,28 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 for _, route_template in ipairs(route_templates) do
                     Chat.SendMessage(player, build_job_board_line(route_template))
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "invalidroutes" then
+            GRContracts.Server.Service:ListInvalidRoutes(function(is_success, invalid_rows, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Routes invalides indisponibles.")
+                    return
+                end
+
+                if type(invalid_rows) ~= "table" or #invalid_rows == 0 then
+                    Chat.SendMessage(player, "Aucune route invalide detectee.")
+                    return
+                end
+
+                Chat.SendMessage(player, "Routes invalides :")
+
+                for _, health_result in ipairs(invalid_rows) do
+                    Chat.SendMessage(player, build_invalid_route_line(health_result))
                 end
             end)
 

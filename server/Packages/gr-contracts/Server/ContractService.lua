@@ -696,6 +696,106 @@ local function normalize_job_history_limit(value)
     return normalized_limit
 end
 
+local function translate_route_diagnostic_issue(issue_code)
+    if issue_code == "route-key-invalid" then
+        return "route_key invalide"
+    end
+
+    if issue_code == "item-missing" then
+        return "item invalide"
+    end
+
+    if issue_code == "quantity-invalid" then
+        return "quantite invalide"
+    end
+
+    if issue_code == "reward-invalid" then
+        return "reward invalide"
+    end
+
+    if issue_code == "deadline-invalid" then
+        return "deadline invalide"
+    end
+
+    if issue_code == "reward-xp-invalid" then
+        return "reward xp invalide"
+    end
+
+    if issue_code == "requirement-invalid" then
+        return "prerequis invalide"
+    end
+
+    if issue_code == "pickup-missing" then
+        return "pickup introuvable"
+    end
+
+    if issue_code == "pickup-inactive" then
+        return "pickup inactif"
+    end
+
+    if issue_code == "pickup-position-missing" then
+        return "pickup non calibre"
+    end
+
+    if issue_code == "pickup-radius-invalid" then
+        return "pickup radius invalide"
+    end
+
+    if issue_code == "delivery-missing" then
+        return "destination introuvable"
+    end
+
+    if issue_code == "delivery-inactive" then
+        return "destination inactive"
+    end
+
+    if issue_code == "delivery-position-missing" then
+        return "destination non calibree"
+    end
+
+    if issue_code == "delivery-radius-invalid" then
+        return "destination radius invalide"
+    end
+
+    return tostring(issue_code)
+end
+
+local function is_location_calibrated(delivery_location)
+    local position_x = normalize_number(delivery_location and delivery_location.position_x)
+    local position_y = normalize_number(delivery_location and delivery_location.position_y)
+    local position_z = normalize_number(delivery_location and delivery_location.position_z)
+
+    return position_x ~= nil and position_y ~= nil and position_z ~= nil
+end
+
+local function is_location_radius_valid(delivery_location)
+    local radius = normalize_number(delivery_location and delivery_location.radius)
+
+    return radius ~= nil and radius > 0
+end
+
+local function add_route_diagnostic_issue(result, issue_code)
+    local issue_message = nil
+
+    if type(result) ~= "table" or type(issue_code) ~= "string" then
+        return
+    end
+
+    result._issue_set = result._issue_set or {}
+
+    if result._issue_set[issue_code] == true then
+        return
+    end
+
+    result._issue_set[issue_code] = true
+    result.issue_codes[#result.issue_codes + 1] = issue_code
+    issue_message = translate_route_diagnostic_issue(issue_code)
+
+    if issue_message ~= nil then
+        result.issues[#result.issues + 1] = issue_message
+    end
+end
+
 local function calculate_success_rate_percentage(completed_count, terminal_count)
     local normalized_completed_count = normalize_non_negative_integer(completed_count) or 0
     local normalized_terminal_count = normalize_non_negative_integer(terminal_count) or 0
@@ -2704,6 +2804,245 @@ function ContractService:SetRouteDescription(route_key, description, callback)
         end
 
         callback(true, route_template, nil)
+    end)
+end
+
+function ContractService:EvaluateRouteTemplateHealth(route_template, pickup_location, delivery_location, raw_route)
+    local result = {
+        route = route_template,
+        pickup_location = pickup_location,
+        delivery_location = delivery_location,
+        is_valid = true,
+        issues = {},
+        issue_codes = {},
+        is_uncalibrated = false,
+        item_catalog_verified = false,
+    }
+    local normalized_required_reputation_min = normalize_required_reputation_min(raw_route and raw_route.required_reputation_min)
+    local raw_item_quantity = raw_route ~= nil and raw_route.item_quantity or (route_template and route_template.item_quantity)
+    local raw_reward_money = raw_route ~= nil and raw_route.reward_money or (route_template and route_template.reward_money)
+    local raw_deadline_seconds = raw_route ~= nil and raw_route.deadline_seconds or (route_template and route_template.deadline_seconds)
+    local raw_reward_skill_xp = raw_route ~= nil and raw_route.reward_skill_xp or (route_template and route_template.reward_skill_xp)
+    local raw_required_skill_level = raw_route ~= nil and raw_route.required_skill_level or (route_template and route_template.required_skill_level)
+    local raw_pickup_location_key = raw_route ~= nil and raw_route.pickup_location_key or (route_template and route_template.pickup_location_key)
+    local raw_delivery_location_key = raw_route ~= nil and raw_route.delivery_location_key or (route_template and route_template.delivery_location_key)
+
+    if normalize_route_key((raw_route and raw_route.key) or (route_template and route_template.key)) == nil then
+        add_route_diagnostic_issue(result, "route-key-invalid")
+    end
+
+    if normalize_item_key((raw_route and raw_route.item_key) or (route_template and route_template.item_key)) == nil then
+        add_route_diagnostic_issue(result, "item-missing")
+    end
+
+    if normalize_positive_integer(raw_item_quantity) == nil
+        or (normalize_positive_integer(raw_item_quantity) or 0) > MAX_DELIVERY_QUANTITY
+    then
+        add_route_diagnostic_issue(result, "quantity-invalid")
+    end
+
+    if normalize_reward_money(raw_reward_money) == nil then
+        add_route_diagnostic_issue(result, "reward-invalid")
+    end
+
+    if raw_deadline_seconds ~= nil and normalize_deadline_seconds(raw_deadline_seconds) == nil then
+        add_route_diagnostic_issue(result, "deadline-invalid")
+    end
+
+    if raw_reward_skill_xp ~= nil and normalize_non_negative_integer(raw_reward_skill_xp) == nil then
+        add_route_diagnostic_issue(result, "reward-xp-invalid")
+    end
+
+    if raw_required_skill_level ~= nil and normalize_required_skill_level(raw_required_skill_level) == nil then
+        add_route_diagnostic_issue(result, "requirement-invalid")
+    end
+
+    if raw_route ~= nil and raw_route.required_reputation_min ~= nil and (normalized_required_reputation_min == nil or normalized_required_reputation_min < 0) then
+        add_route_diagnostic_issue(result, "requirement-invalid")
+    end
+
+    if normalize_location_key(raw_pickup_location_key) == nil or pickup_location == nil then
+        add_route_diagnostic_issue(result, "pickup-missing")
+    else
+        if pickup_location.is_active ~= true then
+            add_route_diagnostic_issue(result, "pickup-inactive")
+        end
+
+        if not is_location_calibrated(pickup_location) then
+            add_route_diagnostic_issue(result, "pickup-position-missing")
+            result.is_uncalibrated = true
+        end
+
+        if not is_location_radius_valid(pickup_location) then
+            add_route_diagnostic_issue(result, "pickup-radius-invalid")
+        end
+    end
+
+    if normalize_location_key(raw_delivery_location_key) == nil or delivery_location == nil then
+        add_route_diagnostic_issue(result, "delivery-missing")
+    else
+        if delivery_location.is_active ~= true then
+            add_route_diagnostic_issue(result, "delivery-inactive")
+        end
+
+        if not is_location_calibrated(delivery_location) then
+            add_route_diagnostic_issue(result, "delivery-position-missing")
+            result.is_uncalibrated = true
+        end
+
+        if not is_location_radius_valid(delivery_location) then
+            add_route_diagnostic_issue(result, "delivery-radius-invalid")
+        end
+    end
+
+    result.is_valid = #result.issue_codes == 0
+    result._issue_set = nil
+
+    return result
+end
+
+function ContractService:ValidateRouteTemplate(route_key, callback)
+    local normalized_route_key = normalize_route_key(route_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "route-not-found")
+        return true
+    end
+
+    return self.repository:ListRouteTemplatesWithLocations(true, function(is_success, route_rows, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        for _, route_row in ipairs(route_rows or {}) do
+            local route_template = route_row and route_row.route or nil
+
+            if normalize_route_key(route_template and route_template.key) == normalized_route_key then
+                callback(
+                    true,
+                    self:EvaluateRouteTemplateHealth(
+                        route_template,
+                        route_row.pickup_location,
+                        route_row.delivery_location,
+                        route_row.raw_route
+                    ),
+                    nil
+                )
+                return
+            end
+        end
+
+        callback(false, nil, "route-not-found")
+    end)
+end
+
+function ContractService:GetRouteHealth(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self.repository:ListRouteTemplatesWithLocations(true, function(is_success, route_rows, error)
+        local summary = {
+            total = 0,
+            active = 0,
+            inactive = 0,
+            valid = 0,
+            invalid = 0,
+            uncalibrated = 0,
+            issue_counts = {},
+            rows = {},
+        }
+        local route_index = 1
+
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        summary.total = #(route_rows or {})
+
+        local function process_next()
+            local route_row = route_rows[route_index]
+            local route_template = route_row and route_row.route or nil
+
+            if route_template == nil then
+                callback(true, summary, nil)
+                return
+            end
+
+            local health_result = self:EvaluateRouteTemplateHealth(
+                route_template,
+                route_row and route_row.pickup_location or nil,
+                route_row and route_row.delivery_location or nil,
+                route_row and route_row.raw_route or nil
+            )
+
+            if route_template.is_active == true then
+                summary.active = summary.active + 1
+            else
+                summary.inactive = summary.inactive + 1
+            end
+
+            if health_result.is_valid == true then
+                summary.valid = summary.valid + 1
+            else
+                summary.invalid = summary.invalid + 1
+            end
+
+            if health_result.is_uncalibrated == true then
+                summary.uncalibrated = summary.uncalibrated + 1
+            end
+
+            for _, issue_code in ipairs(health_result.issue_codes or {}) do
+                summary.issue_counts[issue_code] = (summary.issue_counts[issue_code] or 0) + 1
+            end
+
+            summary.rows[#summary.rows + 1] = health_result
+            route_index = route_index + 1
+            process_next()
+        end
+
+        process_next()
+    end)
+end
+
+function ContractService:ListInvalidRoutes(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self:GetRouteHealth(function(is_success, summary, error)
+        local invalid_rows = {}
+
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        for _, health_result in ipairs((summary and summary.rows) or {}) do
+            if health_result.is_valid ~= true then
+                invalid_rows[#invalid_rows + 1] = health_result
+            end
+        end
+
+        callback(true, invalid_rows, nil)
     end)
 end
 

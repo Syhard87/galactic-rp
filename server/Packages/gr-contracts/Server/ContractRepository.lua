@@ -140,6 +140,117 @@ local SELECT_ROUTE_TEMPLATE_BY_KEY_QUERY = [[
     LIMIT 1
 ]]
 
+local SELECT_ROUTE_TEMPLATES_WITH_LOCATIONS_QUERY = [[
+    SELECT
+        rt.id,
+        rt.key,
+        rt.name,
+        rt.description,
+        rt.item_key,
+        rt.item_quantity,
+        rt.reward_money,
+        rt.reward_skill_key,
+        rt.reward_skill_xp,
+        rt.reward_reputation_key,
+        rt.reward_reputation_delta,
+        rt.required_skill_key,
+        rt.required_skill_level,
+        rt.required_reputation_key,
+        rt.required_reputation_min,
+        rt.pickup_location_key,
+        rt.delivery_location_key,
+        rt.deadline_seconds,
+        rt.is_active,
+        rt.created_at,
+        rt.updated_at,
+        pickup.id AS pickup_id,
+        pickup.key AS pickup_key,
+        pickup.name AS pickup_name,
+        pickup.description AS pickup_description,
+        pickup.location_type AS pickup_location_type,
+        pickup.position_x AS pickup_position_x,
+        pickup.position_y AS pickup_position_y,
+        pickup.position_z AS pickup_position_z,
+        pickup.radius AS pickup_radius,
+        pickup.is_active AS pickup_is_active,
+        pickup.created_at AS pickup_created_at,
+        pickup.updated_at AS pickup_updated_at,
+        delivery.id AS delivery_id,
+        delivery.key AS delivery_key,
+        delivery.name AS delivery_name,
+        delivery.description AS delivery_description,
+        delivery.location_type AS delivery_location_type,
+        delivery.position_x AS delivery_position_x,
+        delivery.position_y AS delivery_position_y,
+        delivery.position_z AS delivery_position_z,
+        delivery.radius AS delivery_radius,
+        delivery.is_active AS delivery_is_active,
+        delivery.created_at AS delivery_created_at,
+        delivery.updated_at AS delivery_updated_at
+    FROM contract_route_templates rt
+    LEFT JOIN contract_delivery_locations pickup
+        ON pickup.key = rt.pickup_location_key
+    LEFT JOIN contract_delivery_locations delivery
+        ON delivery.key = rt.delivery_location_key
+    ORDER BY rt.key ASC
+]]
+
+local SELECT_ACTIVE_ROUTE_TEMPLATES_WITH_LOCATIONS_QUERY = [[
+    SELECT
+        rt.id,
+        rt.key,
+        rt.name,
+        rt.description,
+        rt.item_key,
+        rt.item_quantity,
+        rt.reward_money,
+        rt.reward_skill_key,
+        rt.reward_skill_xp,
+        rt.reward_reputation_key,
+        rt.reward_reputation_delta,
+        rt.required_skill_key,
+        rt.required_skill_level,
+        rt.required_reputation_key,
+        rt.required_reputation_min,
+        rt.pickup_location_key,
+        rt.delivery_location_key,
+        rt.deadline_seconds,
+        rt.is_active,
+        rt.created_at,
+        rt.updated_at,
+        pickup.id AS pickup_id,
+        pickup.key AS pickup_key,
+        pickup.name AS pickup_name,
+        pickup.description AS pickup_description,
+        pickup.location_type AS pickup_location_type,
+        pickup.position_x AS pickup_position_x,
+        pickup.position_y AS pickup_position_y,
+        pickup.position_z AS pickup_position_z,
+        pickup.radius AS pickup_radius,
+        pickup.is_active AS pickup_is_active,
+        pickup.created_at AS pickup_created_at,
+        pickup.updated_at AS pickup_updated_at,
+        delivery.id AS delivery_id,
+        delivery.key AS delivery_key,
+        delivery.name AS delivery_name,
+        delivery.description AS delivery_description,
+        delivery.location_type AS delivery_location_type,
+        delivery.position_x AS delivery_position_x,
+        delivery.position_y AS delivery_position_y,
+        delivery.position_z AS delivery_position_z,
+        delivery.radius AS delivery_radius,
+        delivery.is_active AS delivery_is_active,
+        delivery.created_at AS delivery_created_at,
+        delivery.updated_at AS delivery_updated_at
+    FROM contract_route_templates rt
+    LEFT JOIN contract_delivery_locations pickup
+        ON pickup.key = rt.pickup_location_key
+    LEFT JOIN contract_delivery_locations delivery
+        ON delivery.key = rt.delivery_location_key
+    WHERE rt.is_active = true
+    ORDER BY rt.key ASC
+]]
+
 local INSERT_ROUTE_TEMPLATE_QUERY = [[
     INSERT INTO contract_route_templates (
         key,
@@ -1164,6 +1275,78 @@ local function normalize_route_template_rows(rows)
     return normalized_rows
 end
 
+local function normalize_route_health_location(row, prefix)
+    local normalized_prefix = trim_string(prefix)
+    local location_id = nil
+    local location_key = nil
+
+    if type(row) ~= "table" or normalized_prefix == nil then
+        return nil
+    end
+
+    location_id = normalize_positive_integer(row[normalized_prefix .. "_id"])
+    location_key = normalize_location_key(row[normalized_prefix .. "_key"])
+
+    if location_id == nil or location_key == nil then
+        return nil
+    end
+
+    return {
+        id = location_id,
+        key = location_key,
+        name = trim_string(row[normalized_prefix .. "_name"]) or location_key,
+        description = trim_string(row[normalized_prefix .. "_description"]) or "",
+        location_type = trim_string(row[normalized_prefix .. "_location_type"]) or "delivery",
+        position_x = normalize_number(row[normalized_prefix .. "_position_x"], nil),
+        position_y = normalize_number(row[normalized_prefix .. "_position_y"], nil),
+        position_z = normalize_number(row[normalized_prefix .. "_position_z"], nil),
+        radius = normalize_number(row[normalized_prefix .. "_radius"], nil),
+        is_active = normalize_boolean(row[normalized_prefix .. "_is_active"], true),
+        created_at = row[normalized_prefix .. "_created_at"],
+        updated_at = row[normalized_prefix .. "_updated_at"],
+    }
+end
+
+local function normalize_route_health_row(row)
+    local route_template = normalize_route_template_row(row)
+
+    if route_template == nil then
+        return nil
+    end
+
+    return {
+        route = route_template,
+        raw_route = {
+            key = trim_string(row.key),
+            item_key = trim_string(row.item_key),
+            item_quantity = row.item_quantity,
+            reward_money = row.reward_money,
+            reward_skill_xp = row.reward_skill_xp,
+            required_skill_level = row.required_skill_level,
+            required_reputation_min = row.required_reputation_min,
+            deadline_seconds = row.deadline_seconds,
+            pickup_location_key = trim_string(row.pickup_location_key),
+            delivery_location_key = trim_string(row.delivery_location_key),
+        },
+        pickup_location = normalize_route_health_location(row, "pickup"),
+        delivery_location = normalize_route_health_location(row, "delivery"),
+    }
+end
+
+local function normalize_route_health_rows(rows)
+    local normalized_rows = {}
+
+    for _, row in ipairs(rows or {}) do
+        local normalized_row = normalize_route_health_row(row)
+
+        if normalized_row ~= nil then
+            normalized_rows[#normalized_rows + 1] = normalized_row
+        end
+    end
+
+    return normalized_rows
+end
+
 local function normalize_rows(rows)
     local normalized_rows = {}
 
@@ -1440,6 +1623,34 @@ function ContractRepository:ListAllRouteTemplates(callback)
     end
 
     return self:ListRouteTemplates(callback)
+end
+
+function ContractRepository:ListRouteTemplatesWithLocations(include_inactive, callback)
+    local query = SELECT_ACTIVE_ROUTE_TEMPLATES_WITH_LOCATIONS_QUERY
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if include_inactive == true then
+        query = SELECT_ROUTE_TEMPLATES_WITH_LOCATIONS_QUERY
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(query, function(rows, select_error)
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            callback(true, normalize_route_health_rows(rows), nil)
+        end)
+    end, "contracts-list-route-templates-with-locations")
 end
 
 function ContractRepository:GetRouteTemplate(route_key, callback)
