@@ -792,6 +792,59 @@ local function build_contract_location_admin_line(delivery_location)
     )
 end
 
+local function build_contract_location_usage_line(route_usage_row)
+    local route_template = route_usage_row and route_usage_row.route or {}
+
+    return string.format(
+        "- %s usage=%s active=%s item=%s x%s reward=%s",
+        tostring(route_template.key or "inconnue"),
+        tostring(route_usage_row and route_usage_row.usage or "unknown"),
+        tostring(route_template.is_active == true),
+        tostring(route_template.item_key or "inconnu"),
+        tostring(route_template.item_quantity or "?"),
+        tostring(route_template.reward_money or 0)
+    )
+end
+
+local function build_contract_location_health_summary_line(location_health)
+    local delivery_location = location_health and location_health.location or {}
+
+    return string.format(
+        "active=%s calibrated=%s radius=%s routes_total=%s routes_active=%s routes_invalides=%s",
+        tostring(delivery_location.is_active == true),
+        tostring(location_health and location_health.is_calibrated == true),
+        tostring(format_radius_value(delivery_location.radius)),
+        tostring(location_health and location_health.routes_total or 0),
+        tostring(location_health and location_health.routes_active or 0),
+        tostring(location_health and location_health.routes_invalid or 0)
+    )
+end
+
+local function build_contract_location_impacted_route_line(route_usage_row)
+    local route_template = route_usage_row and route_usage_row.route or {}
+
+    return string.format(
+        "- %s usage=%s",
+        tostring(route_template.key or "inconnue"),
+        tostring(route_usage_row and route_usage_row.usage or "unknown")
+    )
+end
+
+local function build_unused_contract_location_line(delivery_location)
+    local is_calibrated = type(delivery_location) == "table"
+        and type(delivery_location.position_x) == "number"
+        and type(delivery_location.position_y) == "number"
+        and type(delivery_location.position_z) == "number"
+
+    return string.format(
+        "- %s active=%s calibrated=%s radius=%s",
+        tostring(delivery_location and delivery_location.key or "inconnue"),
+        tostring(delivery_location and delivery_location.is_active == true),
+        tostring(is_calibrated),
+        tostring(format_radius_value(delivery_location and delivery_location.radius))
+    )
+end
+
 local function build_contract_line(contract_row)
     local payment_status = trim_string(contract_row and contract_row.payment_status)
     local item_requirement = format_contract_item_requirement(contract_row)
@@ -1383,6 +1436,30 @@ GRContractsBridge.ListAllContractLocations = function(callback)
     return GRContracts.Server.Service:ListAllContractLocations(callback)
 end
 
+GRContractsBridge.GetContractLocationRoutes = function(location_key, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetContractLocationRoutes(location_key, callback)
+end
+
+GRContractsBridge.GetContractLocationHealth = function(location_key, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetContractLocationHealth(location_key, callback)
+end
+
+GRContractsBridge.ListUnusedContractLocations = function(callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:ListUnusedContractLocations(callback)
+end
+
 GRContractsBridge.CreateContractLocation = function(location_key, radius, name, callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -1464,6 +1541,9 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "deliverylocations"
             and command_name ~= "allcontractlocations"
             and command_name ~= "deliverylocationinfo"
+            and command_name ~= "contractlocationroutes"
+            and command_name ~= "contractlocationhealth"
+            and command_name ~= "unusedcontractlocations"
             and command_name ~= "createcontractlocation"
             and command_name ~= "setcontractlocationactive"
             and command_name ~= "setcontractlocationradius"
@@ -2384,6 +2464,99 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 for _, delivery_location in ipairs(delivery_locations) do
                     Chat.SendMessage(player, build_contract_location_admin_line(delivery_location))
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "contractlocationroutes" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /contractlocationroutes <location_key>")
+                return false
+            end
+
+            GRContracts.Server.Service:GetContractLocationRoutes(payload, function(is_success, location_routes_result, error)
+                local delivery_location = location_routes_result and location_routes_result.location or nil
+                local route_rows = location_routes_result and location_routes_result.routes or nil
+
+                if not is_success or delivery_location == nil then
+                    Chat.SendMessage(player, "Location introuvable.")
+                    return
+                end
+
+                if type(route_rows) ~= "table" or #route_rows == 0 then
+                    Chat.SendMessage(player, string.format("Aucune route n'utilise la location %s.", tostring(delivery_location.key)))
+                    return
+                end
+
+                Chat.SendMessage(player, string.format("Routes utilisant %s :", tostring(delivery_location.key)))
+
+                for _, route_usage_row in ipairs(route_rows) do
+                    Chat.SendMessage(player, build_contract_location_usage_line(route_usage_row))
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "contractlocationhealth" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /contractlocationhealth <location_key>")
+                return false
+            end
+
+            GRContracts.Server.Service:GetContractLocationHealth(payload, function(is_success, location_health, error)
+                local delivery_location = location_health and location_health.location or nil
+                local impacted_routes = location_health and location_health.impacted_routes or nil
+
+                if not is_success or delivery_location == nil then
+                    Chat.SendMessage(player, "Location introuvable.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format("Location %s : %s.", tostring(delivery_location.key), tostring(location_health.status or "WARNING"))
+                )
+                Chat.SendMessage(player, build_contract_location_health_summary_line(location_health))
+
+                if type(location_health.issues) == "table" and #location_health.issues > 0 then
+                    Chat.SendMessage(player, "Issues :")
+
+                    for _, issue_text in ipairs(location_health.issues) do
+                        Chat.SendMessage(player, string.format("- %s", tostring(issue_text)))
+                    end
+                end
+
+                if type(impacted_routes) == "table" and #impacted_routes > 0 then
+                    Chat.SendMessage(player, "Routes impactees :")
+
+                    for _, route_usage_row in ipairs(impacted_routes) do
+                        Chat.SendMessage(player, build_contract_location_impacted_route_line(route_usage_row))
+                    end
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "unusedcontractlocations" then
+            GRContracts.Server.Service:ListUnusedContractLocations(function(is_success, delivery_locations, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Locations inutilisees indisponibles.")
+                    return
+                end
+
+                if type(delivery_locations) ~= "table" or #delivery_locations == 0 then
+                    Chat.SendMessage(player, "Aucune location inutilisee detectee.")
+                    return
+                end
+
+                Chat.SendMessage(player, "Locations inutilisees :")
+
+                for _, delivery_location in ipairs(delivery_locations) do
+                    Chat.SendMessage(player, build_unused_contract_location_line(delivery_location))
                 end
             end)
 

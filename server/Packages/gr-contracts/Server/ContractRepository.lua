@@ -1766,6 +1766,99 @@ function ContractRepository:ListRouteTemplatesWithLocations(include_inactive, ca
     end, "contracts-list-route-templates-with-locations")
 end
 
+function ContractRepository:ListRoutesUsingLocation(location_key, callback)
+    local normalized_location_key = normalize_location_key(location_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "delivery-location-key-required")
+        return true
+    end
+
+    return self:ListRouteTemplatesWithLocations(true, function(is_success, route_rows, error)
+        local matching_rows = {}
+
+        if not is_success then
+            callback(false, nil, error)
+            return
+        end
+
+        for _, route_row in ipairs(route_rows or {}) do
+            local route_template = route_row and route_row.route or nil
+            local uses_pickup = normalize_location_key(route_template and route_template.pickup_location_key) == normalized_location_key
+            local uses_delivery = normalize_location_key(route_template and route_template.delivery_location_key) == normalized_location_key
+            local usage = nil
+
+            if uses_pickup and uses_delivery then
+                usage = "pickup,destination"
+            elseif uses_pickup then
+                usage = "pickup"
+            elseif uses_delivery then
+                usage = "destination"
+            end
+
+            if usage ~= nil then
+                matching_rows[#matching_rows + 1] = {
+                    route = route_template,
+                    raw_route = route_row.raw_route,
+                    pickup_location = route_row.pickup_location,
+                    delivery_location = route_row.delivery_location,
+                    usage = usage,
+                }
+            end
+        end
+
+        callback(true, matching_rows, nil)
+    end)
+end
+
+function ContractRepository:ListUnusedContractLocations(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    return self:ListAllContractLocations(function(is_locations_success, delivery_locations, locations_error)
+        if not is_locations_success then
+            callback(false, nil, locations_error)
+            return
+        end
+
+        self:ListRouteTemplates(function(is_routes_success, route_templates, routes_error)
+            local used_location_keys = {}
+            local unused_locations = {}
+
+            if not is_routes_success then
+                callback(false, nil, routes_error)
+                return
+            end
+
+            for _, route_template in ipairs(route_templates or {}) do
+                local pickup_location_key = normalize_location_key(route_template and route_template.pickup_location_key)
+                local delivery_location_key = normalize_location_key(route_template and route_template.delivery_location_key)
+
+                if pickup_location_key ~= nil then
+                    used_location_keys[pickup_location_key] = true
+                end
+
+                if delivery_location_key ~= nil then
+                    used_location_keys[delivery_location_key] = true
+                end
+            end
+
+            for _, delivery_location in ipairs(delivery_locations or {}) do
+                if used_location_keys[normalize_location_key(delivery_location and delivery_location.key)] ~= true then
+                    unused_locations[#unused_locations + 1] = delivery_location
+                end
+            end
+
+            callback(true, unused_locations, nil)
+        end)
+    end)
+end
+
 function ContractRepository:GetRouteTemplate(route_key, callback)
     local normalized_route_key = normalize_route_key(route_key)
 
@@ -2156,6 +2249,12 @@ function ContractRepository:CreateContractLocation(location, callback)
 
         database_or_error:SelectAsync(INSERT_CONTRACT_LOCATION_QUERY, function(rows, insert_error)
             local delivery_locations = nil
+            local error_message = insert_error
+
+            if type(error_message) == "string" and string.find(string.lower(error_message), "duplicate", 1, true) ~= nil then
+                callback(false, nil, "location-already-exists")
+                return
+            end
 
             if insert_error ~= nil then
                 callback(false, nil, insert_error)

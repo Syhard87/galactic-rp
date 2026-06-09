@@ -793,6 +793,20 @@ local function is_location_radius_valid(delivery_location)
     return radius ~= nil and radius > 0
 end
 
+local function table_contains_value(values, expected_value)
+    if type(values) ~= "table" or expected_value == nil then
+        return false
+    end
+
+    for _, value in ipairs(values) do
+        if value == expected_value then
+            return true
+        end
+    end
+
+    return false
+end
+
 local function add_route_diagnostic_issue(result, issue_code)
     local issue_message = nil
 
@@ -3074,6 +3088,175 @@ function ContractService:ListInvalidRoutes(callback)
         end
 
         callback(true, invalid_rows, nil)
+    end)
+end
+
+function ContractService:GetContractLocationRoutes(location_key, callback)
+    local normalized_location_key = normalize_location_key(location_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "invalid-location-key")
+        return true
+    end
+
+    return self:GetDeliveryLocationInfo(normalized_location_key, function(is_location_success, delivery_location, location_error)
+        if not is_location_success then
+            callback(false, nil, location_error or "database-error")
+            return
+        end
+
+        self.repository:ListRoutesUsingLocation(normalized_location_key, function(is_routes_success, route_rows, routes_error)
+            if not is_routes_success then
+                callback(false, nil, routes_error or "database-error")
+                return
+            end
+
+            callback(true, {
+                location = delivery_location,
+                routes = route_rows or {},
+            }, nil)
+        end)
+    end)
+end
+
+function ContractService:GetContractLocationHealth(location_key, callback)
+    local normalized_location_key = normalize_location_key(location_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_location_key == nil then
+        callback(false, nil, "invalid-location-key")
+        return true
+    end
+
+    return self:GetContractLocationRoutes(normalized_location_key, function(is_success, location_routes_result, error)
+        local delivery_location = nil
+        local route_rows = nil
+        local health_result = nil
+        local issues = {}
+        local impacted_routes = {}
+        local routes_total = 0
+        local routes_active = 0
+        local routes_invalid = 0
+        local is_calibrated = false
+        local is_radius_valid = false
+        local usage_issue_codes = nil
+
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        delivery_location = location_routes_result and location_routes_result.location or nil
+        route_rows = location_routes_result and location_routes_result.routes or {}
+        is_calibrated = is_location_calibrated(delivery_location)
+        is_radius_valid = is_location_radius_valid(delivery_location)
+        routes_total = #(route_rows or {})
+
+        if delivery_location ~= nil and delivery_location.is_active ~= true then
+            issues[#issues + 1] = "location inactive"
+        end
+
+        if not is_calibrated then
+            issues[#issues + 1] = "position non calibree"
+        end
+
+        if not is_radius_valid then
+            issues[#issues + 1] = "radius invalide"
+        end
+
+        for _, route_row in ipairs(route_rows or {}) do
+            local route_template = route_row and route_row.route or nil
+            local usage = trim_string(route_row and route_row.usage)
+            local route_impacted = false
+
+            if route_template ~= nil and route_template.is_active == true then
+                routes_active = routes_active + 1
+            end
+
+            health_result = self:EvaluateRouteTemplateHealth(
+                route_template,
+                route_row and route_row.pickup_location or nil,
+                route_row and route_row.delivery_location or nil,
+                route_row and route_row.raw_route or nil
+            )
+
+            usage_issue_codes = {}
+
+            if usage == "pickup" or usage == "pickup,destination" then
+                usage_issue_codes[#usage_issue_codes + 1] = "pickup-missing"
+                usage_issue_codes[#usage_issue_codes + 1] = "pickup-inactive"
+                usage_issue_codes[#usage_issue_codes + 1] = "pickup-position-missing"
+                usage_issue_codes[#usage_issue_codes + 1] = "pickup-radius-invalid"
+            end
+
+            if usage == "destination" or usage == "pickup,destination" then
+                usage_issue_codes[#usage_issue_codes + 1] = "delivery-missing"
+                usage_issue_codes[#usage_issue_codes + 1] = "delivery-inactive"
+                usage_issue_codes[#usage_issue_codes + 1] = "delivery-position-missing"
+                usage_issue_codes[#usage_issue_codes + 1] = "delivery-radius-invalid"
+            end
+
+            for _, issue_code in ipairs(usage_issue_codes) do
+                if table_contains_value(health_result and health_result.issue_codes, issue_code) then
+                    route_impacted = true
+                    break
+                end
+            end
+
+            if route_impacted then
+                routes_invalid = routes_invalid + 1
+                impacted_routes[#impacted_routes + 1] = {
+                    route = route_template,
+                    usage = usage,
+                }
+            end
+        end
+
+        callback(true, {
+            location = delivery_location,
+            status = #issues == 0 and "OK" or "WARNING",
+            is_calibrated = is_calibrated,
+            is_radius_valid = is_radius_valid,
+            routes_total = routes_total,
+            routes_active = routes_active,
+            routes_invalid = routes_invalid,
+            issues = issues,
+            impacted_routes = impacted_routes,
+        }, nil)
+    end)
+end
+
+function ContractService:ListUnusedContractLocations(callback)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self.repository:ListUnusedContractLocations(function(is_success, delivery_locations, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        callback(true, delivery_locations or {}, nil)
     end)
 end
 
