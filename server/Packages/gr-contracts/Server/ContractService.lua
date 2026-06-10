@@ -2792,6 +2792,7 @@ function ContractService:CreateRouteTemplate(route_key, item_key, quantity, rewa
                     reward_money = normalized_reward_money,
                     pickup_location_key = normalized_pickup_location_key,
                     delivery_location_key = normalized_delivery_location_key,
+                    is_active = false,
                 }, function(is_create_success, route_template, create_error)
                     if not is_create_success then
                         if create_error == "route-already-exists" then
@@ -3273,6 +3274,76 @@ function ContractService:ListAllRouteTemplates(callback)
 end
 
 function ContractService:SetRouteActive(route_key, is_active, callback)
+    local normalized_route_key = normalize_route_key(route_key)
+    local normalized_is_active = normalize_boolean_text(is_active)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "invalid-route-key")
+        return true
+    end
+
+    if normalized_is_active == nil then
+        callback(false, nil, "invalid-active-value")
+        return true
+    end
+
+    if normalized_is_active == false then
+        return self.repository:UpdateRouteActive(normalized_route_key, normalized_is_active, function(is_success, route_template, error)
+            if not is_success then
+                callback(false, nil, error or "database-error")
+                return
+            end
+
+            if route_template == nil then
+                callback(false, nil, "route-not-found")
+                return
+            end
+
+            callback(true, route_template, nil)
+        end)
+    end
+
+    return self:ValidateRouteTemplate(normalized_route_key, function(is_validate_success, health_result, validate_error)
+        if not is_validate_success then
+            callback(false, nil, validate_error or "database-error")
+            return
+        end
+
+        if type(health_result) ~= "table" or health_result.route == nil then
+            callback(false, nil, "route-not-found")
+            return
+        end
+
+        if health_result.is_valid ~= true then
+            callback(false, health_result, "route-invalid")
+            return
+        end
+
+        self.repository:UpdateRouteActive(normalized_route_key, true, function(is_success, route_template, error)
+            if not is_success then
+                callback(false, nil, error or "database-error")
+                return
+            end
+
+            if route_template == nil then
+                callback(false, nil, "route-not-found")
+                return
+            end
+
+            callback(true, route_template, nil)
+        end)
+    end)
+end
+
+function ContractService:ForceSetRouteActive(route_key, is_active, callback)
     local normalized_route_key = normalize_route_key(route_key)
     local normalized_is_active = normalize_boolean_text(is_active)
 

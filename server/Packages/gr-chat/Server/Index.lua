@@ -53,6 +53,7 @@ local EXTERNAL_CHAT_COMMANDS = {
     contractrewards = true,
     grantcontractrewards = true,
     setrouteactive = true,
+    forcerouteactive = true,
     setroutedeadline = true,
     setroutereward = true,
     setrouterequirement = true,

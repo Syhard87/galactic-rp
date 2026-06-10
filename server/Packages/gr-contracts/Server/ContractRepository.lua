@@ -391,7 +391,7 @@ local INSERT_ROUTE_TEMPLATE_QUERY = [[
         :6,
         :7,
         NULL,
-        true
+        :8
     )
     RETURNING
         id,
@@ -1900,6 +1900,7 @@ function ContractRepository:CreateRouteTemplate(route, callback)
     local normalized_reward_money = normalize_non_negative_integer(route and route.reward_money, nil)
     local normalized_pickup_location_key = normalize_location_key(route and route.pickup_location_key)
     local normalized_delivery_location_key = normalize_location_key(route and route.delivery_location_key)
+    local normalized_is_active = normalize_boolean(route and route.is_active, nil)
 
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -1945,6 +1946,11 @@ function ContractRepository:CreateRouteTemplate(route, callback)
         return true
     end
 
+    if normalized_is_active == nil then
+        callback(false, nil, "route-active-invalid")
+        return true
+    end
+
     return self:Connect(function(is_connected, database_or_error, error)
         if not is_connected then
             callback(false, nil, error)
@@ -1977,7 +1983,8 @@ function ContractRepository:CreateRouteTemplate(route, callback)
             normalized_item_quantity,
             normalized_reward_money,
             normalized_pickup_location_key,
-            normalized_delivery_location_key
+            normalized_delivery_location_key,
+            normalized_is_active
         )
     end, "contracts-create-route-template")
 end

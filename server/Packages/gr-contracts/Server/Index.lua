@@ -1260,6 +1260,14 @@ GRContractsBridge.SetRouteActive = function(route_key, is_active, callback)
     return GRContracts.Server.Service:SetRouteActive(route_key, is_active, callback)
 end
 
+GRContractsBridge.ForceSetRouteActive = function(route_key, is_active, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:ForceSetRouteActive(route_key, is_active, callback)
+end
+
 GRContractsBridge.SetRouteDeadline = function(route_key, deadline_seconds, callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -1561,6 +1569,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "cleanupcontractcargo"
             and command_name ~= "expiredcontracts"
             and command_name ~= "setrouteactive"
+            and command_name ~= "forcerouteactive"
             and command_name ~= "setroutedeadline"
             and command_name ~= "setroutereward"
             and command_name ~= "setrouterequirement"
@@ -1763,6 +1772,14 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                             tostring(route_template.pickup_location_key or "aucun"),
                             tostring(route_template.delivery_location_key or "aucune"),
                             tostring(route_template.is_active == true)
+                        )
+                    )
+                    Chat.SendMessage(
+                        player,
+                        string.format(
+                            "Utilisez /validateroute %s puis /setrouteactive %s true.",
+                            tostring(route_template.key),
+                            tostring(route_template.key)
                         )
                     )
                 end
@@ -2037,6 +2054,24 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         return
                     end
 
+                    if error == "route-invalid" then
+                        Chat.SendMessage(player, "Activation route impossible : route invalide.")
+                        Chat.SendMessage(player, "Issues :")
+
+                        for _, issue_text in ipairs((route_template and route_template.issues) or {}) do
+                            Chat.SendMessage(player, string.format("- %s", tostring(issue_text)))
+                        end
+
+                        Chat.SendMessage(
+                            player,
+                            string.format(
+                                "Utilisez /validateroute %s pour le detail.",
+                                tostring(route_template and route_template.route and route_template.route.key or route_key)
+                            )
+                        )
+                        return
+                    end
+
                     Chat.SendMessage(player, "Route indisponible.")
                     return
                 end
@@ -2045,6 +2080,48 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     player,
                     string.format(
                         "Route %s active=%s.",
+                        tostring(route_template.key),
+                        tostring(route_template.is_active == true)
+                    )
+                )
+            end)
+
+            return false
+        end
+
+        if command_name == "forcerouteactive" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /forcerouteactive <route_key> <true|false>")
+                return false
+            end
+
+            local route_key, active_text = payload:match("^(%S+)%s+(%S+)$")
+
+            if route_key == nil or active_text == nil then
+                Chat.SendMessage(player, "Usage : /forcerouteactive <route_key> <true|false>")
+                return false
+            end
+
+            GRContracts.Server.Service:ForceSetRouteActive(route_key, active_text, function(is_success, route_template, error)
+                if not is_success then
+                    if error == "route-not-found" or error == "invalid-route-key" then
+                        Chat.SendMessage(player, "Route introuvable.")
+                        return
+                    end
+
+                    if error == "invalid-active-value" then
+                        Chat.SendMessage(player, "Valeur active invalide.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Route indisponible.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Route %s active=%s force=true.",
                         tostring(route_template.key),
                         tostring(route_template.is_active == true)
                     )
