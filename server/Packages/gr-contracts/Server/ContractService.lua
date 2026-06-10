@@ -593,6 +593,48 @@ local function resolve_contract_role(contract_row, character_id)
     return "unknown"
 end
 
+local function get_platform_id(player)
+    if type(player) ~= "table" and type(player) ~= "userdata" then
+        return nil
+    end
+
+    if type(player.GetAccountID) ~= "function" then
+        return nil
+    end
+
+    return player:GetAccountID()
+end
+
+local function resolve_active_character_id(player_or_character_id)
+    local normalized_character_id = normalize_positive_integer(player_or_character_id)
+
+    if normalized_character_id ~= nil then
+        return normalized_character_id
+    end
+
+    if type(GRCharactersBridge) ~= "table" or type(GRCharactersBridge.GetActiveCharacter) ~= "function" then
+        return nil
+    end
+
+    local platform_id = get_platform_id(player_or_character_id)
+
+    if platform_id == nil then
+        platform_id = trim_string(player_or_character_id)
+    end
+
+    if platform_id == nil then
+        return nil
+    end
+
+    local active_character = GRCharactersBridge.GetActiveCharacter(platform_id)
+
+    if type(active_character) ~= "table" then
+        return nil
+    end
+
+    return normalize_positive_integer(active_character.id)
+end
+
 local function has_required_items(inventory_rows, required_item_key, required_item_quantity)
     local total_quantity = 0
 
@@ -618,6 +660,99 @@ local function is_contract_terminal(contract_row)
     end
 
     return false
+end
+
+local function resolve_player_contract_status(contract_row)
+    local contract_status = trim_string(contract_row and contract_row.status) or "unknown"
+    local pickup_status = normalize_pickup_status(contract_row and contract_row.pickup_status)
+
+    if contract_status == "accepted" and pickup_status == "picked_up" then
+        return "picked_up"
+    end
+
+    return contract_status
+end
+
+local function format_remaining_deadline(remaining_deadline_seconds)
+    local normalized_remaining_deadline = normalize_non_negative_integer(remaining_deadline_seconds)
+
+    if normalized_remaining_deadline == nil then
+        return "none"
+    end
+
+    if normalized_remaining_deadline < 60 then
+        return string.format("%ss", tostring(normalized_remaining_deadline))
+    end
+
+    if normalized_remaining_deadline < 3600 then
+        return string.format("%sm", tostring(math.ceil(normalized_remaining_deadline / 60)))
+    end
+
+    if normalized_remaining_deadline < 86400 then
+        return string.format("%sh", tostring(math.ceil(normalized_remaining_deadline / 3600)))
+    end
+
+    return string.format("%sd", tostring(math.ceil(normalized_remaining_deadline / 86400)))
+end
+
+local function build_player_contract_next_action(contract_row)
+    local normalized_contract_id = normalize_positive_integer(contract_row and contract_row.id)
+    local pickup_location_key = normalize_location_key(contract_row and contract_row.pickup_location_key)
+    local delivery_location_key = normalize_location_key(contract_row and contract_row.delivery_location_key)
+    local requires_pickup_location = contract_row and contract_row.requires_pickup_location == true
+    local requires_delivery_location = contract_row and contract_row.requires_delivery_location == true
+    local pickup_status = normalize_pickup_status(contract_row and contract_row.pickup_status)
+
+    if requires_pickup_location and pickup_status == "pending" and pickup_location_key ~= nil and normalized_contract_id ~= nil then
+        return string.format(
+            "allez au pickup %s puis utilisez /pickupcontract %s",
+            tostring(pickup_location_key),
+            tostring(normalized_contract_id)
+        )
+    end
+
+    if requires_delivery_location and delivery_location_key ~= nil and normalized_contract_id ~= nil then
+        return string.format(
+            "allez a la destination %s puis utilisez /completecontract %s",
+            tostring(delivery_location_key),
+            tostring(normalized_contract_id)
+        )
+    end
+
+    if normalized_contract_id ~= nil then
+        return string.format("consultez /contractstatus %s", tostring(normalized_contract_id))
+    end
+
+    return "consultez les details du contrat"
+end
+
+local function build_player_contract_route_label(contract_row)
+    local source_route_key = normalize_route_key(contract_row and contract_row.source_route_key)
+
+    if source_route_key ~= nil then
+        return source_route_key
+    end
+
+    return trim_string(contract_row and contract_row.type) or "contrat"
+end
+
+local function enrich_player_active_contract(contract_row)
+    local enriched_row = {}
+
+    if type(contract_row) ~= "table" then
+        return nil
+    end
+
+    for key, value in pairs(contract_row) do
+        enriched_row[key] = value
+    end
+
+    enriched_row.display_status = resolve_player_contract_status(contract_row)
+    enriched_row.deadline_remaining_text = format_remaining_deadline(contract_row.remaining_deadline_seconds)
+    enriched_row.next_action = build_player_contract_next_action(contract_row)
+    enriched_row.route_label = build_player_contract_route_label(contract_row)
+
+    return enriched_row
 end
 
 local function route_has_job_requirements(route_template)
@@ -4099,8 +4234,8 @@ function ContractService:ListOpenContracts(callback)
     return self.repository:ListOpenContracts(callback)
 end
 
-function ContractService:ListMyContracts(character_id, callback)
-    local normalized_character_id = normalize_positive_integer(character_id)
+function ContractService:ListMyContracts(player_or_character_id, callback)
+    local normalized_character_id = resolve_active_character_id(player_or_character_id)
 
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -4111,11 +4246,11 @@ function ContractService:ListMyContracts(character_id, callback)
     end
 
     if normalized_character_id == nil then
-        callback(false, nil, "character-id-required")
+        callback(false, nil, "no-active-character")
         return true
     end
 
-    return self.repository:ListContractsForCharacter(normalized_character_id, function(is_success, contract_rows, error)
+    return self.repository:ListActiveContractsByCharacter(normalized_character_id, function(is_success, contract_rows, error)
         local results = {}
 
         if not is_success then
@@ -4124,17 +4259,52 @@ function ContractService:ListMyContracts(character_id, callback)
         end
 
         for _, contract_row in ipairs(contract_rows or {}) do
-            local enriched_row = {}
+            local enriched_row = enrich_player_active_contract(contract_row)
 
-            for key, value in pairs(contract_row) do
-                enriched_row[key] = value
+            if enriched_row ~= nil then
+                enriched_row.role = resolve_contract_role(contract_row, normalized_character_id)
+                results[#results + 1] = enriched_row
             end
-
-            enriched_row.role = resolve_contract_role(contract_row, normalized_character_id)
-            results[#results + 1] = enriched_row
         end
 
         callback(true, results, nil)
+    end)
+end
+
+function ContractService:GetMyContractStatus(player_or_character_id, contract_id, callback)
+    local normalized_character_id = resolve_active_character_id(player_or_character_id)
+    local normalized_contract_id = normalize_contract_id(contract_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "no-active-character")
+        return true
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "invalid-contract-id")
+        return true
+    end
+
+    return self.repository:GetContractByIdForCharacter(normalized_contract_id, normalized_character_id, function(is_success, contract_row, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        if contract_row == nil then
+            callback(false, nil, "contract-not-found")
+            return
+        end
+
+        callback(true, enrich_player_active_contract(contract_row), nil)
     end)
 end
 

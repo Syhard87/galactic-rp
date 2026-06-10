@@ -18,6 +18,7 @@ local EXTERNAL_CHAT_COMMANDS = {
     craftstations = true,
     contracts = true,
     mycontracts = true,
+    contractstatus = true,
     contractroutes = true,
     contractrouteinfo = true,
     allcontractroutes = true,

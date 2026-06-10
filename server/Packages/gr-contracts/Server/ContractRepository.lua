@@ -669,6 +669,39 @@ local SELECT_CONTRACTS_FOR_CHARACTER_QUERY = [[
     ORDER BY id ASC
 ]]
 
+local SELECT_ACTIVE_CONTRACTS_BY_CHARACTER_QUERY = [[
+    SELECT
+]] .. CONTRACT_SELECT_COLUMNS .. [[
+        ,
+        CASE
+            WHEN expires_at IS NULL THEN NULL
+            WHEN expires_at <= NOW() THEN 0
+            ELSE CEIL(EXTRACT(EPOCH FROM (expires_at - NOW())))
+        END AS remaining_deadline_seconds
+    FROM contracts
+    WHERE assignee_character_id = :0
+      AND status = 'accepted'
+      AND COALESCE(payment_status, 'pending') <> 'paid'
+    ORDER BY COALESCE(accepted_at, created_at) DESC, id DESC
+]]
+
+local SELECT_ACTIVE_CONTRACT_BY_ID_FOR_CHARACTER_QUERY = [[
+    SELECT
+]] .. CONTRACT_SELECT_COLUMNS .. [[
+        ,
+        CASE
+            WHEN expires_at IS NULL THEN NULL
+            WHEN expires_at <= NOW() THEN 0
+            ELSE CEIL(EXTRACT(EPOCH FROM (expires_at - NOW())))
+        END AS remaining_deadline_seconds
+    FROM contracts
+    WHERE id = :0
+      AND assignee_character_id = :1
+      AND status = 'accepted'
+      AND COALESCE(payment_status, 'pending') <> 'paid'
+    LIMIT 1
+]]
+
 local SELECT_JOB_STATS_FOR_CHARACTER_QUERY = [[
     SELECT
         COUNT(*) FILTER (WHERE status = 'completed') AS completed_count,
@@ -1278,6 +1311,7 @@ local function normalize_contract_row(row)
         cancel_reason = trim_string(row.cancel_reason),
         paid_at = row.paid_at,
         deadline_at = row.deadline_at,
+        remaining_deadline_seconds = normalize_integer(row.remaining_deadline_seconds, nil),
     }
 end
 
@@ -2485,6 +2519,35 @@ function ContractRepository:ListContractsForCharacter(character_id, callback)
     end, "contracts-list-character")
 end
 
+function ContractRepository:ListActiveContractsByCharacter(character_id, callback)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_ACTIVE_CONTRACTS_BY_CHARACTER_QUERY, function(rows, select_error)
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            callback(true, normalize_rows(rows), nil)
+        end, normalized_character_id)
+    end, "contracts-list-active-character")
+end
+
 function ContractRepository:GetCharacterJobStats(character_id, callback)
     local normalized_character_id = normalize_positive_integer(character_id)
 
@@ -2609,6 +2672,44 @@ function ContractRepository:GetContractById(contract_id, callback)
             callback(true, contract_rows[1], nil)
         end, normalized_contract_id)
     end, "contracts-get-by-id")
+end
+
+function ContractRepository:GetContractByIdForCharacter(contract_id, character_id, callback)
+    local normalized_contract_id = normalize_positive_integer(contract_id)
+    local normalized_character_id = normalize_positive_integer(character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-required")
+        return true
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_ACTIVE_CONTRACT_BY_ID_FOR_CHARACTER_QUERY, function(rows, select_error)
+            local contract_rows = nil
+
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            contract_rows = normalize_rows(rows)
+            callback(true, contract_rows[1], nil)
+        end, normalized_contract_id, normalized_character_id)
+    end, "contracts-get-active-by-id-character")
 end
 
 function ContractRepository:AcceptContract(contract_id, assignee_character_id, callback)

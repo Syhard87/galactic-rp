@@ -1088,6 +1088,80 @@ local function build_my_contract_line(contract_row)
     )
 end
 
+local function build_player_active_contract_summary_line(contract_row)
+    return string.format(
+        "- #%s %s | %s | %s x%s | %s -> %s | reward=%s | deadline=%s",
+        tostring(contract_row and contract_row.id or "?"),
+        tostring(contract_row and contract_row.route_label or contract_row and contract_row.source_route_key or contract_row and contract_row.type or "contrat"),
+        tostring(contract_row and contract_row.display_status or contract_row and contract_row.status or "unknown"),
+        tostring(contract_row and contract_row.required_item_key or "inconnu"),
+        tostring(contract_row and contract_row.required_item_quantity or "?"),
+        tostring(contract_row and contract_row.pickup_location_key or "aucun"),
+        tostring(contract_row and contract_row.delivery_location_key or "aucune"),
+        tostring(contract_row and contract_row.reward_money or 0),
+        tostring(contract_row and contract_row.deadline_remaining_text or "none")
+    )
+end
+
+local function build_player_active_contract_detail_hint_line(contract_row)
+    return string.format(
+        "  Detail : /contractstatus %s",
+        tostring(contract_row and contract_row.id or "?")
+    )
+end
+
+local function build_player_contract_status_title_line(contract_row)
+    return string.format(
+        "Contrat #%s : %s",
+        tostring(contract_row and contract_row.id or "?"),
+        tostring(contract_row and contract_row.route_label or contract_row and contract_row.source_route_key or contract_row and contract_row.type or "contrat")
+    )
+end
+
+local function build_player_contract_status_line(contract_row)
+    return string.format(
+        "Status : %s",
+        tostring(contract_row and contract_row.display_status or contract_row and contract_row.status or "unknown")
+    )
+end
+
+local function build_player_contract_item_line(contract_row)
+    return string.format(
+        "Item : %s x%s",
+        tostring(contract_row and contract_row.required_item_key or "inconnu"),
+        tostring(contract_row and contract_row.required_item_quantity or "?")
+    )
+end
+
+local function build_player_contract_reward_line(contract_row)
+    return string.format(
+        "Reward : %s",
+        tostring(contract_row and contract_row.reward_money or 0)
+    )
+end
+
+local function build_player_contract_route_line(contract_row)
+    return string.format(
+        "Route : %s -> %s",
+        tostring(contract_row and contract_row.pickup_location_key or "aucun"),
+        tostring(contract_row and contract_row.delivery_location_key or "aucune")
+    )
+end
+
+local function build_player_contract_deadline_line(contract_row)
+    return string.format(
+        "Deadline : %s",
+        tostring(contract_row and contract_row.deadline_remaining_text or "none")
+    )
+end
+
+local function build_player_contract_next_action_line(contract_row)
+    return string.format(
+        "Prochaine action : %s",
+        tostring(contract_row and contract_row.next_action or "consultez les details du contrat")
+    )
+end
+
 local function build_expired_contract_line(contract_row)
     local line = string.format(
         "#%s status=%s cargo_cleanup=%s %s",
@@ -1200,6 +1274,14 @@ GRContractsBridge.ListMyContracts = function(character_id, callback)
     end
 
     return GRContracts.Server.Service:ListMyContracts(character_id, callback)
+end
+
+GRContractsBridge.GetMyContractStatus = function(character_id, contract_id, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetMyContractStatus(character_id, contract_id, callback)
 end
 
 GRContractsBridge.AcceptContract = function(character_id, contract_id, callback)
@@ -1595,6 +1677,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
         if command_name ~= "contracts"
             and command_name ~= "mycontracts"
+            and command_name ~= "contractstatus"
             and command_name ~= "contractroutes"
             and command_name ~= "allcontractroutes"
             and command_name ~= "createroute"
@@ -1649,20 +1732,22 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             return
         end
 
-        local is_allowed = false
-        local platform_id = nil
-        local guard_error = nil
+        if command_name ~= "mycontracts" and command_name ~= "contractstatus" then
+            local is_allowed = false
+            local platform_id = nil
+            local guard_error = nil
 
-        is_allowed, platform_id, guard_error = can_use_contracts_debug_commands(player)
+            is_allowed, platform_id, guard_error = can_use_contracts_debug_commands(player)
 
-        if not is_allowed then
-            Console.Log(
-                "[gr_contracts][server] Contracts debug command denied platform_id=%s reason=%s.",
-                tostring(platform_id),
-                tostring(guard_error)
-            )
-            Chat.SendMessage(player, "Commande contrats desactivee.")
-            return false
+            if not is_allowed then
+                Console.Log(
+                    "[gr_contracts][server] Contracts debug command denied platform_id=%s reason=%s.",
+                    tostring(platform_id),
+                    tostring(guard_error)
+                )
+                Chat.SendMessage(player, "Commande contrats desactivee.")
+                return false
+            end
         end
 
         local active_character_id = resolve_active_character_id(player)
@@ -3140,22 +3225,70 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         end
 
         if command_name == "mycontracts" then
-            GRContracts.Server.Service:ListMyContracts(active_character_id, function(is_success, contract_rows, error)
+            GRContracts.Server.Service:ListMyContracts(player, function(is_success, contract_rows, error)
                 if not is_success then
+                    if error == "no-active-character" then
+                        Chat.SendMessage(player, "Personnage actif introuvable.")
+                        return
+                    end
+
                     Chat.SendMessage(player, "Mes contrats sont indisponibles.")
                     return
                 end
 
                 if type(contract_rows) ~= "table" or #contract_rows == 0 then
-                    Chat.SendMessage(player, "Aucun contrat.")
+                    Chat.SendMessage(player, "Vous n'avez aucun contrat actif.")
+                    Chat.SendMessage(player, "Voir missions : /jobboard")
                     return
                 end
 
-                Chat.SendMessage(player, "Mes contrats :")
+                Chat.SendMessage(player, "Mes contrats actifs :")
 
                 for _, contract_row in ipairs(contract_rows) do
-                    Chat.SendMessage(player, build_my_contract_line(contract_row))
+                    Chat.SendMessage(player, build_player_active_contract_summary_line(contract_row))
+                    Chat.SendMessage(player, build_player_active_contract_detail_hint_line(contract_row))
                 end
+            end)
+
+            return false
+        end
+
+        if command_name == "contractstatus" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /contractstatus <contract_id>")
+                return false
+            end
+
+            local contract_id = normalize_positive_integer(payload)
+
+            if contract_id == nil then
+                Chat.SendMessage(player, "Contrat introuvable pour votre personnage.")
+                return false
+            end
+
+            GRContracts.Server.Service:GetMyContractStatus(player, contract_id, function(is_success, contract_row, error)
+                if not is_success then
+                    if error == "no-active-character" then
+                        Chat.SendMessage(player, "Personnage actif introuvable.")
+                        return
+                    end
+
+                    if error == "invalid-contract-id" or error == "contract-not-found" then
+                        Chat.SendMessage(player, "Contrat introuvable pour votre personnage.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Statut contrat indisponible.")
+                    return
+                end
+
+                Chat.SendMessage(player, build_player_contract_status_title_line(contract_row))
+                Chat.SendMessage(player, build_player_contract_status_line(contract_row))
+                Chat.SendMessage(player, build_player_contract_item_line(contract_row))
+                Chat.SendMessage(player, build_player_contract_reward_line(contract_row))
+                Chat.SendMessage(player, build_player_contract_route_line(contract_row))
+                Chat.SendMessage(player, build_player_contract_deadline_line(contract_row))
+                Chat.SendMessage(player, build_player_contract_next_action_line(contract_row))
             end)
 
             return false
