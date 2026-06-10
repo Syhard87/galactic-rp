@@ -630,14 +630,16 @@ local function build_locked_job_line(availability_result)
     local route_template = availability_result and availability_result.route or {}
     local reasons = type(availability_result) == "table" and availability_result.reasons or nil
     local reason_text = "raison indisponible"
+    local status_text = availability_result and availability_result.is_technically_unavailable == true and "indisponible" or "bloque"
 
     if type(reasons) == "table" and #reasons > 0 then
         reason_text = table.concat(reasons, ", ")
     end
 
     return string.format(
-        "- %s bloque : %s",
+        "- %s %s : %s",
         tostring(route_template.key or "inconnue"),
+        tostring(status_text),
         tostring(reason_text)
     )
 end
@@ -1827,7 +1829,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 end
 
                 if type(route_templates) ~= "table" or #route_templates == 0 then
-                    Chat.SendMessage(player, "Aucune mission disponible.")
+                    Chat.SendMessage(player, "Aucune mission jouable disponible actuellement.")
                     return
                 end
 
@@ -2319,16 +2321,43 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     return
                 end
 
-                Chat.SendMessage(player, string.format("Mission %s :", tostring(route_template.key)))
-                Chat.SendMessage(player, build_route_template_info_line(route_template))
-                Chat.SendMessage(
-                    player,
-                    string.format(
-                        "prerequis=%s",
-                        tostring(build_route_requirements_message(route_template))
+                GRContracts.Server.Service:IsRoutePlayable(route_template, function(is_playable_success, playability_result, playability_error)
+                    if not is_playable_success then
+                        Chat.SendMessage(player, "Mission introuvable.")
+                        return
+                    end
+
+                    if playability_result == nil or playability_result.is_playable ~= true then
+                        Chat.SendMessage(player, string.format("Mission %s : INDISPONIBLE.", tostring(route_template.key)))
+                        Chat.SendMessage(player, "Issues :")
+
+                        for _, issue_text in ipairs((playability_result and playability_result.issues) or {}) do
+                            Chat.SendMessage(player, string.format("- %s", tostring(issue_text)))
+                        end
+
+                        Chat.SendMessage(player, build_route_template_info_line(route_template))
+                        Chat.SendMessage(
+                            player,
+                            string.format(
+                                "prerequis=%s",
+                                tostring(build_route_requirements_message(route_template))
+                            )
+                        )
+                        Chat.SendMessage(player, string.format("description=%s", tostring(route_template.description or "")))
+                        return
+                    end
+
+                    Chat.SendMessage(player, string.format("Mission %s :", tostring(route_template.key)))
+                    Chat.SendMessage(player, build_route_template_info_line(route_template))
+                    Chat.SendMessage(
+                        player,
+                        string.format(
+                            "prerequis=%s",
+                            tostring(build_route_requirements_message(route_template))
+                        )
                     )
-                )
-                Chat.SendMessage(player, string.format("description=%s", tostring(route_template.description or "")))
+                    Chat.SendMessage(player, string.format("description=%s", tostring(route_template.description or "")))
+                end)
             end)
 
             return false
@@ -2351,6 +2380,16 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 if error == "route-inactive" then
                     Chat.SendMessage(player, "Mission inactive.")
+                    return
+                end
+
+                if error == "route-unavailable" then
+                    Chat.SendMessage(player, string.format("Mission %s : INDISPONIBLE.", tostring(route_key)))
+                    Chat.SendMessage(player, "Issues :")
+
+                    for _, issue_text in ipairs((requirements_result and requirements_result.issues) or {}) do
+                        Chat.SendMessage(player, string.format("- %s", tostring(issue_text)))
+                    end
                     return
                 end
 
@@ -2658,6 +2697,16 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         return
                     end
 
+                    if error == "route-unavailable" then
+                        Chat.SendMessage(player, "Mission impossible : route indisponible.")
+                        Chat.SendMessage(player, "Issues :")
+
+                        for _, issue_text in ipairs((contract_row and contract_row.issues) or {}) do
+                            Chat.SendMessage(player, string.format("- %s", tostring(issue_text)))
+                        end
+                        return
+                    end
+
                     if error == "pickup-location-not-found" or error == "pickup-location-key-invalid" then
                         Chat.SendMessage(player, "Point de recuperation introuvable.")
                         return
@@ -2712,6 +2761,16 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                     if error == "route-inactive" then
                         Chat.SendMessage(player, "Mission inactive.")
+                        return
+                    end
+
+                    if error == "route-unavailable" then
+                        Chat.SendMessage(player, "Mission impossible : route indisponible.")
+                        Chat.SendMessage(player, "Issues :")
+
+                        for _, issue_text in ipairs((contract_row and contract_row.issues) or {}) do
+                            Chat.SendMessage(player, string.format("- %s", tostring(issue_text)))
+                        end
                         return
                     end
 

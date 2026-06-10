@@ -1529,7 +1529,24 @@ function ContractService:GetJobRequirements(character_id, route_key, callback)
             return
         end
 
-        self:CheckJobRequirements(normalized_character_id, route_template, callback)
+        self:IsRoutePlayable(route_template, function(is_playable_success, playability_result, playability_error)
+            if not is_playable_success then
+                callback(false, nil, playability_error or "database-error")
+                return
+            end
+
+            if playability_result == nil or playability_result.is_playable ~= true then
+                callback(false, {
+                    route_template = route_template,
+                    route = route_template,
+                    issues = playability_result and playability_result.issues or {},
+                    issue_codes = playability_result and playability_result.issue_codes or {},
+                }, playability_error or "route-unavailable")
+                return
+            end
+
+            self:CheckJobRequirements(normalized_character_id, route_template, callback)
+        end)
     end)
 end
 
@@ -1539,6 +1556,9 @@ function ContractService:EvaluateJobAvailability(character_id, route_template, c
     local result = {
         route = route_template,
         is_available = false,
+        is_route_playable = false,
+        is_technically_unavailable = false,
+        route_health = nil,
         reasons = {},
         missing_requirements = {},
         skill_current_level = nil,
@@ -1573,71 +1593,6 @@ function ContractService:EvaluateJobAvailability(character_id, route_template, c
         return true
     end
 
-    local function evaluate_delivery_location()
-        local delivery_location_key = normalize_location_key(route_template.delivery_location_key)
-
-        if delivery_location_key == nil then
-            result.reasons[#result.reasons + 1] = normalize_route_availability_reason("delivery-location-key-invalid")
-            callback(true, result, nil)
-            return
-        end
-
-        self.repository:GetDeliveryLocation(delivery_location_key, function(is_success, delivery_location, error)
-            if not is_success then
-                result.reasons[#result.reasons + 1] = normalize_route_availability_reason(error or "delivery-location-not-found")
-                callback(true, result, nil)
-                return
-            end
-
-            if delivery_location == nil then
-                result.reasons[#result.reasons + 1] = normalize_route_availability_reason("delivery-location-not-found")
-                callback(true, result, nil)
-                return
-            end
-
-            if delivery_location.is_active ~= true then
-                result.reasons[#result.reasons + 1] = normalize_route_availability_reason("delivery-location-inactive")
-                callback(true, result, nil)
-                return
-            end
-
-            result.is_available = #result.reasons == 0
-            callback(true, result, nil)
-        end)
-    end
-
-    local function evaluate_pickup_location()
-        local pickup_location_key = normalize_location_key(route_template.pickup_location_key)
-
-        if pickup_location_key == nil then
-            result.reasons[#result.reasons + 1] = normalize_route_availability_reason("pickup-location-key-invalid")
-            callback(true, result, nil)
-            return
-        end
-
-        self.repository:GetDeliveryLocation(pickup_location_key, function(is_success, pickup_location, error)
-            if not is_success then
-                result.reasons[#result.reasons + 1] = normalize_route_availability_reason(error or "pickup-location-not-found")
-                callback(true, result, nil)
-                return
-            end
-
-            if pickup_location == nil then
-                result.reasons[#result.reasons + 1] = normalize_route_availability_reason("pickup-location-not-found")
-                callback(true, result, nil)
-                return
-            end
-
-            if pickup_location.is_active ~= true then
-                result.reasons[#result.reasons + 1] = normalize_route_availability_reason("pickup-location-inactive")
-                callback(true, result, nil)
-                return
-            end
-
-            evaluate_delivery_location()
-        end)
-    end
-
     local function evaluate_requirements()
         self:CheckJobRequirements(normalized_character_id, route_template, function(is_requirements_success, requirements_result, requirements_error)
             if type(requirements_result) == "table" then
@@ -1660,29 +1615,53 @@ function ContractService:EvaluateJobAvailability(character_id, route_template, c
                 end
             end
 
-            evaluate_pickup_location()
+            result.is_available = #result.reasons == 0
+            callback(true, result, nil)
         end)
     end
 
-    return self.repository:ListContractsForCharacter(normalized_character_id, function(is_list_success, contract_rows, list_error)
-        if not is_list_success then
-            callback(false, nil, list_error or "database-error")
+    return self:IsRoutePlayable(route_template, function(is_playable_success, playability_result, playability_error)
+        if not is_playable_success then
+            callback(false, nil, playability_error or "database-error")
             return
         end
 
-        for _, contract_row in ipairs(contract_rows or {}) do
-            if is_active_job_contract(contract_row, normalized_character_id) then
-                result.active_job_count = result.active_job_count + 1
+        result.route_health = playability_result
+
+        if playability_result == nil or playability_result.is_playable ~= true then
+            result.is_route_playable = false
+            result.is_technically_unavailable = true
+
+            for _, issue_text in ipairs((playability_result and playability_result.issues) or {}) do
+                result.reasons[#result.reasons + 1] = normalize_route_availability_reason(issue_text)
             end
+
+            callback(true, result, nil)
+            return
         end
 
-        result.has_active_job_slot = result.active_job_count < MAX_ACTIVE_JOB_CONTRACTS
+        result.is_route_playable = true
 
-        if not result.has_active_job_slot then
-            result.reasons[#result.reasons + 1] = normalize_route_availability_reason("active-job-limit-reached")
-        end
+        self.repository:ListContractsForCharacter(normalized_character_id, function(is_list_success, contract_rows, list_error)
+            if not is_list_success then
+                callback(false, nil, list_error or "database-error")
+                return
+            end
 
-        evaluate_requirements()
+            for _, contract_row in ipairs(contract_rows or {}) do
+                if is_active_job_contract(contract_row, normalized_character_id) then
+                    result.active_job_count = result.active_job_count + 1
+                end
+            end
+
+            result.has_active_job_slot = result.active_job_count < MAX_ACTIVE_JOB_CONTRACTS
+
+            if not result.has_active_job_slot then
+                result.reasons[#result.reasons + 1] = normalize_route_availability_reason("active-job-limit-reached")
+            end
+
+            evaluate_requirements()
+        end)
     end)
 end
 
@@ -2582,37 +2561,49 @@ function ContractService:CreateHaulContractFromRoute(creator_character_id, route
             return
         end
 
-        self:CreateHaulContract(
-            normalized_character_id,
-            route_template.item_key,
-            route_template.item_quantity,
-            route_template.reward_money,
-            route_template.pickup_location_key,
-            route_template.delivery_location_key,
-            build_route_contract_description(route_template),
-            {
-                source_route_key = route_template.key,
-                job_source = "route_template",
-                deadline_seconds = route_template.deadline_seconds,
-                reward_skill_key = route_template.reward_skill_key,
-                reward_skill_xp = route_template.reward_skill_xp,
-                reward_reputation_key = route_template.reward_reputation_key,
-                reward_reputation_delta = route_template.reward_reputation_delta,
-            },
-            function(is_create_success, contract_row, create_error)
-                if not is_create_success then
-                    callback(false, route_template, create_error)
-                    return
-                end
-
-                if type(contract_row) == "table" then
-                    contract_row.route_key = route_template.key
-                    contract_row.route_name = route_template.name
-                end
-
-                callback(true, contract_row, nil)
+        self:IsRoutePlayable(route_template, function(is_playable_success, playability_result, playability_error)
+            if not is_playable_success then
+                callback(false, nil, playability_error or "database-error")
+                return
             end
-        )
+
+            if playability_result == nil or playability_result.is_playable ~= true then
+                callback(false, playability_result, playability_error or "route-unavailable")
+                return
+            end
+
+            self:CreateHaulContract(
+                normalized_character_id,
+                route_template.item_key,
+                route_template.item_quantity,
+                route_template.reward_money,
+                route_template.pickup_location_key,
+                route_template.delivery_location_key,
+                build_route_contract_description(route_template),
+                {
+                    source_route_key = route_template.key,
+                    job_source = "route_template",
+                    deadline_seconds = route_template.deadline_seconds,
+                    reward_skill_key = route_template.reward_skill_key,
+                    reward_skill_xp = route_template.reward_skill_xp,
+                    reward_reputation_key = route_template.reward_reputation_key,
+                    reward_reputation_delta = route_template.reward_reputation_delta,
+                },
+                function(is_create_success, contract_row, create_error)
+                    if not is_create_success then
+                        callback(false, route_template, create_error)
+                        return
+                    end
+
+                    if type(contract_row) == "table" then
+                        contract_row.route_key = route_template.key
+                        contract_row.route_name = route_template.name
+                    end
+
+                    callback(true, contract_row, nil)
+                end
+            )
+        end)
     end)
 end
 
@@ -2989,6 +2980,98 @@ function ContractService:ValidateRouteTemplate(route_key, callback)
 
         callback(false, nil, "route-not-found")
     end)
+end
+
+function ContractService:IsRoutePlayable(route_key_or_route, callback)
+    local route_template_argument = type(route_key_or_route) == "table" and route_key_or_route or nil
+    local normalized_route_key = normalize_route_key(route_template_argument and route_template_argument.key or route_key_or_route)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_route_key == nil then
+        callback(false, nil, "route-not-found")
+        return true
+    end
+
+    return self:ValidateRouteTemplate(normalized_route_key, function(is_success, health_result, error)
+        local route_template = route_template_argument
+
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        if type(health_result) ~= "table" or health_result.route == nil then
+            callback(false, nil, "route-not-found")
+            return
+        end
+
+        if route_template == nil then
+            route_template = health_result.route
+        else
+            health_result.route = route_template
+        end
+
+        if route_template.is_active ~= true then
+            health_result.is_playable = false
+            callback(true, health_result, "route-inactive")
+            return
+        end
+
+        if health_result.is_valid ~= true then
+            health_result.is_playable = false
+            callback(true, health_result, "route-unavailable")
+            return
+        end
+
+        health_result.is_playable = true
+        callback(true, health_result, nil)
+    end)
+end
+
+function ContractService:FilterPlayableRoutes(route_templates, callback)
+    local playable_routes = {}
+    local index = 1
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    local function process_next()
+        local route_template = route_templates and route_templates[index] or nil
+
+        if route_template == nil then
+            callback(true, playable_routes, nil)
+            return
+        end
+
+        index = index + 1
+
+        self:IsRoutePlayable(route_template, function(is_success, playability_result, error)
+            if not is_success then
+                callback(false, nil, error or "database-error")
+                return
+            end
+
+            if playability_result ~= nil and playability_result.is_playable == true then
+                playable_routes[#playable_routes + 1] = playability_result.route
+            end
+
+            process_next()
+        end)
+    end
+
+    process_next()
 end
 
 function ContractService:GetRouteHealth(callback)
@@ -3552,7 +3635,14 @@ function ContractService:ListJobBoardRoutes(callback)
         return false, "callback-required"
     end
 
-    return self:ListRouteTemplates(callback)
+    return self:ListRouteTemplates(function(is_success, route_templates, error)
+        if not is_success then
+            callback(false, nil, error or "database-error")
+            return
+        end
+
+        self:FilterPlayableRoutes(route_templates, callback)
+    end)
 end
 
 function ContractService:GetJobBoardRoute(route_key, callback)
@@ -3626,55 +3716,67 @@ function ContractService:TakeJobFromRoute(character_id, route_key, callback)
                     return
                 end
 
-                self:CheckJobRequirements(normalized_character_id, route_template, function(is_requirements_success, requirements_result, requirements_error)
-                    if not is_requirements_success then
-                        callback(false, requirements_result or route_template, requirements_error or "requirements-not-met")
+                self:IsRoutePlayable(route_template, function(is_playable_success, playability_result, playability_error)
+                    if not is_playable_success then
+                        callback(false, nil, playability_error or "database-error")
                         return
                     end
 
-                    self:CreateHaulContract(
-                        normalized_character_id,
-                        route_template.item_key,
-                        route_template.item_quantity,
-                        route_template.reward_money,
-                        route_template.pickup_location_key,
-                        route_template.delivery_location_key,
-                        build_route_contract_description(route_template),
-                        {
-                            source_route_key = route_template.key,
-                            job_source = "job_board",
-                            deadline_seconds = route_template.deadline_seconds,
-                            reward_skill_key = route_template.reward_skill_key,
-                            reward_skill_xp = route_template.reward_skill_xp,
-                            reward_reputation_key = route_template.reward_reputation_key,
-                            reward_reputation_delta = route_template.reward_reputation_delta,
-                        },
-                        function(is_create_success, contract_row, create_error)
-                            if not is_create_success then
-                                callback(false, route_template, create_error or "contract-create-failed")
-                                return
-                            end
+                    if playability_result == nil or playability_result.is_playable ~= true then
+                        callback(false, playability_result, playability_error or "route-unavailable")
+                        return
+                    end
 
-                            if contract_row == nil or normalize_positive_integer(contract_row.id) == nil then
-                                callback(false, route_template, "contract-create-failed")
-                                return
-                            end
+                    self:CheckJobRequirements(normalized_character_id, route_template, function(is_requirements_success, requirements_result, requirements_error)
+                        if not is_requirements_success then
+                            callback(false, requirements_result or route_template, requirements_error or "requirements-not-met")
+                            return
+                        end
 
-                            self.repository:AcceptContract(contract_row.id, normalized_character_id, function(is_accept_success, accepted_row, accept_error)
-                                if not is_accept_success or accepted_row == nil then
-                                    self.repository:CancelContract(contract_row.id, normalized_character_id, function()
-                                        callback(false, contract_row, "contract-assign-failed")
-                                    end)
+                        self:CreateHaulContract(
+                            normalized_character_id,
+                            route_template.item_key,
+                            route_template.item_quantity,
+                            route_template.reward_money,
+                            route_template.pickup_location_key,
+                            route_template.delivery_location_key,
+                            build_route_contract_description(route_template),
+                            {
+                                source_route_key = route_template.key,
+                                job_source = "job_board",
+                                deadline_seconds = route_template.deadline_seconds,
+                                reward_skill_key = route_template.reward_skill_key,
+                                reward_skill_xp = route_template.reward_skill_xp,
+                                reward_reputation_key = route_template.reward_reputation_key,
+                                reward_reputation_delta = route_template.reward_reputation_delta,
+                            },
+                            function(is_create_success, contract_row, create_error)
+                                if not is_create_success then
+                                    callback(false, route_template, create_error or "contract-create-failed")
                                     return
                                 end
 
-                                accepted_row.route_key = route_template.key
-                                accepted_row.route_name = route_template.name
+                                if contract_row == nil or normalize_positive_integer(contract_row.id) == nil then
+                                    callback(false, route_template, "contract-create-failed")
+                                    return
+                                end
 
-                                callback(true, accepted_row, nil)
-                            end)
-                        end
-                    )
+                                self.repository:AcceptContract(contract_row.id, normalized_character_id, function(is_accept_success, accepted_row, accept_error)
+                                    if not is_accept_success or accepted_row == nil then
+                                        self.repository:CancelContract(contract_row.id, normalized_character_id, function()
+                                            callback(false, contract_row, "contract-assign-failed")
+                                        end)
+                                        return
+                                    end
+
+                                    accepted_row.route_key = route_template.key
+                                    accepted_row.route_name = route_template.name
+
+                                    callback(true, accepted_row, nil)
+                                end)
+                            end
+                        )
+                    end)
                 end)
             end)
         end)
