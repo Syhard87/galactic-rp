@@ -338,6 +338,26 @@ local function format_deadline_value(deadline_seconds)
     return string.format("deadline=%ss", tostring(normalized_deadline_seconds))
 end
 
+local function format_deadline_chat_value(deadline_seconds)
+    local normalized_deadline_seconds = normalize_positive_integer(deadline_seconds)
+
+    if normalized_deadline_seconds == nil then
+        return "none"
+    end
+
+    return string.format("%ss", tostring(normalized_deadline_seconds))
+end
+
+local function trim_trailing_period(value)
+    local normalized_value = trim_string(value)
+
+    if normalized_value == nil then
+        return nil
+    end
+
+    return normalized_value:gsub("%.$", "")
+end
+
 local function format_route_reward_preview(route_template)
     local reward_skill_xp = normalize_positive_integer(route_template and route_template.reward_skill_xp)
 
@@ -590,58 +610,107 @@ local function build_route_template_info_line(route_template)
     )
 end
 
-local function build_job_board_line(route_template)
-    local deadline_value = format_deadline_value(route_template and route_template.deadline_seconds)
-    local reward_preview = format_route_reward_preview(route_template)
-    local requirements_preview = format_route_requirements_preview(route_template)
-
-    return append_optional_parts(
-        string.format(
-            "- %s item=%s x%s reward=%s pickup=%s destination=%s",
-            tostring(route_template.key),
-            tostring(route_template.item_key or "inconnu"),
-            tostring(route_template.item_quantity or "?"),
-            tostring(route_template.reward_money or 0),
-            tostring(route_template.pickup_location_key or "aucun"),
-            tostring(route_template.delivery_location_key or "aucune")
-        ),
-        deadline_value,
-        reward_preview,
-        requirements_preview
+local function build_player_job_summary_line(route_template, include_deadline)
+    local line = string.format(
+        "- %s | %s x%s | reward=%s | %s -> %s",
+        tostring(route_template and route_template.key or "inconnue"),
+        tostring(route_template and route_template.item_key or "inconnu"),
+        tostring(route_template and route_template.item_quantity or "?"),
+        tostring(route_template and route_template.reward_money or 0),
+        tostring(route_template and route_template.pickup_location_key or "aucun"),
+        tostring(route_template and route_template.delivery_location_key or "aucune")
     )
+
+    if include_deadline == true then
+        line = string.format(
+            "%s | deadline=%s",
+            tostring(line),
+            tostring(format_deadline_chat_value(route_template and route_template.deadline_seconds))
+        )
+    end
+
+    return line
+end
+
+local function build_takejob_hint_line(route_template)
+    return string.format(
+        "  Prendre : /takejob %s",
+        tostring(route_template and route_template.key or "inconnue")
+    )
+end
+
+local function build_job_board_line(route_template)
+    return build_player_job_summary_line(route_template, true)
 end
 
 local function build_available_job_line(availability_result)
     local route_template = availability_result and availability_result.route or {}
 
-    return string.format(
-        "- %s item=%s x%s reward=%s pickup=%s destination=%s req=%s",
-        tostring(route_template.key or "inconnue"),
-        tostring(route_template.item_key or "inconnu"),
-        tostring(route_template.item_quantity or "?"),
-        tostring(route_template.reward_money or 0),
-        tostring(route_template.pickup_location_key or "aucun"),
-        tostring(route_template.delivery_location_key or "aucune"),
-        tostring(format_route_requirements_available_value(route_template))
-    )
+    return build_player_job_summary_line(route_template, false)
 end
 
 local function build_locked_job_line(availability_result)
     local route_template = availability_result and availability_result.route or {}
     local reasons = type(availability_result) == "table" and availability_result.reasons or nil
     local reason_text = "raison indisponible"
-    local status_text = availability_result and availability_result.is_technically_unavailable == true and "indisponible" or "bloque"
 
     if type(reasons) == "table" and #reasons > 0 then
         reason_text = table.concat(reasons, ", ")
     end
 
+    if availability_result and availability_result.is_technically_unavailable == true then
+        return string.format(
+            "- %s indisponible : %s",
+            tostring(route_template.key or "inconnue"),
+            tostring(reason_text)
+        )
+    end
+
     return string.format(
-        "- %s %s : %s",
-        tostring(route_template.key or "inconnue"),
-        tostring(status_text),
+        "%s | reason=%s",
+        tostring(build_player_job_summary_line(route_template, false)),
         tostring(reason_text)
     )
+end
+
+local function build_job_info_item_line(route_template)
+    return string.format(
+        "Item : %s x%s",
+        tostring(route_template and route_template.item_key or "inconnu"),
+        tostring(route_template and route_template.item_quantity or "?")
+    )
+end
+
+local function build_job_info_reward_line(route_template)
+    return string.format(
+        "Reward : %s",
+        tostring(route_template and route_template.reward_money or 0)
+    )
+end
+
+local function build_job_info_route_line(route_template)
+    return string.format(
+        "Route : %s -> %s",
+        tostring(route_template and route_template.pickup_location_key or "aucun"),
+        tostring(route_template and route_template.delivery_location_key or "aucune")
+    )
+end
+
+local function build_job_info_deadline_line(route_template)
+    return string.format(
+        "Deadline : %s",
+        tostring(format_deadline_chat_value(route_template and route_template.deadline_seconds))
+    )
+end
+
+local function build_job_info_prerequisites_line(route_template)
+    local requirements_message = trim_trailing_period(build_route_requirements_message(route_template))
+
+    if requirements_message == nil or requirements_message == "aucun" then
+        return "Prerequis : none"
+    end
+
+    return string.format("Prerequis : %s", tostring(requirements_message))
 end
 
 local function build_job_progress_skill_line(skill_progress_row)
@@ -1837,6 +1906,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 for _, route_template in ipairs(route_templates) do
                     Chat.SendMessage(player, build_job_board_line(route_template))
+                    Chat.SendMessage(player, build_takejob_hint_line(route_template))
                 end
             end)
 
@@ -1877,10 +1947,11 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     return
                 end
 
-                Chat.SendMessage(player, "Missions disponibles :")
+                Chat.SendMessage(player, "Missions disponibles pour votre personnage :")
 
                 for _, availability_result in ipairs(availability_rows) do
                     Chat.SendMessage(player, build_available_job_line(availability_result))
+                    Chat.SendMessage(player, build_takejob_hint_line(availability_result and availability_result.route or nil))
                 end
             end)
 
@@ -2305,59 +2376,56 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 return false
             end
 
-            GRContracts.Server.Service:GetJobBoardRoute(payload, function(is_success, route_template, error)
-                if not is_success then
-                    if error == "route-not-found" then
-                        Chat.SendMessage(player, "Mission introuvable.")
-                        return
-                    end
+            GRContracts.Server.Service:GetJobRequirements(active_character_id, payload, function(is_success, requirements_result, error)
+                local route_template = type(requirements_result) == "table" and (requirements_result.route_template or requirements_result.route or requirements_result) or nil
+                local route_key = trim_string(route_template and route_template.key) or trim_string(payload) or "inconnue"
 
+                if error == "route-not-found" or route_template == nil then
                     Chat.SendMessage(player, "Mission introuvable.")
                     return
                 end
 
-                if route_template.is_active ~= true then
+                if error == "route-inactive" then
                     Chat.SendMessage(player, "Mission inactive.")
                     return
                 end
 
-                GRContracts.Server.Service:IsRoutePlayable(route_template, function(is_playable_success, playability_result, playability_error)
-                    if not is_playable_success then
-                        Chat.SendMessage(player, "Mission introuvable.")
-                        return
+                if error == "route-unavailable" then
+                    Chat.SendMessage(player, string.format("Mission %s : INDISPONIBLE.", tostring(route_key)))
+                    Chat.SendMessage(player, "Issues :")
+
+                    for _, issue_text in ipairs((requirements_result and requirements_result.issues) or {}) do
+                        Chat.SendMessage(player, string.format("- %s", tostring(issue_text)))
                     end
+                    return
+                end
 
-                    if playability_result == nil or playability_result.is_playable ~= true then
-                        Chat.SendMessage(player, string.format("Mission %s : INDISPONIBLE.", tostring(route_template.key)))
-                        Chat.SendMessage(player, "Issues :")
+                if not is_success and error ~= "requirements-not-met" then
+                    Chat.SendMessage(player, "Mission indisponible.")
+                    return
+                end
 
-                        for _, issue_text in ipairs((playability_result and playability_result.issues) or {}) do
-                            Chat.SendMessage(player, string.format("- %s", tostring(issue_text)))
-                        end
+                if error == "requirements-not-met" then
+                    Chat.SendMessage(player, string.format("Mission %s : BLOQUEE.", tostring(route_key)))
+                    Chat.SendMessage(player, build_job_info_item_line(route_template))
+                    Chat.SendMessage(player, build_job_info_reward_line(route_template))
+                    Chat.SendMessage(player, build_job_info_route_line(route_template))
+                    Chat.SendMessage(player, build_job_info_deadline_line(route_template))
+                    Chat.SendMessage(player, "Prerequis :")
 
-                        Chat.SendMessage(player, build_route_template_info_line(route_template))
-                        Chat.SendMessage(
-                            player,
-                            string.format(
-                                "prerequis=%s",
-                                tostring(build_route_requirements_message(route_template))
-                            )
-                        )
-                        Chat.SendMessage(player, string.format("description=%s", tostring(route_template.description or "")))
-                        return
+                    for _, requirement_text in ipairs((requirements_result and requirements_result.missing_requirements) or {}) do
+                        Chat.SendMessage(player, string.format("- %s", tostring(trim_trailing_period(requirement_text) or requirement_text)))
                     end
+                    return
+                end
 
-                    Chat.SendMessage(player, string.format("Mission %s :", tostring(route_template.key)))
-                    Chat.SendMessage(player, build_route_template_info_line(route_template))
-                    Chat.SendMessage(
-                        player,
-                        string.format(
-                            "prerequis=%s",
-                            tostring(build_route_requirements_message(route_template))
-                        )
-                    )
-                    Chat.SendMessage(player, string.format("description=%s", tostring(route_template.description or "")))
-                end)
+                Chat.SendMessage(player, string.format("Mission %s : DISPONIBLE.", tostring(route_key)))
+                Chat.SendMessage(player, build_job_info_item_line(route_template))
+                Chat.SendMessage(player, build_job_info_reward_line(route_template))
+                Chat.SendMessage(player, build_job_info_route_line(route_template))
+                Chat.SendMessage(player, build_job_info_deadline_line(route_template))
+                Chat.SendMessage(player, build_job_info_prerequisites_line(route_template))
+                Chat.SendMessage(player, string.format("Commande : /takejob %s", tostring(route_key)))
             end)
 
             return false
