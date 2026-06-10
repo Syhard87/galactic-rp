@@ -1162,6 +1162,44 @@ local function build_player_contract_next_action_line(contract_row)
     )
 end
 
+local function build_deliver_contract_reward_line(contract_row)
+    return string.format(
+        "Reward : %s credits",
+        tostring(contract_row and contract_row.reward_money or 0)
+    )
+end
+
+local function build_deliver_contract_rewards_line(contract_row)
+    local reward_skill_key = trim_string(contract_row and contract_row.reward_skill_key)
+    local reward_skill_xp = normalize_positive_integer(contract_row and contract_row.reward_skill_xp)
+    local reward_reputation_key = trim_string(contract_row and contract_row.reward_reputation_key)
+    local reward_reputation_delta = tonumber(contract_row and contract_row.reward_reputation_delta) or 0
+    local rewards_status = trim_string(contract_row and contract_row.rewards_status)
+    local parts = {}
+
+    if rewards_status ~= "granted" then
+        return nil
+    end
+
+    if reward_skill_key ~= nil and reward_skill_xp ~= nil and reward_skill_xp > 0 then
+        parts[#parts + 1] = string.format("skill %s +%s XP", tostring(reward_skill_key), tostring(reward_skill_xp))
+    end
+
+    if reward_reputation_key ~= nil and reward_reputation_delta ~= 0 then
+        parts[#parts + 1] = string.format(
+            "reputation %s %+d",
+            tostring(reward_reputation_key),
+            reward_reputation_delta
+        )
+    end
+
+    if #parts == 0 then
+        return nil
+    end
+
+    return string.format("Recompenses : %s", tostring(table.concat(parts, ", ")))
+end
+
 local function build_expired_contract_line(contract_row)
     local line = string.format(
         "#%s status=%s cargo_cleanup=%s %s",
@@ -1306,6 +1344,14 @@ GRContractsBridge.PickupContract = function(character_id, player, contract_id, c
     end
 
     return GRContracts.Server.Service:PickupContract(character_id, player, contract_id, callback)
+end
+
+GRContractsBridge.DeliverContract = function(player, contract_id, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:DeliverContract(player, contract_id, callback)
 end
 
 GRContractsBridge.AbandonContract = function(character_id, contract_id, callback)
@@ -1713,6 +1759,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "setdeliverylocationhere"
             and command_name ~= "acceptcontract"
             and command_name ~= "pickupcontract"
+            and command_name ~= "delivercontract"
             and command_name ~= "abandoncontract"
             and command_name ~= "completecontract"
             and command_name ~= "cancelcontract"
@@ -1732,7 +1779,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             return
         end
 
-        if command_name ~= "mycontracts" and command_name ~= "contractstatus" then
+        if command_name ~= "mycontracts" and command_name ~= "contractstatus" and command_name ~= "delivercontract" then
             local is_allowed = false
             local platform_id = nil
             local guard_error = nil
@@ -3564,6 +3611,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 Chat.SendMessage(player, "Usage : /acceptcontract <contract_id>")
             elseif command_name == "pickupcontract" then
                 Chat.SendMessage(player, "Usage : /pickupcontract <contract_id>")
+            elseif command_name == "delivercontract" then
+                Chat.SendMessage(player, "Usage : /delivercontract <contract_id>")
             elseif command_name == "abandoncontract" then
                 Chat.SendMessage(player, "Usage : /abandoncontract <contract_id>")
             elseif command_name == "contractdeadline" then
@@ -3630,6 +3679,11 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         if contract_id == nil then
             if command_name == "abandoncontract" then
                 Chat.SendMessage(player, "Abandon impossible : contrat introuvable.")
+                return false
+            end
+
+            if command_name == "delivercontract" then
+                Chat.SendMessage(player, "Contrat introuvable pour votre personnage.")
                 return false
             end
 
@@ -3703,6 +3757,98 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         tostring(contract_row.pickup_location_key or "aucun")
                     )
                 )
+            end)
+
+            return false
+        end
+
+        if command_name == "delivercontract" then
+            GRContracts.Server.Service:DeliverContract(player, contract_id, function(is_success, contract_row, error)
+                if not is_success then
+                    if error == "no-active-character" then
+                        Chat.SendMessage(player, "Personnage actif introuvable.")
+                        return
+                    end
+
+                    if error == "invalid-contract-id" or error == "contract-not-found" then
+                        Chat.SendMessage(player, "Contrat introuvable pour votre personnage.")
+                        return
+                    end
+
+                    if error == "cargo-not-picked-up" then
+                        Chat.SendMessage(player, "Livraison impossible : vous devez d'abord recuperer le cargo.")
+                        Chat.SendMessage(
+                            player,
+                            string.format(
+                                "Utilisez /pickupcontract %s au point de pickup.",
+                                tostring(contract_row and contract_row.id or contract_id)
+                            )
+                        )
+                        return
+                    end
+
+                    if error == "destination-not-found" then
+                        Chat.SendMessage(player, "Livraison impossible : destination indisponible.")
+                        Chat.SendMessage(player, "Issue : destination introuvable.")
+                        return
+                    end
+
+                    if error == "destination-inactive" then
+                        Chat.SendMessage(player, "Livraison impossible : destination indisponible.")
+                        Chat.SendMessage(player, "Issue : destination inactive.")
+                        return
+                    end
+
+                    if error == "destination-not-calibrated" then
+                        Chat.SendMessage(player, "Livraison impossible : destination indisponible.")
+                        Chat.SendMessage(player, "Issue : destination non calibree.")
+                        return
+                    end
+
+                    if error == "too-far-from-destination" then
+                        Chat.SendMessage(
+                            player,
+                            string.format(
+                                "Livraison impossible : vous devez etre a la destination %s.",
+                                tostring(contract_row and contract_row.delivery_location_key or "inconnue")
+                            )
+                        )
+                        return
+                    end
+
+                    if error == "contract-expired" then
+                        Chat.SendMessage(player, "Livraison impossible : contrat expire.")
+                        return
+                    end
+
+                    if error == "contract-not-active" then
+                        Chat.SendMessage(player, "Livraison impossible : contrat deja termine ou annule.")
+                        return
+                    end
+
+                    if error == "reward-error" then
+                        Chat.SendMessage(player, "Livraison impossible : recompenses indisponibles.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Livraison impossible.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Contrat #%s livre avec succes.",
+                        tostring(contract_row.id)
+                    )
+                )
+                Chat.SendMessage(player, build_deliver_contract_reward_line(contract_row))
+
+                local rewards_line = build_deliver_contract_rewards_line(contract_row)
+
+                if rewards_line ~= nil then
+                    Chat.SendMessage(player, rewards_line)
+                end
             end)
 
             return false

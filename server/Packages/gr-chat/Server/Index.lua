@@ -66,6 +66,7 @@ local EXTERNAL_CHAT_COMMANDS = {
     setcontractlocationname = true,
     acceptcontract = true,
     pickupcontract = true,
+    delivercontract = true,
     abandoncontract = true,
     completecontract = true,
     cancelcontract = true,

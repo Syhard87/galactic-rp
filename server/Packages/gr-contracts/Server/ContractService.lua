@@ -4308,6 +4308,219 @@ function ContractService:GetMyContractStatus(player_or_character_id, contract_id
     end)
 end
 
+function ContractService:DeliverContract(player, contract_id, callback)
+    local normalized_character_id = resolve_active_character_id(player)
+    local normalized_contract_id = normalize_contract_id(contract_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "no-active-character")
+        return true
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "invalid-contract-id")
+        return true
+    end
+
+    return self.repository:GetContractById(normalized_contract_id, function(is_get_success, contract_row, get_error)
+        if not is_get_success then
+            callback(false, nil, get_error or "database-error")
+            return
+        end
+
+        if contract_row == nil then
+            callback(false, nil, "contract-not-found")
+            return
+        end
+
+        if normalize_positive_integer(contract_row.assignee_character_id) ~= normalized_character_id then
+            callback(false, nil, "contract-not-found")
+            return
+        end
+
+        if contract_row.status == "completed" or contract_row.status == "cancelled" then
+            callback(false, contract_row, "contract-not-active")
+            return
+        end
+
+        self:EnsureContractNotExpired(contract_row, function(is_deadline_success, resolved_row, is_expired, deadline_error)
+            local active_contract_row = resolved_row or contract_row
+
+            if not is_deadline_success then
+                callback(false, nil, deadline_error or "database-error")
+                return
+            end
+
+            if is_expired then
+                callback(false, active_contract_row, "contract-expired")
+                return
+            end
+
+            if active_contract_row.status ~= "accepted" then
+                callback(false, active_contract_row, "contract-not-active")
+                return
+            end
+
+            if active_contract_row.requires_pickup_location == true
+                and normalize_pickup_status(active_contract_row.pickup_status) ~= "picked_up"
+            then
+                callback(false, active_contract_row, "cargo-not-picked-up")
+                return
+            end
+
+            if active_contract_row.requires_delivery_location == true then
+                local delivery_location_key = normalize_location_key(active_contract_row.delivery_location_key)
+
+                if delivery_location_key == nil then
+                    callback(false, active_contract_row, "destination-not-found")
+                    return
+                end
+
+                self.repository:GetDeliveryLocation(delivery_location_key, function(is_location_success, delivery_location, location_error)
+                    if not is_location_success then
+                        callback(false, active_contract_row, location_error or "database-error")
+                        return
+                    end
+
+                    if delivery_location == nil then
+                        callback(false, active_contract_row, "destination-not-found")
+                        return
+                    end
+
+                    if delivery_location.is_active ~= true then
+                        callback(false, active_contract_row, "destination-inactive")
+                        return
+                    end
+
+                    local is_near_delivery_location, proximity_error = self:ValidateDeliveryLocationProximity(player, delivery_location)
+
+                    if not is_near_delivery_location then
+                        if proximity_error == "delivery-location-position-missing" then
+                            callback(false, active_contract_row, "destination-not-calibrated")
+                            return
+                        end
+
+                        if proximity_error == "too-far-from-delivery-location" then
+                            callback(false, active_contract_row, "too-far-from-destination")
+                            return
+                        end
+
+                        if proximity_error == "delivery-location-inactive" then
+                            callback(false, active_contract_row, "destination-inactive")
+                            return
+                        end
+
+                        if proximity_error == "delivery-location-not-found" then
+                            callback(false, active_contract_row, "destination-not-found")
+                            return
+                        end
+
+                        callback(false, active_contract_row, proximity_error or "database-error")
+                        return
+                    end
+
+                    self:CompleteContract(normalized_character_id, normalized_contract_id, player, function(is_complete_success, completed_row, complete_error)
+                        if not is_complete_success then
+                            if complete_error == "contract-not-found" then
+                                callback(false, nil, "contract-not-found")
+                                return
+                            end
+
+                            if complete_error == "contract-expired" then
+                                callback(false, completed_row or active_contract_row, "contract-expired")
+                                return
+                            end
+
+                            if complete_error == "pickup-not-completed" then
+                                callback(false, completed_row or active_contract_row, "cargo-not-picked-up")
+                                return
+                            end
+
+                            if complete_error == "delivery-location-not-found" then
+                                callback(false, completed_row or active_contract_row, "destination-not-found")
+                                return
+                            end
+
+                            if complete_error == "delivery-location-inactive" then
+                                callback(false, completed_row or active_contract_row, "destination-inactive")
+                                return
+                            end
+
+                            if complete_error == "delivery-location-position-missing" then
+                                callback(false, completed_row or active_contract_row, "destination-not-calibrated")
+                                return
+                            end
+
+                            if complete_error == "too-far-from-delivery-location" then
+                                callback(false, completed_row or active_contract_row, "too-far-from-destination")
+                                return
+                            end
+
+                            if complete_error == "contract-already-completed" or complete_error == "contract-complete-forbidden" then
+                                callback(false, completed_row or active_contract_row, "contract-not-active")
+                                return
+                            end
+
+                            if complete_error == "payment-failed" then
+                                callback(false, completed_row or active_contract_row, "reward-error")
+                                return
+                            end
+
+                            callback(false, completed_row or active_contract_row, complete_error or "database-error")
+                            return
+                        end
+
+                        callback(true, completed_row, nil)
+                    end)
+                end)
+                return
+            end
+
+            self:CompleteContract(normalized_character_id, normalized_contract_id, player, function(is_complete_success, completed_row, complete_error)
+                if not is_complete_success then
+                    if complete_error == "contract-not-found" then
+                        callback(false, nil, "contract-not-found")
+                        return
+                    end
+
+                    if complete_error == "contract-expired" then
+                        callback(false, completed_row or active_contract_row, "contract-expired")
+                        return
+                    end
+
+                    if complete_error == "pickup-not-completed" then
+                        callback(false, completed_row or active_contract_row, "cargo-not-picked-up")
+                        return
+                    end
+
+                    if complete_error == "contract-already-completed" or complete_error == "contract-complete-forbidden" then
+                        callback(false, completed_row or active_contract_row, "contract-not-active")
+                        return
+                    end
+
+                    if complete_error == "payment-failed" then
+                        callback(false, completed_row or active_contract_row, "reward-error")
+                        return
+                    end
+
+                    callback(false, completed_row or active_contract_row, complete_error or "database-error")
+                    return
+                end
+
+                callback(true, completed_row, nil)
+            end)
+        end)
+    end)
+end
+
 function ContractService:AcceptContract(character_id, contract_id, callback)
     local normalized_character_id = normalize_positive_integer(character_id)
     local normalized_contract_id = normalize_contract_id(contract_id)
