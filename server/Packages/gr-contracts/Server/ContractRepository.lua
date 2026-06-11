@@ -2712,6 +2712,44 @@ function ContractRepository:GetContractByIdForCharacter(contract_id, character_i
     end, "contracts-get-active-by-id-character")
 end
 
+local function resolve_complete_contract_error(contract_row, character_id)
+    local normalized_character_id = normalize_positive_integer(character_id)
+    local assignee_character_id = normalize_positive_integer(contract_row and contract_row.assignee_character_id)
+    local contract_status = normalize_contract_status(contract_row and contract_row.status)
+    local requires_pickup_location = contract_row ~= nil and contract_row.requires_pickup_location == true
+    local pickup_status = normalize_pickup_status(contract_row and contract_row.pickup_status)
+
+    if type(contract_row) ~= "table" then
+        return "contract-not-found"
+    end
+
+    if normalized_character_id == nil or assignee_character_id ~= normalized_character_id then
+        return "contract-not-found"
+    end
+
+    if contract_status == "completed" then
+        return "contract-already-completed"
+    end
+
+    if contract_status == "cancelled" then
+        return "contract-cancelled"
+    end
+
+    if contract_status == "expired" then
+        return "contract-expired"
+    end
+
+    if requires_pickup_location and pickup_status ~= "picked_up" then
+        return "cargo-not-picked-up"
+    end
+
+    if contract_status ~= "accepted" then
+        return "contract-not-found"
+    end
+
+    return nil
+end
+
 function ContractRepository:AcceptContract(contract_id, assignee_character_id, callback)
     local normalized_contract_id = normalize_positive_integer(contract_id)
     local normalized_assignee_character_id = normalize_positive_integer(assignee_character_id)
@@ -2768,24 +2806,60 @@ function ContractRepository:CompleteContract(contract_id, character_id, callback
         return true
     end
 
-    return self:Connect(function(is_connected, database_or_error, error)
-        if not is_connected then
-            callback(false, nil, error)
+    return self:GetContractById(normalized_contract_id, function(is_get_success, contract_row, get_error)
+        if not is_get_success then
+            callback(false, nil, get_error)
             return
         end
 
-        database_or_error:SelectAsync(COMPLETE_CONTRACT_QUERY, function(rows, update_error)
-            local contract_rows = nil
+        if contract_row == nil then
+            callback(false, nil, "contract-not-found")
+            return
+        end
 
-            if update_error ~= nil then
-                callback(false, nil, update_error)
+        local precheck_error = resolve_complete_contract_error(contract_row, normalized_character_id)
+
+        if precheck_error ~= nil then
+            callback(false, contract_row, precheck_error)
+            return
+        end
+
+        self:Connect(function(is_connected, database_or_error, error)
+            if not is_connected then
+                callback(false, contract_row, error)
                 return
             end
 
-            contract_rows = normalize_rows(rows)
-            callback(true, contract_rows[1], nil)
-        end, normalized_contract_id, normalized_character_id)
-    end, "contracts-complete")
+            database_or_error:SelectAsync(COMPLETE_CONTRACT_QUERY, function(rows, update_error)
+                local contract_rows = nil
+
+                if update_error ~= nil then
+                    callback(false, contract_row, update_error)
+                    return
+                end
+
+                contract_rows = normalize_rows(rows)
+
+                if contract_rows[1] ~= nil then
+                    callback(true, contract_rows[1], nil)
+                    return
+                end
+
+                self:GetContractById(normalized_contract_id, function(is_refresh_success, refreshed_row, refresh_error)
+                    if not is_refresh_success then
+                        callback(false, contract_row, refresh_error or "database-error")
+                        return
+                    end
+
+                    callback(
+                        false,
+                        refreshed_row or contract_row,
+                        resolve_complete_contract_error(refreshed_row or contract_row, normalized_character_id) or "database-error"
+                    )
+                end)
+            end, normalized_contract_id, normalized_character_id)
+        end, "contracts-complete")
+    end)
 end
 
 function ContractRepository:MarkContractPickedUp(contract_id, callback)

@@ -673,6 +673,74 @@ local function resolve_player_contract_status(contract_row)
     return contract_status
 end
 
+local function resolve_contract_delivery_error(contract_row, fallback_error)
+    local contract_status = trim_string(contract_row and contract_row.status)
+
+    if contract_status == "completed" then
+        return "contract-already-completed"
+    end
+
+    if contract_status == "cancelled" then
+        return "contract-cancelled"
+    end
+
+    if contract_status == "expired" then
+        return "contract-expired"
+    end
+
+    return fallback_error or "contract-not-active"
+end
+
+local function map_complete_contract_error_for_delivery(error_code, contract_row)
+    if error_code == "contract-not-found" then
+        return "contract-not-found"
+    end
+
+    if error_code == "contract-expired" then
+        return "contract-expired"
+    end
+
+    if error_code == "pickup-not-completed" or error_code == "cargo-not-picked-up" then
+        return "cargo-not-picked-up"
+    end
+
+    if error_code == "delivery-location-not-found" then
+        return "destination-not-found"
+    end
+
+    if error_code == "delivery-location-inactive" then
+        return "destination-inactive"
+    end
+
+    if error_code == "delivery-location-position-missing" then
+        return "destination-not-calibrated"
+    end
+
+    if error_code == "too-far-from-delivery-location" then
+        return "too-far-from-destination"
+    end
+
+    if error_code == "contract-already-completed"
+        or error_code == "contract-cancelled"
+        or error_code == "contract-expired"
+    then
+        return error_code
+    end
+
+    if error_code == "contract-complete-forbidden" or error_code == "contract-not-active" then
+        return resolve_contract_delivery_error(contract_row, "contract-not-active")
+    end
+
+    if error_code == "payment-failed"
+        or error_code == "reward-error"
+        or error_code == "inventory-compensation-failed"
+    then
+        return "reward-error"
+    end
+
+    return error_code or "database-error"
+end
+
 local function format_remaining_deadline(remaining_deadline_seconds)
     local normalized_remaining_deadline = normalize_non_negative_integer(remaining_deadline_seconds)
 
@@ -4346,8 +4414,8 @@ function ContractService:DeliverContract(player, contract_id, callback)
             return
         end
 
-        if contract_row.status == "completed" or contract_row.status == "cancelled" then
-            callback(false, contract_row, "contract-not-active")
+        if contract_row.status == "completed" or contract_row.status == "cancelled" or contract_row.status == "expired" then
+            callback(false, contract_row, resolve_contract_delivery_error(contract_row, "contract-not-active"))
             return
         end
 
@@ -4365,7 +4433,7 @@ function ContractService:DeliverContract(player, contract_id, callback)
             end
 
             if active_contract_row.status ~= "accepted" then
-                callback(false, active_contract_row, "contract-not-active")
+                callback(false, active_contract_row, resolve_contract_delivery_error(active_contract_row, "contract-not-active"))
                 return
             end
 
@@ -4429,52 +4497,11 @@ function ContractService:DeliverContract(player, contract_id, callback)
 
                     self:CompleteContract(normalized_character_id, normalized_contract_id, player, function(is_complete_success, completed_row, complete_error)
                         if not is_complete_success then
-                            if complete_error == "contract-not-found" then
-                                callback(false, nil, "contract-not-found")
-                                return
-                            end
-
-                            if complete_error == "contract-expired" then
-                                callback(false, completed_row or active_contract_row, "contract-expired")
-                                return
-                            end
-
-                            if complete_error == "pickup-not-completed" then
-                                callback(false, completed_row or active_contract_row, "cargo-not-picked-up")
-                                return
-                            end
-
-                            if complete_error == "delivery-location-not-found" then
-                                callback(false, completed_row or active_contract_row, "destination-not-found")
-                                return
-                            end
-
-                            if complete_error == "delivery-location-inactive" then
-                                callback(false, completed_row or active_contract_row, "destination-inactive")
-                                return
-                            end
-
-                            if complete_error == "delivery-location-position-missing" then
-                                callback(false, completed_row or active_contract_row, "destination-not-calibrated")
-                                return
-                            end
-
-                            if complete_error == "too-far-from-delivery-location" then
-                                callback(false, completed_row or active_contract_row, "too-far-from-destination")
-                                return
-                            end
-
-                            if complete_error == "contract-already-completed" or complete_error == "contract-complete-forbidden" then
-                                callback(false, completed_row or active_contract_row, "contract-not-active")
-                                return
-                            end
-
-                            if complete_error == "payment-failed" then
-                                callback(false, completed_row or active_contract_row, "reward-error")
-                                return
-                            end
-
-                            callback(false, completed_row or active_contract_row, complete_error or "database-error")
+                            callback(
+                                false,
+                                completed_row or active_contract_row,
+                                map_complete_contract_error_for_delivery(complete_error, completed_row or active_contract_row)
+                            )
                             return
                         end
 
@@ -4486,32 +4513,11 @@ function ContractService:DeliverContract(player, contract_id, callback)
 
             self:CompleteContract(normalized_character_id, normalized_contract_id, player, function(is_complete_success, completed_row, complete_error)
                 if not is_complete_success then
-                    if complete_error == "contract-not-found" then
-                        callback(false, nil, "contract-not-found")
-                        return
-                    end
-
-                    if complete_error == "contract-expired" then
-                        callback(false, completed_row or active_contract_row, "contract-expired")
-                        return
-                    end
-
-                    if complete_error == "pickup-not-completed" then
-                        callback(false, completed_row or active_contract_row, "cargo-not-picked-up")
-                        return
-                    end
-
-                    if complete_error == "contract-already-completed" or complete_error == "contract-complete-forbidden" then
-                        callback(false, completed_row or active_contract_row, "contract-not-active")
-                        return
-                    end
-
-                    if complete_error == "payment-failed" then
-                        callback(false, completed_row or active_contract_row, "reward-error")
-                        return
-                    end
-
-                    callback(false, completed_row or active_contract_row, complete_error or "database-error")
+                    callback(
+                        false,
+                        completed_row or active_contract_row,
+                        map_complete_contract_error_for_delivery(complete_error, completed_row or active_contract_row)
+                    )
                     return
                 end
 
@@ -4979,6 +4985,8 @@ function ContractService:CompleteContract(character_id, contract_id, player_or_c
                                 tostring(normalized_character_id),
                                 tostring(rewards_error)
                             )
+                            callback(false, final_row, "reward-error")
+                            return
                         end
 
                         callback(true, final_row, nil)

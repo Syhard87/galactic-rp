@@ -3821,12 +3821,38 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         return
                     end
 
+                    if error == "contract-already-completed" then
+                        Chat.SendMessage(player, "Livraison impossible : contrat deja termine.")
+                        return
+                    end
+
+                    if error == "contract-cancelled" then
+                        Chat.SendMessage(player, "Livraison impossible : contrat annule.")
+                        return
+                    end
+
                     if error == "contract-not-active" then
                         Chat.SendMessage(player, "Livraison impossible : contrat deja termine ou annule.")
                         return
                     end
 
                     if error == "reward-error" then
+                        if trim_string(contract_row and contract_row.status) == "completed" then
+                            Chat.SendMessage(
+                                player,
+                                string.format(
+                                    "Contrat #%s finalise, mais le paiement ou certaines recompenses ont echoue.",
+                                    tostring(contract_row and contract_row.id or contract_id)
+                                )
+                            )
+
+                            if trim_string(contract_row and contract_row.payment_status) == "paid" then
+                                Chat.SendMessage(player, build_deliver_contract_reward_line(contract_row))
+                            end
+
+                            return
+                        end
+
                         Chat.SendMessage(player, "Livraison impossible : recompenses indisponibles.")
                         return
                     end
@@ -4039,6 +4065,11 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         return
                     end
 
+                    if error == "contract-cancelled" then
+                        Chat.SendMessage(player, "Contrat annule.")
+                        return
+                    end
+
                     if error == "contract-complete-forbidden" then
                         Chat.SendMessage(player, "Vous ne pouvez pas terminer ce contrat.")
                         return
@@ -4098,6 +4129,11 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                     if error == "payment-failed" or error == "inventory-compensation-failed" then
                         Chat.SendMessage(player, "Contrat impossible : paiement echoue, compensation item tentee.")
+                        return
+                    end
+
+                    if error == "reward-error" then
+                        Chat.SendMessage(player, "Contrat finalise, mais le paiement ou certaines recompenses ont echoue.")
                         return
                     end
 
