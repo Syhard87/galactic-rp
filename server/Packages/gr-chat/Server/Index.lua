@@ -52,6 +52,7 @@ local EXTERNAL_CHAT_COMMANDS = {
     cleanupcontractcargo = true,
     expiredcontracts = true,
     contractrewards = true,
+    contractrewardstatus = true,
     grantcontractrewards = true,
     setrouteactive = true,
     forcerouteactive = true,

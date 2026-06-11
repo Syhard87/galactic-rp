@@ -1170,12 +1170,17 @@ local function build_deliver_contract_reward_line(contract_row)
 end
 
 local function build_deliver_contract_rewards_line(contract_row)
+    local reward_grants_applied_summary = trim_string(contract_row and contract_row.reward_grants_applied_summary)
     local reward_skill_key = trim_string(contract_row and contract_row.reward_skill_key)
     local reward_skill_xp = normalize_positive_integer(contract_row and contract_row.reward_skill_xp)
     local reward_reputation_key = trim_string(contract_row and contract_row.reward_reputation_key)
     local reward_reputation_delta = tonumber(contract_row and contract_row.reward_reputation_delta) or 0
     local rewards_status = trim_string(contract_row and contract_row.rewards_status)
     local parts = {}
+
+    if reward_grants_applied_summary ~= nil then
+        return string.format("Recompenses : %s", tostring(reward_grants_applied_summary))
+    end
 
     if rewards_status ~= "granted" then
         return nil
@@ -1198,6 +1203,47 @@ local function build_deliver_contract_rewards_line(contract_row)
     end
 
     return string.format("Recompenses : %s", tostring(table.concat(parts, ", ")))
+end
+
+local function build_failed_reward_grants_line(contract_row)
+    local failed_summary = trim_string(contract_row and contract_row.reward_grants_failed_summary)
+
+    if failed_summary == nil then
+        return nil
+    end
+
+    return string.format("Rewards en erreur : %s", tostring(failed_summary))
+end
+
+local function build_applied_reward_grants_line(contract_row)
+    local applied_summary = trim_string(contract_row and contract_row.reward_grants_applied_summary)
+
+    if applied_summary == nil then
+        return nil
+    end
+
+    return string.format("Rewards appliquees : %s", tostring(applied_summary))
+end
+
+local function build_contract_reward_grant_status_line(reward_grant_row)
+    local reward_type = trim_string(reward_grant_row and reward_grant_row.reward_type) or "unknown"
+    local reward_key = trim_string(reward_grant_row and reward_grant_row.reward_key) or "unknown"
+    local amount = normalize_positive_integer(reward_grant_row and reward_grant_row.amount) or 0
+    local grant_status = trim_string(reward_grant_row and reward_grant_row.status) or "pending"
+    local error_message = trim_string(reward_grant_row and reward_grant_row.error_message)
+    local line = string.format(
+        "- %s %s +%s %s",
+        tostring(reward_type),
+        tostring(reward_key),
+        tostring(amount),
+        tostring(grant_status)
+    )
+
+    if error_message ~= nil then
+        line = string.format("%s error=%s", tostring(line), tostring(error_message))
+    end
+
+    return line
 end
 
 local function build_expired_contract_line(contract_row)
@@ -1595,6 +1641,14 @@ GRContractsBridge.GrantContractRewards = function(contract_id, callback)
     return GRContracts.Server.Service:GrantContractRewards(contract_id, callback)
 end
 
+GRContractsBridge.GetContractRewardStatus = function(contract_id, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:GetContractRewardStatus(contract_id, callback)
+end
+
 GRContractsBridge.ExpireContracts = function(callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -1765,6 +1819,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "cancelcontract"
             and command_name ~= "contractdeadline"
             and command_name ~= "contractrewards"
+            and command_name ~= "contractrewardstatus"
             and command_name ~= "grantcontractrewards"
             and command_name ~= "expirecontracts"
             and command_name ~= "cleanupcontractcargo"
@@ -2686,6 +2741,40 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 end
 
                 Chat.SendMessage(player, build_contract_rewards_line(contract_row))
+            end)
+
+            return false
+        end
+
+        if command_name == "contractrewardstatus" then
+            if payload == nil then
+                Chat.SendMessage(player, "Usage : /contractrewardstatus <contract_id>")
+                return false
+            end
+
+            local contract_id = normalize_positive_integer(payload)
+
+            if contract_id == nil then
+                Chat.SendMessage(player, "Contrat introuvable.")
+                return false
+            end
+
+            GRContracts.Server.Service:GetContractRewardStatus(contract_id, function(is_success, contract_row, reward_grant_rows, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Contrat introuvable.")
+                    return
+                end
+
+                if type(reward_grant_rows) ~= "table" or #reward_grant_rows == 0 then
+                    Chat.SendMessage(player, "Aucune reward ledger pour ce contrat.")
+                    return
+                end
+
+                Chat.SendMessage(player, string.format("Rewards contrat #%s :", tostring(contract_row and contract_row.id or contract_id)))
+
+                for _, reward_grant_row in ipairs(reward_grant_rows) do
+                    Chat.SendMessage(player, build_contract_reward_grant_status_line(reward_grant_row))
+                end
             end)
 
             return false
@@ -3619,6 +3708,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 Chat.SendMessage(player, "Usage : /contractdeadline <contract_id>")
             elseif command_name == "contractrewards" then
                 Chat.SendMessage(player, "Usage : /contractrewards <contract_id>")
+            elseif command_name == "contractrewardstatus" then
+                Chat.SendMessage(player, "Usage : /contractrewardstatus <contract_id>")
             elseif command_name == "grantcontractrewards" then
                 Chat.SendMessage(player, "Usage : /grantcontractrewards <contract_id>")
             elseif command_name == "cleanupcontractcargo" then
@@ -3850,6 +3941,17 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                                 Chat.SendMessage(player, build_deliver_contract_reward_line(contract_row))
                             end
 
+                            local applied_rewards_line = build_applied_reward_grants_line(contract_row)
+                            local failed_rewards_line = build_failed_reward_grants_line(contract_row)
+
+                            if applied_rewards_line ~= nil then
+                                Chat.SendMessage(player, applied_rewards_line)
+                            end
+
+                            if failed_rewards_line ~= nil then
+                                Chat.SendMessage(player, failed_rewards_line)
+                            end
+
                             return
                         end
 
@@ -3948,13 +4050,20 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                         return
                     end
 
-                    if error == "skill-service-unavailable" then
-                        Chat.SendMessage(player, "Recompenses impossibles : skill indisponible.")
-                        return
-                    end
+                    if error == "reward-error" then
+                        Chat.SendMessage(player, "Recompenses partiellement accordees avec erreurs.")
 
-                    if error == "reputation-service-unavailable" then
-                        Chat.SendMessage(player, "Recompenses impossibles : reputation indisponible.")
+                        local applied_rewards_line = build_applied_reward_grants_line(contract_row)
+                        local failed_rewards_line = build_failed_reward_grants_line(contract_row)
+
+                        if applied_rewards_line ~= nil then
+                            Chat.SendMessage(player, applied_rewards_line)
+                        end
+
+                        if failed_rewards_line ~= nil then
+                            Chat.SendMessage(player, failed_rewards_line)
+                        end
+
                         return
                     end
 
@@ -3962,35 +4071,13 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     return
                 end
 
-                local reward_skill_key = trim_string(contract_row and contract_row.reward_skill_key)
-                local reward_skill_xp = normalize_positive_integer(contract_row and contract_row.reward_skill_xp)
-                local reward_reputation_key = trim_string(contract_row and contract_row.reward_reputation_key)
-                local reward_reputation_delta = tonumber(contract_row and contract_row.reward_reputation_delta) or 0
+                Chat.SendMessage(player, string.format("Recompenses accordees : contrat #%s.", tostring(contract_row.id)))
 
-                if reward_reputation_key ~= nil and reward_reputation_delta ~= 0 then
-                    Chat.SendMessage(
-                        player,
-                        string.format(
-                            "Recompenses accordees : contrat #%s skill=%s xp=%s reputation=%s delta=%s.",
-                            tostring(contract_row.id),
-                            tostring(reward_skill_key or "aucune"),
-                            tostring(reward_skill_xp or 0),
-                            tostring(reward_reputation_key),
-                            tostring(reward_reputation_delta)
-                        )
-                    )
-                    return
+                local rewards_line = build_deliver_contract_rewards_line(contract_row)
+
+                if rewards_line ~= nil then
+                    Chat.SendMessage(player, rewards_line)
                 end
-
-                Chat.SendMessage(
-                    player,
-                    string.format(
-                        "Recompenses accordees : contrat #%s skill=%s xp=%s.",
-                        tostring(contract_row.id),
-                        tostring(reward_skill_key or "aucune"),
-                        tostring(reward_skill_xp or 0)
-                    )
-                )
             end)
 
             return false

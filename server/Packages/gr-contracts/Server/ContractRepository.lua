@@ -48,6 +48,20 @@ local CONTRACT_SELECT_COLUMNS = [[
         deadline_at
 ]]
 
+local CONTRACT_REWARD_GRANT_SELECT_COLUMNS = [[
+        id,
+        contract_id,
+        character_id,
+        reward_type,
+        reward_key,
+        amount,
+        status,
+        error_message,
+        created_at,
+        updated_at,
+        applied_at
+]]
+
 local SELECT_DELIVERY_LOCATIONS_QUERY = [[
     SELECT
         id,
@@ -925,6 +939,76 @@ local UPDATE_CONTRACT_PAYMENT_STATUS_QUERY = [[
 ]] .. CONTRACT_SELECT_COLUMNS .. [[
 ]]
 
+local INSERT_CONTRACT_REWARD_GRANT_QUERY = [[
+    INSERT INTO contract_reward_grants (
+        contract_id,
+        character_id,
+        reward_type,
+        reward_key,
+        amount,
+        status,
+        error_message,
+        applied_at
+    )
+    VALUES (
+        :0,
+        :1,
+        :2,
+        :3,
+        :4,
+        :5,
+        :6,
+        CASE
+            WHEN :5 = 'applied' THEN NOW()
+            ELSE NULL
+        END
+    )
+    ON CONFLICT (contract_id, reward_type, reward_key) DO NOTHING
+    RETURNING
+]] .. CONTRACT_REWARD_GRANT_SELECT_COLUMNS .. [[
+]]
+
+local SELECT_CONTRACT_REWARD_GRANT_QUERY = [[
+    SELECT
+]] .. CONTRACT_REWARD_GRANT_SELECT_COLUMNS .. [[
+    FROM contract_reward_grants
+    WHERE contract_id = :0
+      AND reward_type = :1
+      AND reward_key = :2
+    LIMIT 1
+]]
+
+local SELECT_CONTRACT_REWARD_GRANTS_BY_CONTRACT_QUERY = [[
+    SELECT
+]] .. CONTRACT_REWARD_GRANT_SELECT_COLUMNS .. [[
+    FROM contract_reward_grants
+    WHERE contract_id = :0
+    ORDER BY id ASC
+]]
+
+local UPDATE_CONTRACT_REWARD_GRANT_APPLIED_QUERY = [[
+    UPDATE contract_reward_grants
+    SET
+        status = 'applied',
+        error_message = NULL,
+        updated_at = NOW(),
+        applied_at = NOW()
+    WHERE id = :0
+    RETURNING
+]] .. CONTRACT_REWARD_GRANT_SELECT_COLUMNS .. [[
+]]
+
+local UPDATE_CONTRACT_REWARD_GRANT_FAILED_QUERY = [[
+    UPDATE contract_reward_grants
+    SET
+        status = 'failed',
+        error_message = :1,
+        updated_at = NOW()
+    WHERE id = :0
+    RETURNING
+]] .. CONTRACT_REWARD_GRANT_SELECT_COLUMNS .. [[
+]]
+
 local function trim_string(value)
     if type(value) ~= "string" then
         return nil
@@ -1232,6 +1316,62 @@ local function normalize_rewards_status(rewards_status)
     return normalized_rewards_status
 end
 
+local function normalize_reward_grant_type(reward_type)
+    local normalized_reward_type = trim_string(reward_type)
+
+    if normalized_reward_type == nil then
+        return nil
+    end
+
+    normalized_reward_type = string.lower(normalized_reward_type)
+
+    if normalized_reward_type ~= "money"
+        and normalized_reward_type ~= "skill_xp"
+        and normalized_reward_type ~= "reputation"
+    then
+        return nil
+    end
+
+    return normalized_reward_type
+end
+
+local function normalize_reward_grant_key(reward_key)
+    local normalized_reward_key = trim_string(reward_key)
+
+    if normalized_reward_key == nil then
+        return nil
+    end
+
+    if #normalized_reward_key > 128 then
+        return nil
+    end
+
+    if normalized_reward_key:match("^[a-z0-9_:-]+$") == nil then
+        return nil
+    end
+
+    return string.lower(normalized_reward_key)
+end
+
+local function normalize_reward_grant_status(status)
+    local normalized_status = trim_string(status)
+
+    if normalized_status == nil then
+        return "pending"
+    end
+
+    normalized_status = string.lower(normalized_status)
+
+    if normalized_status ~= "pending"
+        and normalized_status ~= "applied"
+        and normalized_status ~= "failed"
+    then
+        return "pending"
+    end
+
+    return normalized_status
+end
+
 local function normalize_integer(value, fallback)
     if type(value) == "number" then
         if value % 1 ~= 0 then
@@ -1386,6 +1526,50 @@ local function normalize_route_template_row(row)
     }
 end
 
+local function normalize_contract_reward_grant_row(row)
+    local grant_id = nil
+    local contract_id = nil
+    local character_id = nil
+    local reward_type = nil
+    local reward_key = nil
+    local amount = nil
+
+    if type(row) ~= "table" then
+        return nil
+    end
+
+    grant_id = normalize_positive_integer(row.id)
+    contract_id = normalize_positive_integer(row.contract_id)
+    character_id = normalize_positive_integer(row.character_id)
+    reward_type = normalize_reward_grant_type(row.reward_type)
+    reward_key = normalize_reward_grant_key(row.reward_key)
+    amount = normalize_positive_integer(row.amount)
+
+    if grant_id == nil
+        or contract_id == nil
+        or character_id == nil
+        or reward_type == nil
+        or reward_key == nil
+        or amount == nil
+    then
+        return nil
+    end
+
+    return {
+        id = grant_id,
+        contract_id = contract_id,
+        character_id = character_id,
+        reward_type = reward_type,
+        reward_key = reward_key,
+        amount = amount,
+        status = normalize_reward_grant_status(row.status),
+        error_message = trim_string(row.error_message),
+        created_at = row.created_at,
+        updated_at = row.updated_at,
+        applied_at = row.applied_at,
+    }
+end
+
 local function normalize_delivery_location_rows(rows)
     local normalized_rows = {}
 
@@ -1491,6 +1675,20 @@ local function normalize_rows(rows)
 
     for _, row in ipairs(rows or {}) do
         local normalized_row = normalize_contract_row(row)
+
+        if normalized_row ~= nil then
+            normalized_rows[#normalized_rows + 1] = normalized_row
+        end
+    end
+
+    return normalized_rows
+end
+
+local function normalize_contract_reward_grant_rows(rows)
+    local normalized_rows = {}
+
+    for _, row in ipairs(rows or {}) do
+        local normalized_row = normalize_contract_reward_grant_row(row)
 
         if normalized_row ~= nil then
             normalized_rows[#normalized_rows + 1] = normalized_row
@@ -3204,6 +3402,228 @@ function ContractRepository:MarkContractPayment(contract_id, payment_status, cal
             callback(true, contract_rows[1], nil)
         end, normalized_contract_id, normalized_payment_status)
     end, "contracts-mark-payment")
+end
+
+function ContractRepository:FindContractRewardGrant(contract_id, reward_type, reward_key, callback)
+    local normalized_contract_id = normalize_positive_integer(contract_id)
+    local normalized_reward_type = normalize_reward_grant_type(reward_type)
+    local normalized_reward_key = normalize_reward_grant_key(reward_key)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-required")
+        return true
+    end
+
+    if normalized_reward_type == nil then
+        callback(false, nil, "reward-type-required")
+        return true
+    end
+
+    if normalized_reward_key == nil then
+        callback(false, nil, "reward-key-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_CONTRACT_REWARD_GRANT_QUERY, function(rows, select_error)
+            local grant_rows = nil
+
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            grant_rows = normalize_contract_reward_grant_rows(rows)
+            callback(true, grant_rows[1], nil)
+        end, normalized_contract_id, normalized_reward_type, normalized_reward_key)
+    end, "contracts-find-reward-grant")
+end
+
+function ContractRepository:GetContractRewardGrants(contract_id, callback)
+    local normalized_contract_id = normalize_positive_integer(contract_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_CONTRACT_REWARD_GRANTS_BY_CONTRACT_QUERY, function(rows, select_error)
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            callback(true, normalize_contract_reward_grant_rows(rows), nil)
+        end, normalized_contract_id)
+    end, "contracts-list-reward-grants")
+end
+
+function ContractRepository:CreateContractRewardGrant(grant, callback)
+    local normalized_contract_id = normalize_positive_integer(grant and grant.contract_id)
+    local normalized_character_id = normalize_positive_integer(grant and grant.character_id)
+    local normalized_reward_type = normalize_reward_grant_type(grant and grant.reward_type)
+    local normalized_reward_key = normalize_reward_grant_key(grant and grant.reward_key)
+    local normalized_amount = normalize_positive_integer(grant and grant.amount)
+    local normalized_status = normalize_reward_grant_status(grant and grant.status)
+    local normalized_error_message = trim_string(grant and grant.error_message)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-required")
+        return true
+    end
+
+    if normalized_character_id == nil then
+        callback(false, nil, "character-id-required")
+        return true
+    end
+
+    if normalized_reward_type == nil then
+        callback(false, nil, "reward-type-required")
+        return true
+    end
+
+    if normalized_reward_key == nil then
+        callback(false, nil, "reward-key-required")
+        return true
+    end
+
+    if normalized_amount == nil then
+        callback(false, nil, "reward-amount-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(INSERT_CONTRACT_REWARD_GRANT_QUERY, function(rows, insert_error)
+            local grant_rows = nil
+
+            if insert_error ~= nil then
+                callback(false, nil, insert_error)
+                return
+            end
+
+            grant_rows = normalize_contract_reward_grant_rows(rows)
+
+            if grant_rows[1] ~= nil then
+                callback(true, grant_rows[1], nil)
+                return
+            end
+
+            self:FindContractRewardGrant(
+                normalized_contract_id,
+                normalized_reward_type,
+                normalized_reward_key,
+                function(is_find_success, existing_grant, find_error)
+                    if not is_find_success then
+                        callback(false, nil, find_error or "database-error")
+                        return
+                    end
+
+                    callback(true, existing_grant, nil)
+                end
+            )
+        end,
+            normalized_contract_id,
+            normalized_character_id,
+            normalized_reward_type,
+            normalized_reward_key,
+            normalized_amount,
+            normalized_status,
+            normalized_error_message
+        )
+    end, "contracts-create-reward-grant")
+end
+
+function ContractRepository:MarkContractRewardGrantApplied(grant_id, callback)
+    local normalized_grant_id = normalize_positive_integer(grant_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_grant_id == nil then
+        callback(false, nil, "grant-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(UPDATE_CONTRACT_REWARD_GRANT_APPLIED_QUERY, function(rows, update_error)
+            local grant_rows = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            grant_rows = normalize_contract_reward_grant_rows(rows)
+            callback(true, grant_rows[1], nil)
+        end, normalized_grant_id)
+    end, "contracts-mark-reward-grant-applied")
+end
+
+function ContractRepository:MarkContractRewardGrantFailed(grant_id, error_message, callback)
+    local normalized_grant_id = normalize_positive_integer(grant_id)
+    local normalized_error_message = trim_string(error_message)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_grant_id == nil then
+        callback(false, nil, "grant-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(UPDATE_CONTRACT_REWARD_GRANT_FAILED_QUERY, function(rows, update_error)
+            local grant_rows = nil
+
+            if update_error ~= nil then
+                callback(false, nil, update_error)
+                return
+            end
+
+            grant_rows = normalize_contract_reward_grant_rows(rows)
+            callback(true, grant_rows[1], nil)
+        end, normalized_grant_id, normalized_error_message)
+    end, "contracts-mark-reward-grant-failed")
 end
 
 GRContracts.Server.ContractRepositoryClass = ContractRepository
