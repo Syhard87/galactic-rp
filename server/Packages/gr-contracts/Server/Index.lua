@@ -1649,6 +1649,22 @@ GRContractsBridge.GetContractRewardStatus = function(contract_id, callback)
     return GRContracts.Server.Service:GetContractRewardStatus(contract_id, callback)
 end
 
+GRContractsBridge.RetryContractRewards = function(contract_id, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:RetryContractRewards(contract_id, callback)
+end
+
+GRContractsBridge.RetryFailedContractRewards = function(limit, callback)
+    if GRContracts.Server.Service == nil then
+        return callback_service_missing(callback)
+    end
+
+    return GRContracts.Server.Service:RetryFailedContractRewards(limit, callback)
+end
+
 GRContractsBridge.ExpireContracts = function(callback)
     if GRContracts.Server.Service == nil then
         return callback_service_missing(callback)
@@ -1821,6 +1837,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "contractrewards"
             and command_name ~= "contractrewardstatus"
             and command_name ~= "grantcontractrewards"
+            and command_name ~= "retrycontractrewards"
+            and command_name ~= "retryfailedcontractrewards"
             and command_name ~= "expirecontracts"
             and command_name ~= "cleanupcontractcargo"
             and command_name ~= "expiredcontracts"
@@ -3695,6 +3713,40 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             return false
         end
 
+        if command_name == "retryfailedcontractrewards" then
+            if payload ~= nil then
+                Chat.SendMessage(player, "Usage : /retryfailedcontractrewards")
+                return false
+            end
+
+            GRContracts.Server.Service:RetryFailedContractRewards(20, function(is_success, retry_summary, error)
+                if not is_success then
+                    Chat.SendMessage(player, "Retry rewards global impossible.")
+                    return
+                end
+
+                if retry_summary == nil or (retry_summary.processed_count or 0) < 1 then
+                    Chat.SendMessage(player, "Aucune reward failed/pending a relancer.")
+                    return
+                end
+
+                Chat.SendMessage(
+                    player,
+                    string.format(
+                        "Retry rewards global : processed=%s applied=%s failed=%s skipped=%s limit=%s",
+                        tostring(retry_summary.processed_count or 0),
+                        tostring(retry_summary.applied_count or 0),
+                        tostring(retry_summary.failed_count or 0),
+                        tostring(retry_summary.skipped_count or 0),
+                        tostring(retry_summary.limit or 20)
+                    )
+                )
+                Chat.SendMessage(player, "Voir detail : /contractrewardstatus <contract_id>")
+            end)
+
+            return false
+        end
+
         if payload == nil then
             if command_name == "acceptcontract" then
                 Chat.SendMessage(player, "Usage : /acceptcontract <contract_id>")
@@ -3712,6 +3764,8 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                 Chat.SendMessage(player, "Usage : /contractrewardstatus <contract_id>")
             elseif command_name == "grantcontractrewards" then
                 Chat.SendMessage(player, "Usage : /grantcontractrewards <contract_id>")
+            elseif command_name == "retrycontractrewards" then
+                Chat.SendMessage(player, "Usage : /retrycontractrewards <contract_id>")
             elseif command_name == "cleanupcontractcargo" then
                 Chat.SendMessage(player, "Usage : /cleanupcontractcargo <contract_id>")
             elseif command_name == "completecontract" then
@@ -4077,6 +4131,42 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
 
                 if rewards_line ~= nil then
                     Chat.SendMessage(player, rewards_line)
+                end
+            end)
+
+            return false
+        end
+
+        if command_name == "retrycontractrewards" then
+            GRContracts.Server.Service:RetryContractRewards(contract_id, function(is_success, contract_row, retry_summary, error)
+                if not is_success then
+                    if error == "contract-not-found" or error == "contract-id-invalid" then
+                        Chat.SendMessage(player, "Contrat introuvable.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Retry rewards impossible.")
+                    return
+                end
+
+                local resolved_contract_id = tostring(contract_row and contract_row.id or contract_id)
+
+                if retry_summary == nil or retry_summary.has_rewards ~= true then
+                    Chat.SendMessage(player, string.format("Aucune reward a relancer pour le contrat #%s.", tostring(resolved_contract_id)))
+                    Chat.SendMessage(player, "Aucune reward ledger pour ce contrat.")
+                    return
+                end
+
+                if retry_summary.has_retryable ~= true and retry_summary.all_applied == true then
+                    Chat.SendMessage(player, string.format("Aucune reward a relancer pour le contrat #%s.", tostring(resolved_contract_id)))
+                    Chat.SendMessage(player, "Toutes les rewards sont deja applied.")
+                    return
+                end
+
+                Chat.SendMessage(player, string.format("Retry rewards contrat #%s :", tostring(resolved_contract_id)))
+
+                for _, retry_line in ipairs(retry_summary.lines or {}) do
+                    Chat.SendMessage(player, retry_line)
                 end
             end)
 

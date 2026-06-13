@@ -12,6 +12,8 @@ local MAX_CONTRACT_LOCATION_RADIUS = 100000
 local MAX_ACTIVE_JOB_CONTRACTS = 3
 local DEFAULT_JOB_HISTORY_LIMIT = 5
 local MAX_JOB_HISTORY_LIMIT = 20
+local DEFAULT_RETRY_FAILED_REWARD_GRANT_LIMIT = 20
+local MAX_RETRY_FAILED_REWARD_GRANT_LIMIT = 20
 
 local ALLOWED_CONTRACT_TYPES = {
     crafting = true,
@@ -826,6 +828,124 @@ local function attach_reward_grants_to_contract_row(contract_row, reward_grant_r
     return enriched_row
 end
 
+local normalize_retry_failed_reward_grant_limit = nil
+local normalize_reward_retry_error_message = nil
+
+local function build_reward_retry_result_line(reward_grant_row, outcome)
+    local reward_type = trim_string(reward_grant_row and reward_grant_row.reward_type) or "unknown"
+    local reward_key = trim_string(reward_grant_row and reward_grant_row.reward_key) or "unknown"
+    local amount = normalize_positive_integer(reward_grant_row and reward_grant_row.amount) or 0
+    local grant_status = trim_string(reward_grant_row and reward_grant_row.status) or "pending"
+    local error_message = normalize_reward_retry_error_message(reward_grant_row and reward_grant_row.error_message)
+
+    if outcome == "skipped_applied" then
+        return string.format(
+            "- %s %s +%s skipped applied",
+            tostring(reward_type),
+            tostring(reward_key),
+            tostring(amount)
+        )
+    end
+
+    local line = string.format(
+        "- %s %s +%s %s",
+        tostring(reward_type),
+        tostring(reward_key),
+        tostring(amount),
+        tostring(grant_status)
+    )
+
+    if grant_status == "failed" then
+        line = string.format("%s error=%s", tostring(line), tostring(error_message))
+    end
+
+    return line
+end
+
+local function build_contract_reward_retry_summary(reward_grant_rows, retry_results)
+    local summary = {
+        has_rewards = false,
+        has_retryable = false,
+        all_applied = false,
+        processed_count = 0,
+        applied_count = 0,
+        failed_count = 0,
+        skipped_count = 0,
+        lines = {},
+    }
+    local retry_results_by_grant_id = {}
+    local all_applied = true
+
+    for _, retry_result in ipairs(retry_results or {}) do
+        local grant_id = normalize_positive_integer(retry_result and retry_result.grant and retry_result.grant.id)
+
+        if grant_id ~= nil then
+            retry_results_by_grant_id[grant_id] = retry_result
+        end
+
+        summary.processed_count = summary.processed_count + 1
+
+        if retry_result and retry_result.outcome == "applied" then
+            summary.applied_count = summary.applied_count + 1
+        elseif retry_result and retry_result.outcome == "failed" then
+            summary.failed_count = summary.failed_count + 1
+        elseif retry_result and retry_result.outcome == "skipped_applied" then
+            summary.skipped_count = summary.skipped_count + 1
+        end
+    end
+
+    for _, reward_grant_row in ipairs(reward_grant_rows or {}) do
+        local grant_id = normalize_positive_integer(reward_grant_row and reward_grant_row.id)
+        local retry_result = grant_id ~= nil and retry_results_by_grant_id[grant_id] or nil
+        local grant_status = trim_string(reward_grant_row and reward_grant_row.status)
+
+        summary.has_rewards = true
+
+        if grant_status ~= "applied" then
+            all_applied = false
+        end
+
+        if retry_result ~= nil then
+            summary.lines[#summary.lines + 1] = build_reward_retry_result_line(retry_result.grant or reward_grant_row, retry_result.outcome)
+        elseif grant_status == "applied" then
+            summary.skipped_count = summary.skipped_count + 1
+            summary.lines[#summary.lines + 1] = build_reward_retry_result_line(reward_grant_row, "skipped_applied")
+        else
+            summary.has_retryable = true
+            summary.lines[#summary.lines + 1] = build_reward_retry_result_line(reward_grant_row, grant_status)
+        end
+    end
+
+    summary.has_retryable = summary.has_retryable or summary.processed_count > 0
+    summary.all_applied = all_applied and summary.has_rewards
+
+    return summary
+end
+
+local function build_global_reward_retry_summary(retry_results, limit)
+    local summary = {
+        processed_count = 0,
+        applied_count = 0,
+        failed_count = 0,
+        skipped_count = 0,
+        limit = normalize_retry_failed_reward_grant_limit(limit),
+    }
+
+    for _, retry_result in ipairs(retry_results or {}) do
+        summary.processed_count = summary.processed_count + 1
+
+        if retry_result and retry_result.outcome == "applied" then
+            summary.applied_count = summary.applied_count + 1
+        elseif retry_result and retry_result.outcome == "failed" then
+            summary.failed_count = summary.failed_count + 1
+        elseif retry_result and retry_result.outcome == "skipped_applied" then
+            summary.skipped_count = summary.skipped_count + 1
+        end
+    end
+
+    return summary
+end
+
 local function map_complete_contract_error_for_delivery(error_code, contract_row)
     if error_code == "contract-not-found" then
         return "contract-not-found"
@@ -1053,6 +1173,40 @@ local function normalize_job_history_limit(value)
     return normalized_limit
 end
 
+normalize_retry_failed_reward_grant_limit = function(value)
+    local normalized_limit = normalize_positive_integer(value)
+
+    if normalized_limit == nil then
+        return DEFAULT_RETRY_FAILED_REWARD_GRANT_LIMIT
+    end
+
+    if normalized_limit < 1 then
+        return 1
+    end
+
+    if normalized_limit > MAX_RETRY_FAILED_REWARD_GRANT_LIMIT then
+        return MAX_RETRY_FAILED_REWARD_GRANT_LIMIT
+    end
+
+    return normalized_limit
+end
+
+normalize_reward_retry_error_message = function(error_message)
+    local normalized_error_message = trim_string(error_message)
+
+    if normalized_error_message == nil then
+        return "retry-error"
+    end
+
+    normalized_error_message = normalized_error_message:gsub("%s+", " ")
+
+    if #normalized_error_message > 120 then
+        normalized_error_message = normalized_error_message:sub(1, 117) .. "..."
+    end
+
+    return normalized_error_message
+end
+
 local function translate_route_diagnostic_issue(issue_code)
     if issue_code == "route-key-invalid" then
         return "route_key invalide"
@@ -1261,7 +1415,7 @@ function ContractService:PrepareContractRewardGrants(contract_row, callback)
         return callback_repository_missing(callback)
     end
 
-    if normalized_contract_id == nil or normalized_character_id == nil then
+    if normalized_contract_id == nil then
         callback(false, nil, "contract-not-found")
         return true
     end
@@ -1306,14 +1460,120 @@ function ContractService:PrepareContractRewardGrants(contract_row, callback)
     return true
 end
 
-function ContractService:ApplyPendingContractRewardGrants(contract_row, callback)
+function ContractService:UpdateContractRewardGrantAggregateStatuses(contract_row, reward_grant_rows, callback)
+    local normalized_contract_id = normalize_contract_id(contract_row and contract_row.id)
+    local reward_money = normalize_reward_money(contract_row and contract_row.reward_money) or 0
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-not-found")
+        return true
+    end
+
+    local money_grants = {}
+    local secondary_grants = {}
+    local final_payment_status = nil
+    local final_rewards_status = nil
+    local final_rewards_error = nil
+
+    for _, reward_grant_row in ipairs(reward_grant_rows or {}) do
+        if reward_grant_row.reward_type == "money" then
+            money_grants[#money_grants + 1] = reward_grant_row
+        else
+            secondary_grants[#secondary_grants + 1] = reward_grant_row
+        end
+    end
+
+    if #money_grants == 0 then
+        final_payment_status = reward_money > 0 and "pending" or "unavailable"
+    elseif money_grants[1].status == "applied" then
+        final_payment_status = "paid"
+    elseif money_grants[1].status == "failed" then
+        final_payment_status = "failed"
+    else
+        final_payment_status = "pending"
+    end
+
+    if #secondary_grants == 0 then
+        final_rewards_status = "not_required"
+    else
+        local has_failed = false
+        local has_pending = false
+        local failed_parts = {}
+
+        for _, reward_grant_row in ipairs(secondary_grants) do
+            if reward_grant_row.status == "failed" then
+                has_failed = true
+                failed_parts[#failed_parts + 1] = format_reward_grant_summary_entry(reward_grant_row) or reward_grant_row.reward_type
+            elseif reward_grant_row.status ~= "applied" then
+                has_pending = true
+            end
+        end
+
+        if has_failed then
+            final_rewards_status = "failed"
+            final_rewards_error = table.concat(failed_parts, ", ")
+        elseif has_pending then
+            final_rewards_status = "pending"
+        else
+            final_rewards_status = "granted"
+        end
+    end
+
+    return self.repository:MarkContractPayment(normalized_contract_id, final_payment_status, function(is_payment_mark_success, payment_row, payment_mark_error)
+        local aggregate_row = payment_row or contract_row
+
+        if not is_payment_mark_success then
+            callback(false, aggregate_row, payment_mark_error or "database-error")
+            return
+        end
+
+        local function finish_with_aggregate_row(updated_contract_row)
+            local enriched_row = attach_reward_grants_to_contract_row(updated_contract_row or aggregate_row, reward_grant_rows or {})
+            local aggregate_error = nil
+
+            if #(reward_grant_rows or {}) == 0 then
+                aggregate_error = "rewards-not-required"
+            elseif #enriched_row.reward_grants_failed > 0 or #enriched_row.reward_grants_pending > 0 then
+                aggregate_error = "reward-error"
+            end
+
+            callback(true, enriched_row, aggregate_error)
+        end
+
+        if final_rewards_status == "granted" then
+            self.repository:MarkContractRewardsGranted(normalized_contract_id, function(is_rewards_mark_success, rewards_row, rewards_mark_error)
+                if not is_rewards_mark_success then
+                    callback(false, aggregate_row, rewards_mark_error or "database-error")
+                    return
+                end
+
+                finish_with_aggregate_row(rewards_row or aggregate_row)
+            end)
+            return
+        end
+
+        self:FinalizeContractRewardsStatus(aggregate_row, final_rewards_status, final_rewards_error, function(is_finalize_success, rewards_row, finalize_error)
+            if not is_finalize_success then
+                callback(false, aggregate_row, finalize_error or "database-error")
+                return
+            end
+
+            finish_with_aggregate_row(rewards_row or aggregate_row)
+        end)
+    end)
+end
+
+function ContractService:RefreshAndUpdateContractRewardGrantAggregateStatuses(contract_row, callback)
     local normalized_contract_id = normalize_contract_id(contract_row and contract_row.id)
     local normalized_character_id = normalize_positive_integer(contract_row and contract_row.assignee_character_id)
-    local reward_money = normalize_reward_money(contract_row and contract_row.reward_money) or 0
-    local reward_skill_key = normalize_reward_skill_key(contract_row and contract_row.reward_skill_key)
-    local reward_skill_xp = normalize_non_negative_integer(contract_row and contract_row.reward_skill_xp) or 0
-    local reward_reputation_key = normalize_reward_reputation_key(contract_row and contract_row.reward_reputation_key)
-    local reward_reputation_delta = normalize_integer(contract_row and contract_row.reward_reputation_delta) or 0
 
     if type(callback) ~= "function" then
         return false, "callback-required"
@@ -1328,261 +1588,357 @@ function ContractService:ApplyPendingContractRewardGrants(contract_row, callback
         return true
     end
 
-    local function finalize_aggregate_statuses(reward_grant_rows)
-        local money_grants = {}
-        local secondary_grants = {}
-        local final_payment_status = nil
-        local final_rewards_status = nil
-        local final_rewards_error = nil
-
-        for _, reward_grant_row in ipairs(reward_grant_rows or {}) do
-            if reward_grant_row.reward_type == "money" then
-                money_grants[#money_grants + 1] = reward_grant_row
-            else
-                secondary_grants[#secondary_grants + 1] = reward_grant_row
-            end
+    return self.repository:GetContractRewardGrants(normalized_contract_id, function(is_grants_success, reward_grant_rows, grants_error)
+        if not is_grants_success then
+            callback(false, contract_row, grants_error or "database-error")
+            return
         end
 
-        if #money_grants == 0 then
-            final_payment_status = reward_money > 0 and "pending" or "unavailable"
-        elseif money_grants[1].status == "applied" then
-            final_payment_status = "paid"
-        elseif money_grants[1].status == "failed" then
-            final_payment_status = "failed"
-        else
-            final_payment_status = "pending"
-        end
+        self:UpdateContractRewardGrantAggregateStatuses(contract_row, reward_grant_rows or {}, callback)
+    end)
+end
 
-        if #secondary_grants == 0 then
-            final_rewards_status = "not_required"
-        else
-            local has_failed = false
-            local has_pending = false
-            local failed_parts = {}
+function ContractService:ApplyContractRewardGrant(reward_grant_row, callback)
+    local normalized_contract_id = normalize_contract_id(reward_grant_row and reward_grant_row.contract_id)
+    local normalized_character_id = normalize_positive_integer(reward_grant_row and reward_grant_row.character_id)
+    local normalized_reward_type = trim_string(reward_grant_row and reward_grant_row.reward_type)
+    local normalized_reward_key = trim_string(reward_grant_row and reward_grant_row.reward_key)
 
-            for _, reward_grant_row in ipairs(secondary_grants) do
-                if reward_grant_row.status == "failed" then
-                    has_failed = true
-                    failed_parts[#failed_parts + 1] = format_reward_grant_summary_entry(reward_grant_row) or reward_grant_row.reward_type
-                elseif reward_grant_row.status ~= "applied" then
-                    has_pending = true
-                end
-            end
-
-            if has_failed then
-                final_rewards_status = "failed"
-                final_rewards_error = table.concat(failed_parts, ", ")
-            elseif has_pending then
-                final_rewards_status = "pending"
-            else
-                final_rewards_status = "granted"
-            end
-        end
-
-        self.repository:MarkContractPayment(normalized_contract_id, final_payment_status, function(is_payment_mark_success, payment_row, payment_mark_error)
-            local aggregate_row = payment_row or contract_row
-
-            if not is_payment_mark_success then
-                callback(false, aggregate_row, payment_mark_error or "database-error")
-                return
-            end
-
-            local function finish_with_aggregate_row(updated_contract_row)
-                self.repository:GetContractRewardGrants(normalized_contract_id, function(is_grants_refresh_success, refreshed_reward_grants, grants_refresh_error)
-                    if not is_grants_refresh_success then
-                        callback(false, updated_contract_row or aggregate_row, grants_refresh_error or "database-error")
-                        return
-                    end
-
-                    local enriched_row = attach_reward_grants_to_contract_row(updated_contract_row or aggregate_row, refreshed_reward_grants)
-
-                    if #refreshed_reward_grants == 0 then
-                        callback(false, enriched_row, "rewards-not-required")
-                        return
-                    end
-
-                    if #enriched_row.reward_grants_failed > 0 then
-                        callback(false, enriched_row, "reward-error")
-                        return
-                    end
-
-                    if #enriched_row.reward_grants_pending > 0 then
-                        callback(false, enriched_row, "reward-error")
-                        return
-                    end
-
-                    callback(true, enriched_row, nil)
-                end)
-            end
-
-            if final_rewards_status == "granted" then
-                self.repository:MarkContractRewardsGranted(normalized_contract_id, function(is_rewards_mark_success, rewards_row, rewards_mark_error)
-                    if not is_rewards_mark_success then
-                        callback(false, aggregate_row, rewards_mark_error or "database-error")
-                        return
-                    end
-
-                    finish_with_aggregate_row(rewards_row or aggregate_row)
-                end)
-                return
-            end
-
-            self:FinalizeContractRewardsStatus(aggregate_row, final_rewards_status, final_rewards_error, function(is_finalize_success, rewards_row, finalize_error)
-                if not is_finalize_success then
-                    callback(false, aggregate_row, finalize_error or "database-error")
-                    return
-                end
-
-                finish_with_aggregate_row(rewards_row or aggregate_row)
-            end)
-        end)
+    if type(callback) ~= "function" then
+        return false, "callback-required"
     end
 
-    local function apply_grant_rows(reward_grant_rows)
-        local current_index = 1
-        local process_next = nil
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
 
-        local function mark_failed_and_continue(reward_grant_row, error_message)
-            self.repository:MarkContractRewardGrantFailed(reward_grant_row.id, error_message, function(is_mark_failed_success, updated_grant_row, mark_failed_error)
-                if not is_mark_failed_success then
-                    callback(false, contract_row, mark_failed_error or "database-error")
-                    return
-                end
+    if normalized_contract_id == nil or normalized_character_id == nil then
+        callback(false, nil, "contract-not-found")
+        return true
+    end
 
-                reward_grant_rows[current_index] = updated_grant_row or reward_grant_row
-                current_index = current_index + 1
-                process_next()
-            end)
-        end
+    if normalized_reward_type == nil or normalized_reward_key == nil then
+        callback(false, nil, "reward-grant-invalid")
+        return true
+    end
 
-        local function mark_applied_and_continue(reward_grant_row)
-            self.repository:MarkContractRewardGrantApplied(reward_grant_row.id, function(is_mark_applied_success, updated_grant_row, mark_applied_error)
-                if not is_mark_applied_success then
-                    callback(false, contract_row, mark_applied_error or "database-error")
-                    return
-                end
-
-                reward_grant_rows[current_index] = updated_grant_row or reward_grant_row
-                current_index = current_index + 1
-                process_next()
-            end)
-        end
-
-        process_next = function()
-            local reward_grant_row = reward_grant_rows[current_index]
-
-            if reward_grant_row == nil then
-                finalize_aggregate_statuses(reward_grant_rows)
+    return self.repository:FindContractRewardGrant(
+        normalized_contract_id,
+        normalized_reward_type,
+        normalized_reward_key,
+        function(is_find_success, current_reward_grant_row, find_error)
+            if not is_find_success then
+                callback(false, nil, find_error or "database-error")
                 return
             end
 
-            if reward_grant_row.status == "applied" or reward_grant_row.status == "failed" then
-                current_index = current_index + 1
-                process_next()
+            if current_reward_grant_row == nil then
+                callback(false, nil, "reward-grant-not-found")
                 return
             end
 
-            if reward_grant_row.reward_type == "money" then
-                if reward_grant_row.amount < 1 then
-                    mark_failed_and_continue(reward_grant_row, "invalid-money-amount")
+            local function finish_with_failed_result(error_message)
+                local normalized_error_message = normalize_reward_retry_error_message(error_message)
+
+                self.repository:MarkContractRewardGrantFailed(
+                    current_reward_grant_row.id,
+                    normalized_error_message,
+                    function(is_mark_failed_success, updated_reward_grant_row, mark_failed_error)
+                        if not is_mark_failed_success then
+                            callback(false, nil, mark_failed_error or "database-error")
+                            return
+                        end
+
+                        callback(true, {
+                            grant = updated_reward_grant_row or current_reward_grant_row,
+                            outcome = "failed",
+                            error_message = normalized_error_message,
+                        }, nil)
+                    end
+                )
+            end
+
+            local function finish_with_applied_result()
+                self.repository:MarkContractRewardGrantApplied(current_reward_grant_row.id, function(is_mark_applied_success, updated_reward_grant_row, mark_applied_error)
+                    if not is_mark_applied_success then
+                        callback(false, nil, mark_applied_error or "database-error")
+                        return
+                    end
+
+                    callback(true, {
+                        grant = updated_reward_grant_row or current_reward_grant_row,
+                        outcome = "applied",
+                    }, nil)
+                end)
+            end
+
+            if current_reward_grant_row.status == "applied" then
+                callback(true, {
+                    grant = current_reward_grant_row,
+                    outcome = "skipped_applied",
+                }, nil)
+                return
+            end
+
+            if current_reward_grant_row.status ~= "pending" and current_reward_grant_row.status ~= "failed" then
+                finish_with_failed_result("unsupported-reward-status")
+                return
+            end
+
+            if current_reward_grant_row.reward_type == "money" then
+                if current_reward_grant_row.amount == nil or current_reward_grant_row.amount < 1 then
+                    finish_with_failed_result("invalid-money-amount")
                     return
                 end
 
                 local economy_bridge = resolve_economy_bridge()
 
                 if economy_bridge == nil then
-                    mark_failed_and_continue(reward_grant_row, "economy-bridge-unavailable")
+                    finish_with_failed_result("economy-bridge-unavailable")
                     return
                 end
 
                 economy_bridge.AddMoney(
                     normalized_character_id,
                     "bank",
-                    reward_grant_row.amount,
+                    current_reward_grant_row.amount,
                     string.format("contract-reward:%s", tostring(normalized_contract_id)),
                     {
                         contract_id = normalized_contract_id,
-                        reward_grant_id = reward_grant_row.id,
+                        reward_grant_id = current_reward_grant_row.id,
                         source = "gr-contracts",
                     },
                     function(is_credit_success, _, credit_error)
                         if not is_credit_success then
-                            mark_failed_and_continue(reward_grant_row, credit_error or "economy-credit-failed")
+                            finish_with_failed_result(credit_error or "economy-credit-failed")
                             return
                         end
 
-                        mark_applied_and_continue(reward_grant_row)
+                        finish_with_applied_result()
                     end
                 )
                 return
             end
 
-            if reward_grant_row.reward_type == "skill_xp" then
+            if current_reward_grant_row.reward_type == "skill_xp" then
                 local skills_bridge = resolve_skills_bridge()
 
                 if skills_bridge == nil then
-                    mark_failed_and_continue(reward_grant_row, "skill-bridge-unavailable")
+                    finish_with_failed_result("skill-bridge-unavailable")
                     return
                 end
 
                 skills_bridge.AddSkillXp(
                     normalized_character_id,
-                    reward_grant_row.reward_key,
-                    reward_grant_row.amount,
+                    current_reward_grant_row.reward_key,
+                    current_reward_grant_row.amount,
                     string.format("contract-reward:%s", tostring(normalized_contract_id)),
                     function(is_skill_success, _, skill_error)
                         if not is_skill_success then
-                            mark_failed_and_continue(reward_grant_row, skill_error or "skill-grant-failed")
+                            finish_with_failed_result(skill_error or "skill-grant-failed")
                             return
                         end
 
-                        mark_applied_and_continue(reward_grant_row)
+                        finish_with_applied_result()
                     end
                 )
                 return
             end
 
-            if reward_grant_row.reward_type == "reputation" then
+            if current_reward_grant_row.reward_type == "reputation" then
                 local reputation_bridge = resolve_reputation_bridge()
 
                 if reputation_bridge == nil then
-                    mark_failed_and_continue(reward_grant_row, "reputation-bridge-unavailable")
+                    finish_with_failed_result("reputation-bridge-unavailable")
                     return
                 end
 
                 reputation_bridge.AddReputation(
                     normalized_character_id,
-                    reward_grant_row.reward_key,
-                    reward_grant_row.amount,
+                    current_reward_grant_row.reward_key,
+                    current_reward_grant_row.amount,
                     string.format("contract-reward:%s", tostring(normalized_contract_id)),
                     function(is_reputation_success, _, reputation_error)
                         if not is_reputation_success then
-                            mark_failed_and_continue(reward_grant_row, reputation_error or "reputation-grant-failed")
+                            finish_with_failed_result(reputation_error or "reputation-grant-failed")
                             return
                         end
 
-                        mark_applied_and_continue(reward_grant_row)
+                        finish_with_applied_result()
                     end
                 )
                 return
             end
 
-            mark_failed_and_continue(reward_grant_row, "unsupported-reward-type")
+            finish_with_failed_result("unsupported-reward-type")
         end
+    )
+end
 
-        process_next()
+function ContractService:ApplyContractRewardGrants(contract_row, reward_grant_rows, callback)
+    local normalized_contract_id = normalize_contract_id(contract_row and contract_row.id)
+    local normalized_character_id = normalize_positive_integer(contract_row and contract_row.assignee_character_id)
+    local apply_results = {}
+    local current_index = 1
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
     end
 
-    self.repository:GetContractRewardGrants(normalized_contract_id, function(is_grants_success, reward_grant_rows, grants_error)
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_contract_id == nil or normalized_character_id == nil then
+        callback(false, nil, nil, "contract-not-found")
+        return true
+    end
+
+    local function finalize_processed_reward_grants()
+        self:RefreshAndUpdateContractRewardGrantAggregateStatuses(contract_row, function(is_refresh_success, updated_contract_row, aggregate_error)
+            if not is_refresh_success then
+                callback(false, updated_contract_row or contract_row, apply_results, aggregate_error or "database-error")
+                return
+            end
+
+            callback(true, updated_contract_row or contract_row, apply_results, aggregate_error)
+        end)
+    end
+
+    local function process_next()
+        local pending_reward_grant_row = reward_grant_rows[current_index]
+
+        if pending_reward_grant_row == nil then
+            finalize_processed_reward_grants()
+            return
+        end
+
+        self:ApplyContractRewardGrant(pending_reward_grant_row, function(is_apply_success, apply_result, apply_error)
+            if not is_apply_success then
+                callback(false, contract_row, apply_results, apply_error or "database-error")
+                return
+            end
+
+            apply_results[#apply_results + 1] = apply_result
+            current_index = current_index + 1
+            process_next()
+        end)
+    end
+
+    if type(reward_grant_rows) ~= "table" or #reward_grant_rows == 0 then
+        finalize_processed_reward_grants()
+        return true
+    end
+
+    process_next()
+    return true
+end
+
+function ContractService:RefreshContractsRewardAggregateStatuses(contract_ids, callback)
+    local normalized_contract_ids = {}
+    local seen_contract_ids = {}
+    local refreshed_contract_rows = {}
+    local current_index = 1
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    for _, contract_id in ipairs(contract_ids or {}) do
+        local normalized_contract_id = normalize_contract_id(contract_id)
+
+        if normalized_contract_id ~= nil and seen_contract_ids[normalized_contract_id] ~= true then
+            seen_contract_ids[normalized_contract_id] = true
+            normalized_contract_ids[#normalized_contract_ids + 1] = normalized_contract_id
+        end
+    end
+
+    local function process_next()
+        local contract_id = normalized_contract_ids[current_index]
+
+        if contract_id == nil then
+            callback(true, refreshed_contract_rows, nil)
+            return
+        end
+
+        self.repository:GetContractById(contract_id, function(is_contract_success, contract_row, contract_error)
+            if not is_contract_success then
+                callback(false, refreshed_contract_rows, contract_error or "database-error")
+                return
+            end
+
+            if contract_row == nil then
+                current_index = current_index + 1
+                process_next()
+                return
+            end
+
+            self:RefreshAndUpdateContractRewardGrantAggregateStatuses(contract_row, function(is_refresh_success, updated_contract_row, refresh_error)
+                if not is_refresh_success then
+                    callback(false, refreshed_contract_rows, refresh_error or "database-error")
+                    return
+                end
+
+                refreshed_contract_rows[#refreshed_contract_rows + 1] = updated_contract_row or contract_row
+                current_index = current_index + 1
+                process_next()
+            end)
+        end)
+    end
+
+    process_next()
+    return true
+end
+
+function ContractService:ApplyPendingContractRewardGrants(contract_row, callback)
+    local normalized_contract_id = normalize_contract_id(contract_row and contract_row.id)
+    local normalized_character_id = normalize_positive_integer(contract_row and contract_row.assignee_character_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_contract_id == nil or normalized_character_id == nil then
+        callback(false, nil, "contract-not-found")
+        return true
+    end
+
+    return self.repository:GetContractRewardGrants(normalized_contract_id, function(is_grants_success, reward_grant_rows, grants_error)
+        local pending_reward_grant_rows = {}
+
         if not is_grants_success then
             callback(false, nil, grants_error or "database-error")
             return
         end
 
-        apply_grant_rows(reward_grant_rows or {})
-    end)
+        for _, reward_grant_row in ipairs(reward_grant_rows or {}) do
+            if reward_grant_row.status == "pending" then
+                pending_reward_grant_rows[#pending_reward_grant_rows + 1] = reward_grant_row
+            end
+        end
 
-    return true
+        self:ApplyContractRewardGrants(contract_row, pending_reward_grant_rows, function(is_apply_success, updated_contract_row, _, aggregate_error)
+            if not is_apply_success then
+                callback(false, updated_contract_row or contract_row, aggregate_error or "database-error")
+                return
+            end
+
+            if aggregate_error ~= nil then
+                callback(false, updated_contract_row or contract_row, aggregate_error)
+                return
+            end
+
+            callback(true, updated_contract_row or contract_row, nil)
+        end)
+    end)
 end
 
 function ContractService:GetContractRewardStatus(contract_id, callback)
@@ -2057,6 +2413,143 @@ function ContractService:GrantContractRewards(contract_id, callback)
                 self:ApplyPendingContractRewardGrants(contract_row, callback)
             end)
         end)
+    end)
+end
+
+function ContractService:RetryContractRewards(contract_id, callback)
+    local normalized_contract_id = normalize_contract_id(contract_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, nil, "contract-id-invalid")
+        return true
+    end
+
+    return self.repository:GetContractById(normalized_contract_id, function(is_contract_success, contract_row, contract_error)
+        if not is_contract_success then
+            callback(false, nil, nil, contract_error or "database-error")
+            return
+        end
+
+        if contract_row == nil then
+            callback(false, nil, nil, "contract-not-found")
+            return
+        end
+
+        local function continue_with_reward_grants(resolved_contract_row)
+            self.repository:GetContractRewardGrants(normalized_contract_id, function(is_grants_success, reward_grant_rows, grants_error)
+                if not is_grants_success then
+                    callback(false, resolved_contract_row or contract_row, nil, grants_error or "database-error")
+                    return
+                end
+
+                self.repository:GetRetryableContractRewardGrants(normalized_contract_id, function(is_retryable_success, retryable_reward_grant_rows, retryable_error)
+                    if not is_retryable_success then
+                        callback(false, resolved_contract_row or contract_row, nil, retryable_error or "database-error")
+                        return
+                    end
+
+                    if type(retryable_reward_grant_rows) ~= "table" or #retryable_reward_grant_rows == 0 then
+                        local summary = build_contract_reward_retry_summary(reward_grant_rows or {}, {})
+                        callback(true, attach_reward_grants_to_contract_row(resolved_contract_row or contract_row, reward_grant_rows or {}), summary, nil)
+                        return
+                    end
+
+                    self:ApplyContractRewardGrants(resolved_contract_row or contract_row, retryable_reward_grant_rows, function(is_apply_success, updated_contract_row, retry_results, aggregate_error)
+                        if not is_apply_success then
+                            callback(false, updated_contract_row or resolved_contract_row or contract_row, nil, aggregate_error or "database-error")
+                            return
+                        end
+
+                        local retry_summary = build_contract_reward_retry_summary(
+                            updated_contract_row and updated_contract_row.reward_grants or reward_grant_rows or {},
+                            retry_results or {}
+                        )
+
+                        callback(true, updated_contract_row or resolved_contract_row or contract_row, retry_summary, nil)
+                    end)
+                end)
+            end)
+        end
+
+        if trim_string(contract_row.status) == "completed" then
+            self:PrepareContractRewardGrants(contract_row, function(is_prepare_success, _, prepare_error)
+                if not is_prepare_success then
+                    callback(false, contract_row, nil, prepare_error or "database-error")
+                    return
+                end
+
+                continue_with_reward_grants(contract_row)
+            end)
+            return
+        end
+
+        continue_with_reward_grants(contract_row)
+    end)
+end
+
+function ContractService:RetryFailedContractRewards(limit, callback)
+    local normalized_limit = normalize_retry_failed_reward_grant_limit(limit)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    return self.repository:ListRetryableContractRewardGrants(normalized_limit, function(is_list_success, reward_grant_rows, list_error)
+        if not is_list_success then
+            callback(false, nil, list_error or "database-error")
+            return
+        end
+
+        if type(reward_grant_rows) ~= "table" or #reward_grant_rows == 0 then
+            callback(true, build_global_reward_retry_summary({}, normalized_limit), nil)
+            return
+        end
+
+        local retry_results = {}
+        local affected_contract_ids = {}
+        local current_index = 1
+
+        local function process_next()
+            local reward_grant_row = reward_grant_rows[current_index]
+
+            if reward_grant_row == nil then
+                self:RefreshContractsRewardAggregateStatuses(affected_contract_ids, function(is_refresh_success, _, refresh_error)
+                    if not is_refresh_success then
+                        callback(false, nil, refresh_error or "database-error")
+                        return
+                    end
+
+                    callback(true, build_global_reward_retry_summary(retry_results, normalized_limit), nil)
+                end)
+                return
+            end
+
+            self:ApplyContractRewardGrant(reward_grant_row, function(is_apply_success, retry_result, apply_error)
+                if not is_apply_success then
+                    callback(false, nil, apply_error or "database-error")
+                    return
+                end
+
+                retry_results[#retry_results + 1] = retry_result
+                affected_contract_ids[#affected_contract_ids + 1] = reward_grant_row.contract_id
+                current_index = current_index + 1
+                process_next()
+            end)
+        end
+
+        process_next()
     end)
 end
 

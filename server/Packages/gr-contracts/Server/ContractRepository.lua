@@ -986,6 +986,24 @@ local SELECT_CONTRACT_REWARD_GRANTS_BY_CONTRACT_QUERY = [[
     ORDER BY id ASC
 ]]
 
+local SELECT_RETRYABLE_CONTRACT_REWARD_GRANTS_BY_CONTRACT_QUERY = [[
+    SELECT
+]] .. CONTRACT_REWARD_GRANT_SELECT_COLUMNS .. [[
+    FROM contract_reward_grants
+    WHERE contract_id = :0
+      AND status IN ('pending', 'failed')
+    ORDER BY id ASC
+]]
+
+local SELECT_RETRYABLE_CONTRACT_REWARD_GRANTS_QUERY = [[
+    SELECT
+]] .. CONTRACT_REWARD_GRANT_SELECT_COLUMNS .. [[
+    FROM contract_reward_grants
+    WHERE status IN ('pending', 'failed')
+    ORDER BY updated_at ASC, id ASC
+    LIMIT :0
+]]
+
 local UPDATE_CONTRACT_REWARD_GRANT_APPLIED_QUERY = [[
     UPDATE contract_reward_grants
     SET
@@ -3475,6 +3493,64 @@ function ContractRepository:GetContractRewardGrants(contract_id, callback)
             callback(true, normalize_contract_reward_grant_rows(rows), nil)
         end, normalized_contract_id)
     end, "contracts-list-reward-grants")
+end
+
+function ContractRepository:GetRetryableContractRewardGrants(contract_id, callback)
+    local normalized_contract_id = normalize_positive_integer(contract_id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_contract_id == nil then
+        callback(false, nil, "contract-id-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_RETRYABLE_CONTRACT_REWARD_GRANTS_BY_CONTRACT_QUERY, function(rows, select_error)
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            callback(true, normalize_contract_reward_grant_rows(rows), nil)
+        end, normalized_contract_id)
+    end, "contracts-list-retryable-reward-grants-by-contract")
+end
+
+function ContractRepository:ListRetryableContractRewardGrants(limit, callback)
+    local normalized_limit = normalize_positive_integer(limit)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if normalized_limit == nil then
+        callback(false, nil, "limit-required")
+        return true
+    end
+
+    return self:Connect(function(is_connected, database_or_error, error)
+        if not is_connected then
+            callback(false, nil, error)
+            return
+        end
+
+        database_or_error:SelectAsync(SELECT_RETRYABLE_CONTRACT_REWARD_GRANTS_QUERY, function(rows, select_error)
+            if select_error ~= nil then
+                callback(false, nil, select_error)
+                return
+            end
+
+            callback(true, normalize_contract_reward_grant_rows(rows), nil)
+        end, normalized_limit)
+    end, "contracts-list-retryable-reward-grants")
 end
 
 function ContractRepository:CreateContractRewardGrant(grant, callback)
