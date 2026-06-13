@@ -56,6 +56,7 @@ local EXTERNAL_CHAT_COMMANDS = {
     grantcontractrewards = true,
     retrycontractrewards = true,
     retryfailedcontractrewards = true,
+    createcontractrewardsmoke = true,
     setrouteactive = true,
     forcerouteactive = true,
     setroutedeadline = true,

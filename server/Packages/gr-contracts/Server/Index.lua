@@ -1839,6 +1839,7 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
             and command_name ~= "grantcontractrewards"
             and command_name ~= "retrycontractrewards"
             and command_name ~= "retryfailedcontractrewards"
+            and command_name ~= "createcontractrewardsmoke"
             and command_name ~= "expirecontracts"
             and command_name ~= "cleanupcontractcargo"
             and command_name ~= "expiredcontracts"
@@ -1865,7 +1866,17 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     tostring(platform_id),
                     tostring(guard_error)
                 )
-                Chat.SendMessage(player, "Commande contrats desactivee.")
+
+                if command_name == "createcontractrewardsmoke" then
+                    if guard_error == "debug-disabled" then
+                        Chat.SendMessage(player, "Commandes debug contracts desactivees.")
+                    else
+                        Chat.SendMessage(player, "Acces refuse.")
+                    end
+                else
+                    Chat.SendMessage(player, "Commande contrats desactivee.")
+                end
+
                 return false
             end
         end
@@ -1873,7 +1884,12 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
         local active_character_id = resolve_active_character_id(player)
 
         if active_character_id == nil then
-            Chat.SendMessage(player, "Personnage actif introuvable.")
+            if command_name == "createcontractrewardsmoke" then
+                Chat.SendMessage(player, "Aucun personnage actif trouve.")
+            else
+                Chat.SendMessage(player, "Personnage actif introuvable.")
+            end
+
             return false
         end
 
@@ -3742,6 +3758,45 @@ if type(Chat) == "table" and type(Chat.Subscribe) == "function" and type(Chat.Se
                     )
                 )
                 Chat.SendMessage(player, "Voir detail : /contractrewardstatus <contract_id>")
+            end)
+
+            return false
+        end
+
+        if command_name == "createcontractrewardsmoke" then
+            if payload ~= nil then
+                Chat.SendMessage(player, "Usage : /createcontractrewardsmoke")
+                return false
+            end
+
+            GRContracts.Server.Service:CreateContractRewardSmokeFixture(player, function(is_success, result, error)
+                if not is_success then
+                    if error == "no-active-character" then
+                        Chat.SendMessage(player, "Aucun personnage actif trouve.")
+                        return
+                    end
+
+                    Chat.SendMessage(player, "Creation fixture impossible.")
+                    return
+                end
+
+                local contract_id = tostring(result and result.contract_id or "?")
+                local character_id = tostring(result and result.character_id or active_character_id)
+                local reward_types = "money, skill_xp, reputation"
+
+                if type(result) == "table" and type(result.reward_types) == "table" and #result.reward_types > 0 then
+                    reward_types = table.concat(result.reward_types, ", ")
+                end
+
+                Chat.SendMessage(player, "Contract reward smoke fixture creee.")
+                Chat.SendMessage(player, string.format("contract_id=%s", contract_id))
+                Chat.SendMessage(player, string.format("character_id=%s", character_id))
+                Chat.SendMessage(player, string.format("rewards=%s", reward_types))
+                Chat.SendMessage(player, "Prochaines commandes :")
+                Chat.SendMessage(player, string.format("/delivercontract %s", contract_id))
+                Chat.SendMessage(player, string.format("/contractrewardstatus %s", contract_id))
+                Chat.SendMessage(player, string.format("/retrycontractrewards %s", contract_id))
+                Chat.SendMessage(player, "/retryfailedcontractrewards")
             end)
 
             return false

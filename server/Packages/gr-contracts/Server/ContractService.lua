@@ -14,6 +14,13 @@ local DEFAULT_JOB_HISTORY_LIMIT = 5
 local MAX_JOB_HISTORY_LIMIT = 20
 local DEFAULT_RETRY_FAILED_REWARD_GRANT_LIMIT = 20
 local MAX_RETRY_FAILED_REWARD_GRANT_LIMIT = 20
+local CONTRACT_REWARD_SMOKE_TITLE = "[DEBUG] Reward smoke delivery"
+local CONTRACT_REWARD_SMOKE_DESCRIPTION = "Fixture debug pour tester /delivercontract et le ledger rewards."
+local CONTRACT_REWARD_SMOKE_REWARD_MONEY = 150
+local CONTRACT_REWARD_SMOKE_SKILL_KEY = "commerce"
+local CONTRACT_REWARD_SMOKE_SKILL_XP = 25
+local CONTRACT_REWARD_SMOKE_REPUTATION_KEY = "merchant_guild"
+local CONTRACT_REWARD_SMOKE_REPUTATION_DELTA = 5
 
 local ALLOWED_CONTRACT_TYPES = {
     crafting = true,
@@ -635,6 +642,30 @@ local function resolve_active_character_id(player_or_character_id)
     end
 
     return normalize_positive_integer(active_character.id)
+end
+
+local function get_active_character_row(player_or_platform_id)
+    if type(GRCharactersBridge) ~= "table" or type(GRCharactersBridge.GetActiveCharacter) ~= "function" then
+        return nil
+    end
+
+    local platform_id = get_platform_id(player_or_platform_id)
+
+    if platform_id == nil then
+        platform_id = trim_string(player_or_platform_id)
+    end
+
+    if platform_id == nil then
+        return nil
+    end
+
+    local active_character = GRCharactersBridge.GetActiveCharacter(platform_id)
+
+    if type(active_character) ~= "table" then
+        return nil
+    end
+
+    return active_character
 end
 
 local function has_required_items(inventory_rows, required_item_key, required_item_quantity)
@@ -3789,6 +3820,84 @@ function ContractService:CreateHaulContractFromRoute(creator_character_id, route
                     callback(true, contract_row, nil)
                 end
             )
+        end)
+    end)
+end
+
+function ContractService:CreateContractRewardSmokeFixture(player, callback)
+    local platform_id = get_platform_id(player)
+    local active_character = get_active_character_row(player)
+    local active_character_id = normalize_positive_integer(active_character and active_character.id)
+
+    if type(callback) ~= "function" then
+        return false, "callback-required"
+    end
+
+    if self.repository == nil then
+        return callback_repository_missing(callback)
+    end
+
+    if platform_id == nil then
+        callback(false, nil, "player-required")
+        return true
+    end
+
+    if active_character_id == nil then
+        callback(false, nil, "no-active-character")
+        return true
+    end
+
+    return self.repository:CreateContract({
+        creator_character_id = active_character_id,
+        type = "delivery",
+        title = CONTRACT_REWARD_SMOKE_TITLE,
+        description = CONTRACT_REWARD_SMOKE_DESCRIPTION,
+        reward_money = CONTRACT_REWARD_SMOKE_REWARD_MONEY,
+        reward_skill_key = CONTRACT_REWARD_SMOKE_SKILL_KEY,
+        reward_skill_xp = CONTRACT_REWARD_SMOKE_SKILL_XP,
+        reward_reputation_key = CONTRACT_REWARD_SMOKE_REPUTATION_KEY,
+        reward_reputation_delta = CONTRACT_REWARD_SMOKE_REPUTATION_DELTA,
+        rewards_status = "pending",
+        deadline_at = nil,
+        required_item_key = nil,
+        required_item_quantity = 0,
+        consume_required_items = true,
+        pickup_location_key = nil,
+        requires_pickup_location = false,
+        pickup_status = "none",
+        delivery_location_key = nil,
+        requires_delivery_location = false,
+        source_route_key = nil,
+        job_source = "manual",
+    }, function(is_create_success, contract_row, create_error)
+        if not is_create_success then
+            callback(false, nil, create_error or "database-error")
+            return
+        end
+
+        self:AcceptContract(active_character_id, contract_row and contract_row.id, function(is_accept_success, accepted_row, accept_error)
+            if not is_accept_success then
+                callback(false, nil, accept_error or "contract-accept-failed")
+                return
+            end
+
+            Console.Log(
+                "[gr_contracts][service] Contract reward smoke fixture created id=%s character_id=%s platform_id=%s.",
+                tostring(accepted_row and accepted_row.id),
+                tostring(active_character_id),
+                tostring(platform_id)
+            )
+
+            callback(true, {
+                contract_id = accepted_row and accepted_row.id,
+                character_id = active_character_id,
+                contract_row = accepted_row,
+                reward_types = {
+                    "money",
+                    "skill_xp",
+                    "reputation",
+                },
+            }, nil)
         end)
     end)
 end
